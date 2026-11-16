@@ -74,7 +74,7 @@ impl Tool for ReadTool {
         if !explicit_slice {
             if let Some(entry) = ctx.cached_read(&target) {
                 if let Some((modified, len)) = file_stamp(&target) {
-                    if entry.modified == modified && entry.len == len {
+                    if entry.modified == modified && entry.len == len && !entry.compacted {
                         return Ok(ToolResult::ok(format!(
                             concat!(
                                 "[unchanged] {} was already read in full in this session ",
@@ -87,6 +87,10 @@ impl Tool for ReadTool {
                             len
                         )));
                     }
+                    // A compacted entry falls through to a real read below:
+                    // the file is unchanged, but the conversation no longer
+                    // carries the content, so "don't read again" would leave
+                    // the model with nothing to quote.
                 }
             }
         }
@@ -142,6 +146,7 @@ impl Tool for ReadTool {
                         modified,
                         len,
                         lines: lines.len(),
+                        compacted: false,
                     },
                 );
             }
@@ -700,6 +705,35 @@ mod tests {
         let after = read.execute(&ctx, &args).expect("read after write");
         assert!(after.content.contains("three"), "{}", after.content);
         assert!(!after.content.contains("[unchanged]"), "{}", after.content);
+    }
+
+    #[test]
+    fn a_compacted_read_returns_content_again() {
+        // 压缩把 read 的结果从对话里拿走之后，[unchanged] 短路会把模型
+        // 指向一段它已经看不见的历史。标记为 compacted 的条目必须重新
+        // 真读；重读之后条目刷新，短路恢复正常。
+        let dir = temp_dir("read-cache-compacted");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("b.txt");
+        fs::write(&path, "one\ntwo\n").expect("seed");
+        let mut args = Json::obj();
+        args.set("path", Json::string(path.to_string_lossy().into_owned()));
+
+        let read = ReadTool;
+        let first = read.execute(&ctx, &args).expect("first read");
+        assert!(first.content.contains("one"), "{}", first.content);
+
+        ctx.mark_reads_compacted();
+        let after = read.execute(&ctx, &args).expect("read after compaction");
+        assert!(
+            after.content.contains("one") && !after.content.contains("[unchanged]"),
+            "a compacted read must return content again: {}",
+            after.content
+        );
+
+        // 重读刷新了条目，下一次 unchanged 短路恢复。
+        let again = read.execute(&ctx, &args).expect("third read");
+        assert!(again.content.contains("[unchanged]"), "{}", again.content);
     }
 
     #[test]

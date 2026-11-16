@@ -16,6 +16,12 @@ pub struct CachedRead {
     pub modified: u128,
     pub len: u64,
     pub lines: usize,
+    /// The read's result was compacted out of the conversation.
+    ///
+    /// The file itself is unchanged, but the model can no longer see the
+    /// content that justified the `[unchanged]` skip. A read hits this only
+    /// once: answering it refreshes the entry.
+    pub compacted: bool,
 }
 
 /// Execution context handed to a tool.
@@ -117,6 +123,20 @@ impl ToolCtx {
         let key = cache_key(path);
         if let Ok(mut cache) = self.read_cache.lock() {
             cache.remove(&key);
+        }
+    }
+
+    /// Mark every cached read as compacted: the file itself is unchanged, but
+    /// the conversation no longer carries the content that was seen.
+    ///
+    /// Called after a compaction replaced older history. Entries keep their
+    /// metadata so a fresh read can still report the old line/byte counts;
+    /// answering the read clears the flag.
+    pub fn mark_reads_compacted(&self) {
+        if let Ok(mut cache) = self.read_cache.lock() {
+            for entry in cache.values_mut() {
+                entry.compacted = true;
+            }
         }
     }
 }

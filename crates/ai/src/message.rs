@@ -671,4 +671,30 @@ mod tests {
         assert_eq!(wire.len(), 1);
         assert_eq!(wire[0], Message::user("a").to_json().dump());
     }
+
+    #[test]
+    fn compaction_only_reserializes_the_replaced_head() {
+        // 压缩（保留尾部，替换头部为摘要）会 bump revision。 revision 变化
+        // 意味着整个前缀重建——这是付给 provider 的成本：摘要行 + 原样保留
+        // 的尾部不能被错误地重写，否则缓存全失。钉住尾部字节级一致。
+        let mut cache = MessageCache::new();
+        let old_head = Message::user("old long conversation");
+        let tail = [Message::user("recent"), Message::assistant("reply")];
+        let history: Vec<Message> = std::iter::once(old_head)
+            .chain(tail.iter().cloned())
+            .collect();
+        let before = cache.sync(None, &history, 0);
+
+        let compacted: Vec<Message> = std::iter::once(Message::system(
+            "Summary of the earlier conversation:\n## Goal\n- old long conversation",
+        ))
+        .chain(tail.iter().cloned())
+        .collect();
+        let after = cache.sync(None, &compacted, 1);
+
+        // 头部是新的摘要，尾部与压缩前逐字节相同。
+        assert_eq!(after.len(), compacted.len());
+        assert!(after[0].contains("Summary of the earlier conversation"));
+        assert_eq!(&after[1..], &before[1..], "the kept tail must be byte-identical");
+    }
 }

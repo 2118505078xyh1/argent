@@ -486,6 +486,11 @@ impl Agent {
         self.history_tokens = estimate_tokens(&self.history);
         self.history_revision = self.history_revision.wrapping_add(1);
         self.recent_calls.clear();
+        // 压缩把旧对话替换成摘要后，read 缓存里"这个文件已在对话里"的
+        // 前提不再成立。标记而非清空：文件没变，重读会拿到新内容并顺手
+        // 刷新标记；清空则下一次 read 的 [unchanged] 短路又会对着已被
+        // 压缩掉的历史说"别读了"。
+        self.ctx.mark_reads_compacted();
     }
 
     fn reset_run_state(&mut self) {
@@ -792,7 +797,10 @@ impl Agent {
             None
         } else {
             // The wire cache must not serve results that are no longer in the
-            // conversation.
+            // conversation. A pruned `read` result has the same problem as a
+            // compacted one: the file is unchanged but the content is gone,
+            // so the [unchanged] short-circuit would point at nothing.
+            self.ctx.mark_reads_compacted();
             self.history_revision = self.history_revision.wrapping_add(1);
             self.history_tokens = self.history_tokens.saturating_sub(freed);
             Some((pruned, freed))
