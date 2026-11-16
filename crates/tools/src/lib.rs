@@ -27,7 +27,7 @@ pub use fs_tools::{EditTool, FindTool, GrepTool, LsTool, ReadTool, WriteTool};
 pub use memory_tool::{digest_from, memory_digest, MemoryTool};
 pub use office::DocumentTool;
 pub use registry::{BuiltinTools, PluginInfo, ToolRegistry};
-pub use skills::{Skill, SkillRegistry, SkillTool};
+pub use skills::{skill_script_tools, Skill, SkillRegistry, SkillScriptTool, SkillTool};
 pub use state_tools::{
     store_terminal_channel, AskChannel, AskQuestion, AskTool, SubmitPlanTool,
     TerminalAnswerChannel, TodoItem, TodoTool,

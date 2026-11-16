@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use argent_core::error::Result;
 use argent_core::json::Json;
 
+use crate::bash::{locate_posix_shell, ShellFlavor};
 use crate::tool::{arg_str_opt, schema_object, Tool, ToolCtx, ToolResult};
+use argent_core::process::{run, CommandSpec};
 
 /// One procedure on disk.
 #[derive(Debug, Clone)]
@@ -26,6 +28,12 @@ pub struct Skill {
     pub body: String,
     /// Where it was loaded from, shown when the skill is invoked.
     pub path: PathBuf,
+    /// Script tools the skill carries: `name = command template`.
+    ///
+    /// Declared in the frontmatter, one per line, `tools:` then indented
+    /// entries. `$ARGS` in the template receives the call's JSON arguments.
+    /// Each becomes a callable tool named `skill__<skill>__<name>`.
+    pub tools: Vec<(String, String)>,
 }
 
 impl Skill {
@@ -57,13 +65,64 @@ impl Skill {
             .find(|(key, _)| key == "description")
             .map(|(_, value)| value.clone())
             .unwrap_or_default();
+        let tools = parse_tools(frontmatter, &name);
         Ok(Skill {
             name,
             description,
             body: body.trim().to_string(),
             path: path.to_path_buf(),
+            tools,
         })
     }
+}
+
+/// Parse the `tools:` frontmatter block into `(name, command template)` pairs.
+///
+/// Lines look like:
+///
+/// ```text
+/// tools:
+///   deploy = ./scripts/deploy.sh $ARGS
+///   lint   = ruff check .
+/// ```
+///
+/// Names must be identifier-ish; anything else is skipped with the skill
+/// still loading — one broken line must not kill the procedure.
+fn parse_tools(frontmatter: &str, skill: &str) -> Vec<(String, String)> {
+    let mut in_tools = false;
+    let mut tools = Vec::new();
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if !in_tools {
+            if trimmed.eq_ignore_ascii_case("tools:") || trimmed.eq_ignore_ascii_case("tools") {
+                in_tools = true;
+            }
+            continue;
+        }
+        // A line starting at column 0 ends the block.
+        if !line.starts_with([' ', '\t', '-']) {
+            break;
+        }
+        let trimmed = trimmed.trim_start_matches('-').trim();
+        let Some((name, command)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        let command = command.trim().trim_matches('"').trim_matches('\'');
+        let valid = !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+            && !command.is_empty();
+        if !valid {
+            continue;
+        }
+        tools.push((format!("skill__{}__{}", skill, name), command.to_string()));
+    }
+    tools
 }
 
 /// Split a `---` frontmatter block from the body.
@@ -233,6 +292,135 @@ impl SkillRegistry {
     }
 }
 
+/// A tool a skill carries: one frontmatter line, one callable command.
+///
+/// The command template is run through the shell with the call's JSON
+/// arguments substituted for `$ARGS` (or piped to stdin when the template
+/// does not mention it). Stdout is the tool result; a non-zero exit marks
+/// it as an error.
+pub struct SkillScriptTool {
+    /// `skill__<skill>__<name>`.
+    name: String,
+    /// The command template.
+    command: String,
+    /// The skill directory, so relative script paths resolve.
+    root: PathBuf,
+    /// One line from the skill's description, shown in the schema.
+    description: String,
+}
+
+impl SkillScriptTool {
+    /// Build every script tool a skill declares, rooted at its directory.
+    pub fn from_skill(skill: &Skill) -> Vec<Box<dyn Tool>> {
+        let root = skill
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let description = if skill.description.is_empty() {
+            format!("Tool carried by the '{}' skill", skill.name)
+        } else {
+            format!("{} (from the '{}' skill)", skill.description, skill.name)
+        };
+        skill
+            .tools
+            .iter()
+            .map(|(name, command)| {
+                Box::new(SkillScriptTool {
+                    name: name.clone(),
+                    command: command.clone(),
+                    root: root.clone(),
+                    description: description.clone(),
+                }) as Box<dyn Tool>
+            })
+            .collect()
+    }
+}
+
+impl Tool for SkillScriptTool {
+    fn parallel_safe(&self) -> bool {
+        // The command is arbitrary; assume it touches state.
+        false
+    }
+
+    fn is_mutating(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn parameters(&self) -> Json {
+        schema_object(
+            vec![(
+                "args",
+                "object",
+                "Free-form arguments passed to the script as JSON",
+            )],
+            vec![],
+        )
+    }
+
+    fn execute(&self, ctx: &ToolCtx, args: &Json) -> Result<ToolResult> {
+        let payload = args.dump();
+        // The template may embed the arguments inline ($ARGS) or read them
+        // from stdin; either way the shell owns the syntax.
+        let command = self.command.replace("$ARGS", &payload);
+        let spec = match ShellFlavor::detect() {
+            ShellFlavor::Posix => {
+                let program = crate::bash::locate_posix_shell().unwrap_or_else(|| "sh".to_string());
+                CommandSpec::new(program).arg("-lc").arg(&command)
+            }
+            ShellFlavor::WindowsCmd => CommandSpec::new("cmd").arg("/C").arg(&command),
+            ShellFlavor::PowerShell => CommandSpec::new("powershell")
+                .arg("-NoProfile")
+                .arg("-Command")
+                .arg(&command),
+        }
+        .cwd(ctx.cwd.display().to_string())
+        .stdin(payload)
+        .timeout(std::time::Duration::from_secs(ctx.timeout_secs.max(1)));
+        let output = run(&spec)?;
+        let mut text = String::new();
+        if !output.stdout.trim().is_empty() {
+            text.push_str(output.stdout.trim_end());
+        }
+        if !output.stderr.trim().is_empty() {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str("[stderr] ");
+            text.push_str(output.stderr.trim_end());
+        }
+        if text.is_empty() {
+            text.push_str("(no output)");
+        }
+        if output.success() {
+            Ok(ToolResult::ok(text))
+        } else if output.interrupted {
+            Ok(ToolResult::error("interrupted"))
+        } else if output.timed_out {
+            Ok(ToolResult::error(format!("timed out; partial output:\n{}", text)))
+        } else {
+            Ok(ToolResult::error(format!("exit {}: {}", output.status, text)))
+        }
+    }
+}
+
+/// Every script tool declared by the skills in a registry, in skill order.
+pub fn skill_script_tools(registry: &SkillRegistry) -> Vec<Box<dyn Tool>> {
+    registry
+        .skills()
+        .iter()
+        .flat_map(SkillScriptTool::from_skill)
+        .collect()
+}
+
 /// The `skill` tool: list the index or load one skill's body.
 pub struct SkillTool {
     registry: std::sync::Arc<SkillRegistry>,
@@ -325,6 +513,50 @@ mod tests {
         assert_eq!(skill.name, "deploy");
         assert_eq!(skill.description, "Ship the service");
         assert_eq!(skill.body, "Step one.\nStep two.");
+    }
+
+    #[test]
+    fn parses_a_tools_block() {
+        let text = "---
+name: deploy
+description: Ship it
+tools:
+  deploy = ./scripts/deploy.sh $ARGS
+  status = ./scripts/status.sh
+---
+body";
+        let skill = Skill::parse(text, Path::new("/tmp/deploy/SKILL.md")).expect("parse");
+        assert_eq!(skill.tools.len(), 2);
+        assert_eq!(skill.tools[0].0, "skill__deploy__deploy");
+        assert_eq!(skill.tools[0].1, "./scripts/deploy.sh $ARGS");
+        assert_eq!(skill.tools[1].1, "./scripts/status.sh");
+    }
+
+    #[test]
+    fn tools_block_ends_at_a_column_zero_line() {
+        let text = "---
+name: x
+tools:
+  one = cmd
+description: d
+---
+body";
+        let skill = Skill::parse(text, Path::new("/tmp/x/SKILL.md")).expect("parse");
+        assert_eq!(skill.tools.len(), 1);
+    }
+
+    #[test]
+    fn a_broken_tools_line_is_skipped() {
+        let text = "---
+name: x
+tools:
+  broken line no equals
+  ok = cmd
+---
+body";
+        let skill = Skill::parse(text, Path::new("/tmp/x/SKILL.md")).expect("parse");
+        assert_eq!(skill.tools.len(), 1);
+        assert_eq!(skill.tools[0].0, "skill__x__ok");
     }
 
     #[test]

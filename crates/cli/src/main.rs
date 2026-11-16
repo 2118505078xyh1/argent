@@ -412,6 +412,11 @@ pub fn run(raw: &[String]) -> Result<i32> {
         argent_tools::plugin::SKILLS,
         Box::new(SkillTool::new(Arc::clone(&skills))),
     );
+    // A skill can carry its own script tools (`tools:` in the frontmatter);
+    // they join the SKILLS plugin so enabling/disabling follows the skill.
+    for tool in argent_tools::skill_script_tools(&skills) {
+        base_registry.register_plugin_tool(argent_tools::plugin::SKILLS, tool);
+    }
 
     base_registry.register_plugin_tool(
         argent_tools::plugin::DELEGATE,

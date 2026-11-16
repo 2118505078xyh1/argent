@@ -750,6 +750,9 @@ fn build_agent(
         argent_tools::plugin::SKILLS,
         Box::new(SkillTool::new(std::sync::Arc::clone(&skills))),
     );
+    for tool in argent_tools::skill_script_tools(&skills) {
+        registry.register_plugin_tool(argent_tools::plugin::SKILLS, tool);
+    }
 
     // MCP servers contribute tools under `mcp__<server>__<tool>`; they stay
     // unlisted and are reachable through tool_search. 插件声明的服务器与
