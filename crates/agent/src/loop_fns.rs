@@ -206,14 +206,14 @@ pub fn estimate_text_tokens(text: &str) -> usize {
 /// The full text is spilled to `~/.argent/tool-output/` and only a bounded
 /// head+tail copy is sent back to the model. `ARGENT_TOOL_OUTPUT_TOKENS=0` turns
 /// the budget off.
-pub const TOOL_RESULT_TOKEN_BUDGET: usize = 6_000;
+pub const TOOL_RESULT_TOKEN_BUDGET: usize = 15_000;
 
 /// Total token budget for all tool results produced by one assistant turn.
 ///
-/// The per-result cap alone lets a batch of eight reads cost 48k tokens. This
+/// The per-result cap alone lets a batch of eight reads cost 120k tokens. This
 /// ceiling makes the batch pay for the whole turn: later results are reduced
 /// to a spill pointer once the budget runs out.
-pub const TOOL_TURN_TOKEN_BUDGET: usize = 20_000;
+pub const TOOL_TURN_TOKEN_BUDGET: usize = 60_000;
 
 /// The effective per-tool-result budget.
 pub fn tool_output_budget() -> usize {

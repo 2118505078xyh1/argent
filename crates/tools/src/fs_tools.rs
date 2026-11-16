@@ -15,8 +15,8 @@ use crate::tool::{
 };
 
 const READ_DEFAULT_LINES: usize = 2000;
-const READ_MAX_LINES: usize = 5000;
-const MAX_OUTPUT_BYTES: usize = 1_000_000;
+const READ_MAX_LINES: usize = 10_000;
+const MAX_OUTPUT_BYTES: usize = 3_000_000;
 
 /// Read a file (or list its first lines).
 pub struct ReadTool;

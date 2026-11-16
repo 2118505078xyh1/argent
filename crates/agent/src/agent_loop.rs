@@ -20,13 +20,13 @@ use crate::guards::{
 };
 
 /// Upper bound on assistant turns in a single run.
-pub const DEFAULT_MAX_TURNS: usize = 40;
+pub const DEFAULT_MAX_TURNS: usize = 100;
 
 /// Below this much history, pruning old tool text is not worth the churn.
-pub const PRUNE_MINIMUM_TOKENS: usize = 20_000;
+pub const PRUNE_MINIMUM_TOKENS: usize = 60_000;
 
 /// Tool results in the newest part of this budget stay verbatim.
-pub const PRUNE_PROTECT_TOKENS: usize = 40_000;
+pub const PRUNE_PROTECT_TOKENS: usize = 120_000;
 
 /// What replaces a tool result that was pruned.
 pub const PRUNED_TOOL_OUTPUT: &str = "[old tool output pruned; call the tool again if needed]";
@@ -2537,7 +2537,7 @@ mod tests {
             history.push(Message::tool_result(
                 format!("c{}", index),
                 "bash",
-                format!("result {}\n{}", index, "x".repeat(2000)),
+                format!("result {}\n{}", index, "x".repeat(8000)),
             ));
         }
         agent.set_history(history);

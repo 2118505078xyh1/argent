@@ -56,7 +56,12 @@ pub struct BlockedCall {
 }
 
 /// How many times a policy-blocked call is answered before the run stops.
-pub const BLOCKED_CALL_LIMIT: usize = 1;
+///
+/// A model that gets the same refusal twice usually just needs to read the
+/// reason and adjust; cutting it off after one try was premature. Three
+/// identical refusals in a row, though, mean the run is stuck on a denied
+/// path and should stop burning tokens.
+pub const BLOCKED_CALL_LIMIT: usize = 3;
 
 /// The identity of a guarded call, or `None` when repeats are allowed.
 pub fn repeat_key(call: &ToolCall) -> Option<String> {
