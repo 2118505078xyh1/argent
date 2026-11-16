@@ -42,6 +42,20 @@ pub struct CommandSpec {
     pub hidden: bool,
     /// Put the child in the process sandbox (Job Object on Windows).
     pub sandbox: bool,
+    /// Filesystem write jail (Windows restricted token).
+    ///
+    /// `true` spawns the child with a restricted token whose intersection
+    /// check denies writes everywhere except directories listed in
+    /// [`write_roots`]. The roots must have been granted to the restricted
+    /// SID by `sandbox::grant_workspace` first; the CLI does that once per
+    /// session root. Requires the process sandbox (Job Object) alongside —
+    /// the jail does not replace process confinement.
+    ///
+    /// Only meaningful on Windows; other platforms keep the process-group
+    /// behavior and this flag is a no-op until Seatbelt/landlock land.
+    pub fs_jail: bool,
+    /// Directories the jailed child may write, canonicalized.
+    pub write_roots: Vec<std::path::PathBuf>,
     /// 取消信号：设置后等待循环会杀掉整个子进程树。
     ///
     /// 只有交互式、可能长时间运行的工具才需要接上它（bash、代码模式）。
@@ -59,6 +73,8 @@ impl CommandSpec {
             stdin: None,
             hidden: false,
             sandbox: crate::sandbox::enabled_from_env(),
+            fs_jail: false,
+            write_roots: Vec::new(),
             cancel: None,
         }
     }
@@ -102,6 +118,16 @@ impl CommandSpec {
     /// Run the child inside the process sandbox.
     pub fn sandbox(mut self, enabled: bool) -> CommandSpec {
         self.sandbox = enabled;
+        self
+    }
+
+    /// Turn on the filesystem write jail for this child, confined to `roots`.
+    ///
+    /// See the field docs: the roots need a prior `grant_workspace` call, and
+    /// the process sandbox should be on as well.
+    pub fn fs_jail(mut self, roots: Vec<std::path::PathBuf>) -> CommandSpec {
+        self.fs_jail = !roots.is_empty();
+        self.write_roots = roots;
         self
     }
 
