@@ -454,7 +454,7 @@ mod tests {
         let root = scratch("state");
         write_plugin(&root, "alpha", r#""description":"a""#);
         write_plugin(&root, "beta", r#""description":"b""#);
-        let mut manager = PluginManager::discover(&[root.clone()]);
+        let mut manager = PluginManager::discover(std::slice::from_ref(&root));
         let cwd = scratch("state-workspace");
         let settings = Settings::load(&cwd).expect("settings");
         // Default: both enabled.

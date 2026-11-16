@@ -2898,10 +2898,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("argent-replay-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("dir");
-        let entries = vec![
-            argent_session::Entry::Message(argent_ai::Message::user("hello from session")),
-            argent_session::Entry::Message(argent_ai::Message::assistant("the answer")),
-        ];
+        let entries = [argent_session::Entry::Message(argent_ai::Message::user("hello from session")),
+            argent_session::Entry::Message(argent_ai::Message::assistant("the answer"))];
         let text: String = entries
             .iter()
             .map(|entry| entry.to_json().dump() + "\n")

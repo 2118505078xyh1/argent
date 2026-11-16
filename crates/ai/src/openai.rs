@@ -882,7 +882,7 @@ mod tests {
         let request = ChatRequest::new("m1", vec![Message::user("hi")]);
         let body = OpenAiProvider::build_body(&request);
         assert_eq!(body.str_or("model", ""), "m1");
-        assert_eq!(body.bool_or("stream", false), true);
+        assert!(body.bool_or("stream", false));
         // 官方 OpenAI 流式默认不带 usage，必须显式要求。
         assert_eq!(
             body.get("stream_options")
@@ -905,7 +905,7 @@ mod tests {
     fn stream_options_can_be_turned_off_for_strict_gateways() {
         let request = ChatRequest::new("m1", vec![Message::user("hi")]);
         let body = OpenAiProvider::build_body_with_usage(&request, false);
-        assert_eq!(body.bool_or("stream", false), true);
+        assert!(body.bool_or("stream", false));
         assert!(body.get("stream_options").is_none());
     }
 
@@ -1159,10 +1159,7 @@ mod tests {
         };
         let mut text = String::new();
         for item in stream {
-            match item.expect("event") {
-                StreamEvent::Text(chunk) => text.push_str(&chunk),
-                _ => {}
-            }
+            if let StreamEvent::Text(chunk) = item.expect("event") { text.push_str(&chunk) }
         }
         assert!(!text.trim().is_empty(), "curl transport produced no text");
     }

@@ -45,18 +45,18 @@ pub type RunnerSlot = Arc<Mutex<Option<ToolRunner>>>;
 #[derive(Clone, Default)]
 pub struct ToolGate {
     /// 硬策略。返回 `Some(reason)` 表示拒绝。
-    pub policy: Option<Arc<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>>,
+    pub policy: Option<argent_core::hooks::PolicyHook>,
     /// 工具前置钩子。
-    pub pre_tool: Option<Arc<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>>,
+    pub pre_tool: Option<argent_core::hooks::PreToolHook>,
     /// 工具后置钩子；第三个参数表示这次调用是否以错误结束。
-    pub post_tool: Option<Arc<dyn Fn(&str, &Json, bool) + Send + Sync>>,
+    pub post_tool: Option<argent_core::hooks::PostToolHook>,
     /// 审批回调。返回 false 表示操作者拒绝。
-    pub approve: Option<Arc<dyn Fn(&str, &Json) -> bool + Send + Sync>>,
+    pub approve: Option<argent_core::hooks::ApproveHook>,
     /// true 时每个 mutating 工具都要审批（对应 `AllMutating`）；false 时
     /// 只问 `needs_approval` 为真的工具。
     pub approve_all_mutating: bool,
     /// 审计回调。
-    pub audit: Option<Arc<dyn Fn(&str, &Json, &str, Option<String>) + Send + Sync>>,
+    pub audit: Option<argent_core::hooks::AuditHook>,
 }
 
 impl ToolGate {

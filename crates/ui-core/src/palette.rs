@@ -197,6 +197,13 @@ impl Palette {
     }
 }
 
+impl Rgb {
+    /// Perceived brightness, for contrast checks in tests.
+    pub fn luminance(&self) -> f32 {
+        (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,12 +279,5 @@ mod tests {
         let palette = Palette::mono();
         assert_eq!(palette.get(Role::Ok), palette.get(Role::Error));
         assert_eq!(palette.get(Role::Accent), palette.get(Role::Text));
-    }
-}
-
-impl Rgb {
-    /// Perceived brightness, for contrast checks in tests.
-    pub fn luminance(&self) -> f32 {
-        (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
     }
 }

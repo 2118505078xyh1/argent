@@ -28,7 +28,8 @@ fn main() {
     // Let the Ready event paint the header before capture.
     std::thread::sleep(Duration::from_millis(300));
     let rendered = session.output.all();
-    for needle in ["argent"] {
+    {
+        let needle = "argent";
         if !rendered.contains(needle) {
             eprintln!("missing {:?} in the rendered UI:\n{}", needle, rendered);
             std::process::exit(1);

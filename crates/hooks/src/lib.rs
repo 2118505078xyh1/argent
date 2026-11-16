@@ -574,7 +574,7 @@ mod tests {
         let commands = config.for_event(HookEvent::SessionStart, None);
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].command, "echo hi");
-        assert!(commands[0].blocks_on_failure() == false);
+        assert!(!commands[0].blocks_on_failure());
     }
 
     #[test]

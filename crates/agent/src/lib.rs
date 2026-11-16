@@ -5,6 +5,7 @@ pub mod child;
 pub mod context;
 pub mod diagnostics;
 pub mod events;
+pub mod guards;
 pub mod roles;
 
 pub use agent_loop::{
@@ -12,6 +13,7 @@ pub use agent_loop::{
     prune_tool_spills, AbortHandle, Agent, AgentConfig, ApprovalScope, Budget, StreamFailure,
     DEFAULT_MAX_TURNS,
 };
+pub use guards::{canonical_args, canonical_json, repeat_key, BlockedCall, RecentCall};
 pub use child::ChildFactory;
 pub use context::{project_instructions, session_context};
 pub use events::{

@@ -49,15 +49,15 @@ pub struct ChildFactory {
     /// Working directory for the child.
     pub cwd: std::path::PathBuf,
     /// 父代理的硬策略门。子代理必须继承，否则一个角色就能绕过 denyPaths。
-    pub policy: Option<Arc<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>>,
+    pub policy: Option<argent_core::hooks::PolicyHook>,
     /// 父代理的审计回调。
-    pub audit: Option<Arc<dyn Fn(&str, &Json, &str, Option<String>) + Send + Sync>>,
+    pub audit: Option<argent_core::hooks::AuditHook>,
     /// 父代理的工具前置钩子。
-    pub pre_tool: Option<Arc<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>>,
+    pub pre_tool: Option<argent_core::hooks::PreToolHook>,
     /// 父代理的工具后置钩子。
-    pub post_tool: Option<Arc<dyn Fn(&str, &Json, bool) + Send + Sync>>,
+    pub post_tool: Option<argent_core::hooks::PostToolHook>,
     /// 父代理的审批回调；子代理的写操作同样要问过操作者。
-    pub approve: Option<Arc<dyn Fn(&str, &Json) -> bool + Send + Sync>>,
+    pub approve: Option<argent_core::hooks::ApproveHook>,
     /// 审批范围，与父代理保持一致。
     pub approval_scope: ApprovalScope,
     /// 子代理进度的接收端；`None` 时静默运行。

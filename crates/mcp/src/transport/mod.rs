@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn unwraps_a_result() {
         let value = Json::parse(r#"{"id":1,"result":{"ok":true}}"#).unwrap();
-        assert_eq!(unwrap_result(&value).unwrap().bool_or("ok", false), true);
+        assert!(unwrap_result(&value).unwrap().bool_or("ok", false));
     }
 
     #[test]

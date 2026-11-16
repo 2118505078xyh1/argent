@@ -14,6 +14,10 @@ use argent_core::Json;
 use argent_tools::{ToolCtx, ToolRegistry};
 
 use crate::events::{AgentEvent, EventSink, FinishReason};
+use crate::guards::{
+    BlockedCall, EffortState, RecentCall, canonical_args, repeat_key,
+    REPEAT_GUARD_MAX_ENTRIES, REPEAT_GUARD_WINDOW,
+};
 
 /// Upper bound on assistant turns in a single run.
 pub const DEFAULT_MAX_TURNS: usize = 40;
@@ -66,9 +70,7 @@ pub const PARALLEL_SAFE_TOOLS: &[&str] = &[
 ///
 /// The ceiling keeps a twenty-file batch from opening twenty handles at the
 /// same moment; it is also the width a small provider tolerates.
-pub const MAX_PARALLEL_TOOLS: usize = 8;
-
-/// Whether a tool may run beside its siblings in the same batch.
+pub const MAX_PARALLEL_TOOLS: usize = 8;/// Whether a tool may run beside its siblings in the same batch.
 ///
 /// The built-in list stays authoritative for the core tools; an extension can
 /// additionally opt in through `Tool::parallel_safe`, which the agent checks
@@ -78,120 +80,8 @@ pub fn is_parallel_safe(name: &str) -> bool {
 }
 
 /// Tools whose identical repeated call cannot produce new information while
-/// nothing has been mutated.
-///
-/// Deliberately narrow: `bash` can mutate through commands the registry cannot
-/// see, `web_fetch` can observe a changed page, and `current_time` is different
-/// every time. Re-reading a file is the runaway that actually happens.
-pub const REPEAT_GUARD_TOOLS: &[&str] = &["read", "grep", "find", "ls", "lsp", "skill"];
-
-/// How many assistant turns back an identical call is remembered.
-pub const REPEAT_GUARD_WINDOW: usize = 12;
-
-/// Upper bound on remembered calls, so a long run cannot grow this list
-/// without limit.
-const REPEAT_GUARD_MAX_ENTRIES: usize = 64;
-
-/// A read-only call already executed in this session.
-#[derive(Debug, Clone)]
-struct RecentCall {
-    call_id: String,
-    name: String,
-    /// Canonical argument text, so two spellings of the same call match.
-    args: String,
-    /// Assistant turn that ran it.
-    turn: usize,
-    /// Mutation epoch at execution time.
-    epoch: u64,
-    /// How many times the model has asked for it again.
-    hits: u32,
-}
-
-/// The effort chosen for the current request, and the prompt that justified
-/// it. A new user message re-scores; the tool-execution turns that follow the
-/// same request step down instead of paying for planning effort all run long.
-#[derive(Debug, Clone)]
-struct EffortState {
-    prompt: String,
-    base: &'static str,
-    turn: usize,
-}
-
-/// A call the operator's policy refused.
-///
-/// A refusal that the model can retry forever is not a refusal, it is a
-/// suggestion: the model asks again, the policy answers again, and the run
-/// burns its whole turn budget on one denied path. So a blocked call is
-/// remembered, and the second attempt ends the run instead of repeating the
-/// answer.
-#[derive(Debug, Clone)]
-struct BlockedCall {
-    name: String,
-    args: String,
-    turn: usize,
-    reason: String,
-}
-
-/// How many times a policy-blocked call is answered before the run stops.
-pub const BLOCKED_CALL_LIMIT: usize = 1;
-
-/// The identity of a guarded call, or `None` when repeats are allowed.
-fn repeat_key(call: &ToolCall) -> Option<String> {
-    if !REPEAT_GUARD_TOOLS.contains(&call.name.as_str()) {
-        return None;
-    }
-    Some(canonical_json(&call.parsed_args()))
-}
-
-/// The identity of a call for the blocked-call guard.
-///
-/// Unlike the repeat guard, this covers every tool: a denied `bash` is just
-/// as repeatable as a denied `read`, and the model is just as likely to ask
-/// again.
-fn canonical_args(args: &Json) -> String {
-    canonical_json(args)
-}
-
-/// Stable text for an argument value: object keys are sorted recursively.
-///
-/// Models re-emit the same arguments with a different key order often enough
-/// that a raw string comparison would miss the repeat.
-fn canonical_json(value: &Json) -> String {
-    let mut out = String::new();
-    write_canonical(value, &mut out);
-    out
-}
-
-fn write_canonical(value: &Json, out: &mut String) {
-    match value {
-        Json::Obj(entries) => {
-            let mut entries: Vec<&(String, Json)> = entries.iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            out.push('{');
-            for (index, (name, value)) in entries.into_iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push_str(&Json::string(name.clone()).dump());
-                out.push(':');
-                write_canonical(value, out);
-            }
-            out.push('}');
-        }
-        Json::Arr(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_canonical(item, out);
-            }
-            out.push(']');
-        }
-        Json::Raw(text) => out.push_str(text),
-        other => out.push_str(&other.dump()),
-    }
-}
+/// nothing has been mutated — re-exported from `guards.rs`.
+pub use crate::guards::REPEAT_GUARD_TOOLS;
 
 /// When the approval callback is consulted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,21 +135,21 @@ pub struct AgentConfig {
     /// Optional token, spend and wall-clock limits.
     pub budget: Option<Budget>,
     /// Called before a tool runs; return `false` to skip it.
-    pub approve: Option<Arc<dyn Fn(&str, &Json) -> bool + Send + Sync>>,
+    pub approve: Option<argent_core::hooks::ApproveHook>,
     /// A lifecycle hook run before a tool. Returning `Some(reason)` blocks the
     /// call and sends `reason` back to the model as the tool result.
-    pub pre_tool: Option<Arc<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>>,
+    pub pre_tool: Option<argent_core::hooks::PreToolHook>,
     /// A lifecycle hook run after a tool, with `true` when it failed.
-    pub post_tool: Option<Arc<dyn Fn(&str, &Json, bool) + Send + Sync>>,
+    pub post_tool: Option<argent_core::hooks::PostToolHook>,
     /// A hard policy gate. Returning `Some(reason)` blocks the call.
     ///
     /// The gate is separate from the approval hook on purpose: approval asks
     /// a human, and a policy answers on its own. A mistake in one layer must
     /// not open the other.
-    pub policy: Option<Arc<dyn Fn(&str, &Json) -> Option<String> + Send + Sync>>,
+    pub policy: Option<argent_core::hooks::PolicyHook>,
     /// Called for every tool call with the name, the arguments, the decision
     /// (`allowed`, `blocked`, `failed`) and the reason for a block.
-    pub audit: Option<Arc<dyn Fn(&str, &Json, &str, Option<String>) + Send + Sync>>,
+    pub audit: Option<argent_core::hooks::AuditHook>,
     /// 每次运行开始时调用（一次用户 prompt 算一次运行）。
     ///
     /// CLI 用它给文件检查点编号：整轮运行里的所有写入（含子代理）记在

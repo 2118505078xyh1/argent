@@ -212,7 +212,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let manager = PluginManager::discover(&[root.clone()]);
+        let manager = PluginManager::discover(std::slice::from_ref(&root));
         (root, manager)
     }
 
@@ -293,7 +293,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let manager = PluginManager::discover(&[root.clone()]);
+        let manager = PluginManager::discover(std::slice::from_ref(&root));
         let storage = root.join("store");
         let trust_path = root.join("trust").join("trust.json");
         // 用加载器自己的清单解析路径，Windows 上斜杠方向才与真实流程一致。
@@ -325,7 +325,7 @@ mod tests {
         );
 
         // 授权后同一份文档即可加载。
-        grant_all(&trust_path, &[hook_file.clone()]);
+        grant_all(&trust_path, std::slice::from_ref(&hook_file));
         let mut notices: Vec<String> = Vec::new();
         let config = load_trusted_hooks(
             &manager,

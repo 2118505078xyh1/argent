@@ -9,6 +9,7 @@ pub mod config;
 pub mod env;
 pub mod error;
 pub mod hash;
+pub mod hooks;
 pub mod http;
 pub mod http_stream;
 pub mod interrupt;

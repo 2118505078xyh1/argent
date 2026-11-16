@@ -190,6 +190,73 @@ pub fn extract_json_object(text: &str) -> Option<String> {
     None
 }
 
+/// Remove ANSI escape sequences from terminal output.
+///
+/// A pseudoterminal emits cursor moves, colour codes and title changes. Those
+/// mean nothing to a model reading the output, so they are stripped before it
+/// is shown.
+pub fn strip_ansi(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch != '\u{1b}' {
+            out.push(ch);
+            index += 1;
+            continue;
+        }
+        // ESC introduces a sequence; consume it.
+        index += 1;
+        if index >= chars.len() {
+            break;
+        }
+        match chars[index] {
+            // CSI: ESC [ ... final byte in @..~
+            '[' => {
+                index += 1;
+                while index < chars.len() {
+                    let current = chars[index];
+                    index += 1;
+                    if ('@'..='~').contains(&current) {
+                        break;
+                    }
+                }
+            }
+            // OSC: ESC ] ... terminated by BEL or ST
+            ']' => {
+                index += 1;
+                while index < chars.len() {
+                    if chars[index] == '\u{7}' {
+                        index += 1;
+                        break;
+                    }
+                    if chars[index] == '\u{1b}'
+                        && index + 1 < chars.len()
+                        && chars[index + 1] == '\\'
+                    {
+                        index += 2;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            // Anything else: a two-character sequence.
+            _ => {
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Strip ANSI sequences and carriage returns, and drop blank lines at the end.
+pub fn clean_terminal_output(input: &str) -> String {
+    let stripped = strip_ansi(input);
+    let normalised = stripped.replace('\r', "");
+    normalised.trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,71 +344,4 @@ mod tests {
         let json = extract_json_object(text).expect("extract");
         assert!(json.ends_with("}}"));
     }
-}
-
-/// Remove ANSI escape sequences from terminal output.
-///
-/// A pseudoterminal emits cursor moves, colour codes and title changes. Those
-/// mean nothing to a model reading the output, so they are stripped before it
-/// is shown.
-pub fn strip_ansi(input: &str) -> String {
-    let chars: Vec<char> = input.chars().collect();
-    let mut out = String::with_capacity(input.len());
-    let mut index = 0;
-    while index < chars.len() {
-        let ch = chars[index];
-        if ch != '\u{1b}' {
-            out.push(ch);
-            index += 1;
-            continue;
-        }
-        // ESC introduces a sequence; consume it.
-        index += 1;
-        if index >= chars.len() {
-            break;
-        }
-        match chars[index] {
-            // CSI: ESC [ ... final byte in @..~
-            '[' => {
-                index += 1;
-                while index < chars.len() {
-                    let current = chars[index];
-                    index += 1;
-                    if ('@'..='~').contains(&current) {
-                        break;
-                    }
-                }
-            }
-            // OSC: ESC ] ... terminated by BEL or ST
-            ']' => {
-                index += 1;
-                while index < chars.len() {
-                    if chars[index] == '\u{7}' {
-                        index += 1;
-                        break;
-                    }
-                    if chars[index] == '\u{1b}'
-                        && index + 1 < chars.len()
-                        && chars[index + 1] == '\\'
-                    {
-                        index += 2;
-                        break;
-                    }
-                    index += 1;
-                }
-            }
-            // Anything else: a two-character sequence.
-            _ => {
-                index += 1;
-            }
-        }
-    }
-    out
-}
-
-/// Strip ANSI sequences and carriage returns, and drop blank lines at the end.
-pub fn clean_terminal_output(input: &str) -> String {
-    let stripped = strip_ansi(input);
-    let normalised = stripped.replace('\r', "");
-    normalised.trim_end().to_string()
 }

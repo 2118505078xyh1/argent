@@ -1197,8 +1197,10 @@ mod session_worker_tests {
         let dir = std::env::temp_dir().join(format!("argent-engine-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut config = Config::default();
-        config.session_dir = dir.clone();
+        let config = Config {
+            session_dir: dir.clone(),
+            ..Config::default()
+        };
         let index = SessionIndex::new(dir.clone());
         let first = index.create(&dir, "first").expect("first");
         let second = index.create(&dir, "second").expect("second");
@@ -1237,8 +1239,10 @@ mod session_worker_tests {
         let dir = std::env::temp_dir().join(format!("argent-engine-rewind-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut config = Config::default();
-        config.session_dir = dir.clone();
+        let config = Config {
+            session_dir: dir.clone(),
+            ..Config::default()
+        };
         let engine = start_session(
             config,
             dir.clone(),

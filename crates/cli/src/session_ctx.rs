@@ -216,7 +216,7 @@ mod tests {
         let messages = reopened.messages();
         assert_eq!(messages.len(), 2, "one -> alternative");
         assert_eq!(messages[1].text(), "alternative");
-        assert!(reopened.tree.branch_points().len() >= 1, "one is a branch point");
+        assert!(!reopened.tree.branch_points().is_empty(), "one is a branch point");
         assert_eq!(reopened.tree.ids().len(), 3, "one + two + alternative");
     }
 

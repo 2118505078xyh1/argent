@@ -1105,7 +1105,7 @@ mod tests {
         assert!(!is_empty_transcript(&busy));
 
         let removed =
-            sweep_empty_sessions(&index, &[kept.clone()], std::time::Duration::ZERO);
+            sweep_empty_sessions(&index, std::slice::from_ref(&kept), std::time::Duration::ZERO);
         assert!(removed.iter().any(|path| same_file(path, &empty)));
         assert!(!empty.exists());
         assert!(kept.exists(), "a kept empty session was deleted");
