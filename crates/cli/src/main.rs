@@ -1861,15 +1861,30 @@ fn compact_if_needed(
         config.max_context_tokens,
     );
     let reserved = argent_session::effective_reserved(max_context, config.reserved_context_tokens);
-    if argent_session::should_compact(agent.history(), max_context, reserved) {
+    let should = match config.compact_threshold_tokens {
+        // An explicit line replaces the window arithmetic: estimate >= line
+        // compacts, regardless of what the provider reports.
+        Some(threshold) => {
+            argent_agent::estimate_tokens(agent.history()) >= threshold
+        }
+        None => argent_session::should_compact(agent.history(), max_context, reserved),
+    };
+    if should {
         if let Some(before) = before {
             before();
         }
     }
+    // Under an explicit threshold, the window arithmetic inside compact is
+    // replaced too: the threshold line IS the trigger, with no reserve on
+    // top of it.
+    let (compact_max, compact_reserved) = match config.compact_threshold_tokens {
+        Some(threshold) => (threshold, 0),
+        None => (max_context, config.reserved_context_tokens),
+    };
     let summary = argent_session::controller::compact(
         agent,
-        max_context,
-        config.reserved_context_tokens,
+        compact_max,
+        compact_reserved,
         config.keep_recent_tokens,
     )?;
     // The heuristic compaction is instant (pure text surgery), so the next

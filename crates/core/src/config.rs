@@ -46,6 +46,11 @@ pub struct Config {
     /// that model; when unset the main model serves the calls.
     pub background_intelligence: bool,
     pub background_model: Option<String>,
+    /// Explicit compaction trigger: when the estimated history exceeds this
+    /// many tokens, compaction runs — regardless of the model window. Useful
+    /// because the estimator is heuristic and can drift from a real
+    /// tokenizer; setting the line directly sidesteps the drift.
+    pub compact_threshold_tokens: Option<usize>,
     /// Models shown in the picker and allowed by model cycling. Empty means
     /// every model from the provider catalog (Pi's `enabledModels`).
     pub enabled_models: Vec<String>,
@@ -122,6 +127,7 @@ impl Default for Config {
             approval_mode: ApprovalMode::Sensible,
             background_intelligence: false,
             background_model: None,
+            compact_threshold_tokens: None,
             enabled_models: Vec::new(),
             plugins: Vec::new(),
             allowed_tools: Vec::new(),
@@ -395,6 +401,11 @@ pub fn merge_into(config: &mut Config, text: &str, source: &Path) -> Result<()> 
             "backgroundModel" | "background_model" => {
                 if let Some(m) = val.as_str() {
                     config.background_model = Some(m.to_string());
+                }
+            }
+            "compactThresholdTokens" | "compact_threshold_tokens" => {
+                if let Some(n) = val.as_f64() {
+                    config.compact_threshold_tokens = Some(n.max(1.0) as usize);
                 }
             }
             "autoApproveBash" | "auto_approve_bash" => {
