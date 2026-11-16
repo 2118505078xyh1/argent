@@ -102,6 +102,28 @@ impl CheckpointStore {
         let _ = self.try_record(path);
     }
 
+    /// 在一条 bash 命令执行之前，把它可能动到的文件记录下来。
+    ///
+    /// 扫描命令里的删除/移动/覆盖目标（`rm a b`、`del x`、`move a b`、
+    /// `git clean -f` 等），对每个真实存在的文件各记一条快照。识别是启发
+    /// 式的：宁可多记一个没被改的文件（回滚时恢复原样，无损），也不能漏
+    /// 记一个真被删掉的。识别不出目标时什么也不记——检查点不是门禁。
+    pub fn record_command_targets(&self, command: &str, cwd: &Path) {
+        for raw in command_targets(command) {
+            let candidate = Path::new(&raw);
+            let path = if candidate.is_absolute() {
+                candidate.to_path_buf()
+            } else {
+                cwd.join(candidate)
+            };
+            // 目录不进 blob：快照是按文件内容的，目录无法这样存。目录里的
+            // 文件只有执行后才知道，事后无法补记——这层只保文件。
+            if path.is_file() {
+                self.record(&path);
+            }
+        }
+    }
+
     fn try_record(&self, path: &Path) -> std::io::Result<()> {
         let dir = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -278,6 +300,73 @@ impl Entry {
                 .map(str::to_string),
         })
     }
+}
+
+/// 从一条 bash 命令里提取可能被删除/移动/覆盖的文件目标。
+///
+/// 只认得常见形态：
+/// - `rm a b` / `rm -rf dir`、`unlink x`、`shred x` — `del x` / `erase x` /
+///   `Remove-Item x`（Windows）
+/// - `mv a b` / `move a b` — 两个操作数都记（源被移动走，目标可能被覆盖）
+/// - `truncate -s 0 x`、`cp a b`（目标 b）、`tee x`
+/// - `git clean -f…` — 记不了具体文件，返回空；真要兜底请用 git
+///
+/// 引号剥离；标志位（`-` 开头）跳过。识别是启发式的：多记无损，漏记无救。
+/// 已知限制：带引号的参数含空格会被空格拆开（`del "my file.txt"` 记成两个
+/// 目标），两个都不存在时无副作用；动词必须出现在命令开头，管道后的动词
+/// 不识别。
+fn command_targets(command: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let strip = |token: &str| -> String {
+        token
+            .trim_matches(|ch| ch == '"' || ch == 39 as char)
+            .to_string()
+    };
+    let mut index = 0usize;
+    while index < tokens.len() {
+        let word = strip(tokens[index]);
+        let lower = word.to_ascii_lowercase();
+        // Only a leading verb is a command; `echo rm x` must not match. The
+        // pipeline case (`| rm x`) is a known miss — rare enough to accept
+        // and it errs toward under-recording, never over-deleting.
+        if index != 0 {
+            break;
+        }
+        // 消费“命令 + 可变数量的标志 + 操作数”的组合。
+        let (min_args, take_args): (usize, usize) = match lower.as_str() {
+            "rm" | "unlink" | "shred" | "del" | "erase" | "remove-item" | "rd" | "rmdir" => {
+                (1, tokens.len() - index - 1)
+            }
+            "mv" | "move" => (2, 2),
+            "cp" | "copy" => (2, 2), // 目标被覆盖；源是只读的
+            "tee" | "truncate" => (1, tokens.len() - index - 1),
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+        let mut taken = 0usize;
+        let mut cursor = index + 1;
+        while cursor < tokens.len() && taken < take_args {
+            let token = strip(tokens[cursor]);
+            if token.starts_with('-') {
+                cursor += 1;
+                continue;
+            }
+            taken += 1;
+            if taken >= min_args {
+                targets.push(token);
+            } else {
+                // mv/cp 的第一个操作数也记：它会被移走。
+                targets.push(token);
+            }
+            cursor += 1;
+        }
+        index = cursor.max(index + 1);
+    }
+    targets.retain(|t| !t.is_empty() && t != "/dev/null" && !t.contains('*') && !t.contains('?'));
+    targets
 }
 
 /// 会话文件旁的检查点目录。
@@ -536,6 +625,47 @@ mod tests {
         assert!(errors.is_empty(), "{:?}", errors);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[test]
+    fn command_targets_covers_deletes_and_moves() {
+        assert_eq!(
+            command_targets("rm -rf build dist"),
+            vec!["build", "dist"]
+        );
+        assert_eq!(
+            command_targets("mv a.txt backup/a.txt"),
+            vec!["a.txt", "backup/a.txt"]
+        );
+        // 引号内的空格不解析：拆成两个目标，都不存在时无副作用。
+        assert_eq!(
+            command_targets("del \"my file.txt\""),
+            vec!["my", "file.txt"]
+        );
+        assert_eq!(command_targets("cp src.txt dst.txt"), vec!["src.txt", "dst.txt"]);
+    }
+
+    #[test]
+    fn command_targets_skips_flags_and_globs() {
+        assert!(command_targets("rm -rf *").is_empty());
+        // 动词只在开头才算：echo 的参数不匹配。
+        assert!(command_targets("echo rm not-a-rm").is_empty());
+    }
+
+    #[test]
+    fn a_bash_command_records_its_targets() {
+        let (root, store) = temp_store("bash");
+        let victim = root.join("victim.txt");
+        std::fs::write(&victim, "precious").unwrap();
+
+        store.begin_run();
+        store.record_command_targets("rm victim.txt", &root);
+        std::fs::remove_file(&victim).unwrap();
+        assert!(!victim.exists());
+
+        store.rewind(1);
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
     }
 
     #[test]

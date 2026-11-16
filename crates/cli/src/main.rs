@@ -581,7 +581,23 @@ pub fn run(raw: &[String]) -> Result<i32> {
             }
             block
         }));
+    }
 
+    // bash 的删除/移动也进检查点：执行前扫描命令目标并快照。检查点不是
+    // 门禁——识别失败时命令照常跑，只是少一层可回滚。
+    {
+        let checkpoints = checkpoints.clone();
+        let cwd = cli.cwd.clone();
+        agent_config.pre_tool = Some(Arc::new(move |name, args| {
+            if name == "bash" {
+                let command = args.get("command").and_then(Json::as_str).unwrap_or("");
+                checkpoints.record_command_targets(command, &cwd);
+            }
+            None
+        }));
+    }
+
+    {
         let config_for_post = Arc::clone(&hook_config);
         let cwd = cli.cwd.clone();
         agent_config.post_tool = Some(Arc::new(move |name, args, is_error| {

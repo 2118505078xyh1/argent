@@ -303,8 +303,6 @@ pub struct SkillScriptTool {
     name: String,
     /// The command template.
     command: String,
-    /// The skill directory, so relative script paths resolve.
-    root: PathBuf,
     /// One line from the skill's description, shown in the schema.
     description: String,
 }
@@ -312,11 +310,6 @@ pub struct SkillScriptTool {
 impl SkillScriptTool {
     /// Build every script tool a skill declares, rooted at its directory.
     pub fn from_skill(skill: &Skill) -> Vec<Box<dyn Tool>> {
-        let root = skill
-            .path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
         let description = if skill.description.is_empty() {
             format!("Tool carried by the '{}' skill", skill.name)
         } else {
@@ -329,7 +322,6 @@ impl SkillScriptTool {
                 Box::new(SkillScriptTool {
                     name: name.clone(),
                     command: command.clone(),
-                    root: root.clone(),
                     description: description.clone(),
                 }) as Box<dyn Tool>
             })
