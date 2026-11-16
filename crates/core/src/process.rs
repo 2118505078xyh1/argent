@@ -568,7 +568,7 @@ impl StreamingChild {
             let mut available = Available { total: 0, _left: 0 };
             let ok = unsafe {
                 PeekNamedPipe(
-                    pipe.as_raw_handle() as *mut core::ffi::c_void,
+                    pipe.as_raw_handle().cast(),
                     core::ptr::null_mut(),
                     0,
                     core::ptr::null_mut(),

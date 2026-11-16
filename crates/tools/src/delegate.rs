@@ -32,8 +32,6 @@ pub struct DelegateRequest {
 #[derive(Debug, Clone)]
 pub struct DelegateBatch {
     pub tasks: Vec<DelegateRequest>,
-    /// How many children may run at once.
-    pub max_concurrency: usize,
     /// Abort anything still running after this long.
     pub timeout: Duration,
 }
@@ -43,7 +41,6 @@ impl DelegateBatch {
     pub fn single(request: DelegateRequest) -> DelegateBatch {
         DelegateBatch {
             tasks: vec![request],
-            max_concurrency: 1,
             timeout: Duration::from_secs(300),
         }
     }
@@ -198,8 +195,6 @@ impl DelegateSlot {
 /// Run scoped tasks in child agents.
 pub struct DelegateTool {
     handle: Option<DelegateHandle>,
-    /// Default cap on concurrent children.
-    pub default_concurrency: usize,
 }
 
 impl DelegateTool {
@@ -207,7 +202,6 @@ impl DelegateTool {
     pub fn disabled() -> DelegateTool {
         DelegateTool {
             handle: None,
-            default_concurrency: 4,
         }
     }
 
@@ -215,7 +209,6 @@ impl DelegateTool {
     pub fn with_handle(handle: DelegateHandle) -> DelegateTool {
         DelegateTool {
             handle: Some(handle),
-            default_concurrency: 4,
         }
     }
 
@@ -223,13 +216,7 @@ impl DelegateTool {
     ///
     /// Two shapes are accepted: a `tasks` array for a batch, or `role` + `task`
     /// for a single delegation.
-    fn parse_batch(
-        args: &Json,
-        default_concurrency: usize,
-    ) -> std::result::Result<DelegateBatch, ToolResult> {
-        let max_concurrency = arg_usize_opt(args, "maxConcurrency")
-            .unwrap_or(default_concurrency)
-            .clamp(1, 8);
+    fn parse_batch(args: &Json) -> std::result::Result<DelegateBatch, ToolResult> {
         let timeout = Duration::from_millis(
             arg_usize_opt(args, "timeoutMs")
                 .unwrap_or(300_000)
@@ -281,17 +268,15 @@ impl DelegateTool {
         if tasks.is_empty() {
             return Err(ToolResult::error("the task list is empty"));
         }
-        if tasks.len() > 16 {
+        // One conversation runs at most eight children, all interleaved on
+        // its single execution thread (see the delegate scheduler).
+        if tasks.len() > 8 {
             return Err(ToolResult::error(
-                "at most 16 tasks per batch; split the work instead",
+                "at most 8 subagents per batch; split the work instead",
             ));
         }
 
-        Ok(DelegateBatch {
-            tasks,
-            max_concurrency,
-            timeout,
-        })
+        Ok(DelegateBatch { tasks, timeout })
     }
 }
 
@@ -350,13 +335,6 @@ impl Tool for DelegateTool {
         props.set("model", property("string", "Optional model override"));
         props.set("thinking", property("string", "Optional thinking level"));
         props.set(
-            "maxConcurrency",
-            property(
-                "integer",
-                "How many children may run at once (default 4, max 8)",
-            ),
-        );
-        props.set(
             "timeoutMs",
             property(
                 "integer",
@@ -391,20 +369,18 @@ impl Tool for DelegateTool {
         };
         let _ = ctx;
 
-        let batch = match DelegateTool::parse_batch(args, self.default_concurrency) {
+        let batch = match DelegateTool::parse_batch(args) {
             Ok(batch) => batch,
             Err(result) => return Ok(result),
         };
         let count = batch.tasks.len();
-        let concurrency = batch.max_concurrency.min(count);
-
         let outcomes = (handle.factory)(batch);
-        Ok(ToolResult::ok(render(&outcomes, count, concurrency)))
+        Ok(ToolResult::ok(render(&outcomes, count)))
     }
 }
 
 /// Render a batch result for the model.
-fn render(outcomes: &[TaskOutcome], requested: usize, concurrency: usize) -> String {
+fn render(outcomes: &[TaskOutcome], requested: usize) -> String {
     let failed = outcomes.iter().filter(|o| o.is_error).count();
     let timed_out = outcomes.iter().filter(|o| o.timed_out).count();
     let total: f64 = outcomes.iter().map(|o| o.elapsed.as_secs_f64()).sum();
@@ -419,8 +395,9 @@ fn render(outcomes: &[TaskOutcome], requested: usize, concurrency: usize) -> Str
 
     let mut out = String::new();
     out.push_str(&format!(
-        "{} task(s), concurrency {}, {} failed\n",
-        requested, concurrency, failed
+        "{} task(s), {} failed
+",
+        requested, failed
     ));
     if outcomes.len() > 1 {
         // The wall-clock saving is the whole point of a batch; show it.
@@ -604,23 +581,13 @@ mod tests {
     }
 
     #[test]
-    fn concurrency_is_capped() {
-        let args = Json::parse(
-            r#"{"tasks":[{"role":"a","task":"1"},{"role":"b","task":"2"}],"maxConcurrency":99}"#,
-        )
-        .unwrap();
-        let batch = DelegateTool::parse_batch(&args, 4).expect("parse");
-        assert_eq!(batch.max_concurrency, 8);
-    }
-
-    #[test]
     fn too_many_tasks_are_rejected() {
         let mut tasks = Vec::new();
         for index in 0..17 {
             tasks.push(format!(r#"{{"role":"r","task":"{}"}}"#, index));
         }
         let args = Json::parse(&format!(r#"{{"tasks":[{}]}}"#, tasks.join(","))).unwrap();
-        assert!(DelegateTool::parse_batch(&args, 4).is_err());
+        assert!(DelegateTool::parse_batch(&args).is_err());
     }
 
     #[test]

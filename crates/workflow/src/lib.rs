@@ -352,7 +352,6 @@ pub fn run(
                 .collect();
             let batch = DelegateBatch {
                 tasks: requests,
-                max_concurrency: workflow.max_concurrency,
                 timeout: workflow.timeout,
             };
             let outcomes = runner(batch);

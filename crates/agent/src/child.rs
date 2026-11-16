@@ -1,6 +1,6 @@
 //! Running a child agent on behalf of the delegate tool.
 //!
-//! A batch runs on a bounded worker pool: `max_concurrency` threads pull tasks
+//! A batch runs every child as a coroutine on the caller's thread
 //! from a shared queue. Each child owns its own provider and tool subset, so
 //! there is no shared mutable state between children.
 //!
@@ -509,7 +509,6 @@ mod tests {
                 model: None,
                 thinking: None,
             }],
-            max_concurrency: 2,
             timeout: Duration::from_secs(5),
         };
         let outcomes = factory.run_batch(batch);
@@ -543,7 +542,6 @@ mod tests {
         ];
         let batch = DelegateBatch {
             tasks: tasks.clone(),
-            max_concurrency: 3,
             timeout: Duration::from_secs(3),
         };
         let outcomes = factory.run_batch(batch);

@@ -51,7 +51,6 @@ fn main() {
                 thinking: None,
             },
         ],
-        max_concurrency: 3,
         timeout: Duration::from_secs(120),
     };
 

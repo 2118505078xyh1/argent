@@ -55,7 +55,6 @@ name = "argent-ai"
 version = "0.2.0"
 dependencies = [
  "argent-core",
- "corosensei",
 ]
 
 [[package]]
