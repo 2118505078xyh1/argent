@@ -87,7 +87,6 @@ impl ChildFactory {
             let done_flag = Arc::clone(&done);
             let signal = Arc::clone(&signal);
             let factory = self.snapshot();
-            wait;
             handles.push(std::thread::spawn(move || loop {
                 let next = {
                     let mut guard = match queue.lock() {
