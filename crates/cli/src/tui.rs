@@ -1405,12 +1405,59 @@ fn handle_paste_key(
                 }
                 return Some(true);
             }
-            // 不可能是粘贴开始标记：Esc 已经按下，后面这些是普通字符。
-            *mode = PasteMode::Normal;
-            let _ = tx.send(Key::Esc);
-            let _ = tx.send(Key::Char('['));
-            for c in collected.iter() {
-                let _ = tx.send(Key::Char(*c));
+            // 单字符终点的 CSI：方向键、Home/End、Shift-Tab。滚轮滚动在
+            // 一些终端里就是连续的 `ESC [ A` / `ESC [ B`，不认出它们的话
+            // 输入框里会堆满 `[A[B[...`。
+            if text.len() == 1 {
+                // 数字 / 分号开头的是多字符序列（`5~`、`1;5A`）：继续收。
+                if c.is_ascii_digit() || c == ';' || c == '<' {
+                    *seq = collected;
+                    return Some(true);
+                }
+                let key = match c {
+                    'A' => Some(Key::Up),
+                    'B' => Some(Key::Down),
+                    'C' => Some(Key::Right),
+                    'D' => Some(Key::Left),
+                    'H' => Some(Key::Home),
+                    'F' => Some(Key::End),
+                    'Z' => Some(Key::BackTab),
+                    _ => None,
+                };
+                *mode = PasteMode::Normal;
+                if let Some(key) = key {
+                    let _ = tx.send(key);
+                }
+                return Some(true);
+            }
+            // VT 风格的编码（`ESC [ 5 ~` = PgUp）：等 `~` 收尾再解析。
+            if c == '~' {
+                *mode = PasteMode::Normal;
+                let code: String = collected[..collected.len() - 1].iter().collect();
+                let key = match code.as_str() {
+                    "1" => Some(Key::Home),
+                    "3" => Some(Key::Delete),
+                    "4" => Some(Key::End),
+                    "5" => Some(Key::PageUp),
+                    "6" => Some(Key::PageDown),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    let _ = tx.send(key);
+                }
+                return Some(true);
+            }
+            // 还在长（带修饰键的 `ESC [ 1 ; 5 A` 之类）：继续收；收不出来的
+            // 序列整个丢弃——它们不该变成字符进输入框。
+            if collected.len() >= 8 {
+                *mode = PasteMode::Normal;
+                return Some(true);
+            }
+            let first = collected[0];
+            if first.is_ascii_digit() || first == ';' || first == '<' {
+                *seq = collected;
+            } else {
+                *mode = PasteMode::Normal;
             }
             Some(true)
         }
@@ -3002,25 +3049,29 @@ impl App {
         };
         let visible: Vec<char> = self.input.iter().skip(start).take(inner).copied().collect();
         let mut line = Line::new().push(Span::new(USER_MARK, Style::bold(crate::theme::current().accent)));
-        // 光标用正文色的反显（浅色小块），不用 accent：绿色宽条在
-        // 输入框末尾看起来像渲染残留。
-        let cursor_style = Style::reverse(crate::theme::current().text);
-        if self.input.is_empty() {
-            // 占位符文字去掉：空输入框就只有一个光标。
-            return line.push(Span::new(" ", cursor_style));
-        }
-        let cursor_at = self.cursor.saturating_sub(start).min(visible.len());
-        for (index, ch) in visible.iter().enumerate() {
-            if index == cursor_at {
-                line = line.push(Span::new(ch.to_string(), cursor_style));
-            } else {
-                line = line.push(Span::new(ch.to_string(), Style::plain()));
-            }
-        }
-        if cursor_at >= visible.len() {
-            line = line.push(Span::new(" ", cursor_style));
+        // 光标交给终端原生光标（位置见 `cursor_screen_position`）：不再画
+        // 反显块，深浅色主题下都不会看起来像渲染残留。行尾留一个空格
+        // 占位，光标停在它上面。
+        for ch in visible.iter() {
+            line = line.push(Span::new(ch.to_string(), Style::plain()));
         }
         line
+    }
+
+    /// 终端光标应该停在的位置（ANSI 1 基 row/col）。
+    ///
+    /// 输入框是倒数第 4 行（下方依次是分隔线、状态行、信息行）。
+    fn cursor_screen_position(&self, width: usize, height: usize) -> (usize, usize) {
+        let row = height.saturating_sub(3).max(1);
+        let inner = width.saturating_sub(4).max(1);
+        let start = if self.cursor > inner {
+            self.cursor - inner
+        } else {
+            0
+        };
+        let text: String = self.input[start..self.cursor.min(self.input.len())].iter().collect();
+        let col = 1 + text_width(USER_MARK) + text_width(&text);
+        (row, col.max(1).min(width))
     }
 
     fn palette_line(&self, item: &PaletteItem, selected: bool, width: usize) -> Line {
@@ -3298,7 +3349,8 @@ impl App {
 /// 只做终端里真正提升可读性的几件事，不追求完整 markdown。
 fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) -> Vec<Line> {
     let theme = crate::theme::current();
-    let code_bg = Color::Fixed(236);
+    // 纯黑底上的代码块：只比底色亮一丁点的深灰，铺出区块感。
+    let code_bg = Color::Fixed(235);
     let mut out: Vec<Line> = Vec::new();
     let mut in_code = false;
     let mut first_line = true;
@@ -3594,7 +3646,13 @@ pub fn run_remote(
     // 状态栏由调用方给的 Ready 事件填好（远端会话没有本地模型信息）。
     let _ = &title;
     let initial_size = terminal::size();
-    draw(&app.frame(initial_size.cols as usize, initial_size.rows as usize));
+    draw_at(
+        &app.frame(initial_size.cols as usize, initial_size.rows as usize),
+        Some(app.cursor_screen_position(
+            initial_size.cols as usize,
+            initial_size.rows as usize,
+        )),
+    );
     // The stand-in worker is the same for every key: its commands go nowhere.
     let worker = remote_worker();
 
@@ -3633,7 +3691,13 @@ pub fn run_remote(
         if changed || app.working {
             let size = terminal::size();
             let lines = app.frame(size.cols as usize, size.rows as usize);
-            draw(&lines);
+            draw_at(
+                &lines,
+                Some(app.cursor_screen_position(
+                    size.cols as usize,
+                    size.rows as usize,
+                )),
+            );
         }
         std::thread::sleep(Duration::from_millis(33));
     }
@@ -3689,7 +3753,13 @@ pub fn run(
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
     // 首帧就显示一次键位提示；后续帧由 hint_shown 保证不再重复。
     let initial_size = terminal::size();
-    draw(&app.frame(initial_size.cols as usize, initial_size.rows as usize));
+    draw_at(
+        &app.frame(initial_size.cols as usize, initial_size.rows as usize),
+        Some(app.cursor_screen_position(
+            initial_size.cols as usize,
+            initial_size.rows as usize,
+        )),
+    );
     let mut last_sweep = Instant::now();
 
     while !app.quit {
@@ -3728,7 +3798,13 @@ pub fn run(
         if changed || app.working || app.status.is_some() {
             let size = terminal::size();
             let lines = app.frame(size.cols as usize, size.rows as usize);
-            draw(&lines);
+            draw_at(
+                &lines,
+                Some(app.cursor_screen_position(
+                    size.cols as usize,
+                    size.rows as usize,
+                )),
+            );
         }
         if last_sweep.elapsed() >= Duration::from_secs(5) {
             last_sweep = Instant::now();
@@ -3787,8 +3863,12 @@ fn transcript_plain(app: &App) -> Vec<String> {
     out
 }
 
-fn draw(lines: &[String]) {
-    let mut out = String::from("\x1b[H");
+/// Draw a frame and leave the terminal cursor where the input box wants it.
+///
+/// The cursor is hidden while the frame paints (so it does not chase the
+/// redraw across the screen) and shown again at the input position.
+fn draw_at(lines: &[String], cursor: Option<(usize, usize)>) {
+    let mut out = String::from("\x1b[?25l\x1b[H");
     for (index, line) in lines.iter().enumerate() {
         out.push_str(line);
         if index + 1 < lines.len() {
@@ -3796,6 +3876,10 @@ fn draw(lines: &[String]) {
         }
     }
     out.push_str("\x1b[J");
+    if let Some((row, col)) = cursor {
+        out.push_str(&format!("\x1b[{};{}H", row, col));
+    }
+    out.push_str("\x1b[?25h");
     terminal::write_raw(&out);
 }
 
@@ -4390,10 +4474,39 @@ mod paste_tests {
     }
 
     #[test]
-    fn a_sequence_that_is_not_a_paste_ends_as_ordinary_keys() {
-        // ESC [ A is not a paste marker: it must not swallow the keys.
-        let keys = feed("\u{1b}[A");
-        assert_eq!(keys, vec![Key::Esc, Key::Char('['), Key::Char('A')]);
+    fn wheel_arrows_translate_into_direction_keys() {
+        // The wheel sends ESC [ A / ESC [ B: without this they would pile
+        // up in the input box as literal `[A[B[...`.
+        assert_eq!(feed("\u{1b}[A"), vec![Key::Up]);
+        assert_eq!(feed("\u{1b}[B"), vec![Key::Down]);
+        assert_eq!(feed("\u{1b}[C"), vec![Key::Right]);
+        assert_eq!(feed("\u{1b}[D"), vec![Key::Left]);
+    }
+
+    #[test]
+    fn vt_style_home_and_page_keys_translate() {
+        assert_eq!(feed("\u{1b}[5~"), vec![Key::PageUp]);
+        assert_eq!(feed("\u{1b}[6~"), vec![Key::PageDown]);
+        assert_eq!(feed("\u{1b}[3~"), vec![Key::Delete]);
+    }
+
+    #[test]
+    fn an_unknown_sequence_is_dropped_not_typed() {
+        // A sequence we do not know must never leak characters into the
+        // box.
+        let keys = feed("\u{1b}[999;9X");
+        assert!(keys.is_empty(), "{:?}", keys);
+    }
+
+    #[test]
+    fn a_paste_still_works_after_wheel_events() {
+        let keys = feed(
+            "\u{1b}[A\u{1b}[B\u{1b}[200~text\u{1b}[201~",
+        );
+        assert_eq!(
+            keys,
+            vec![Key::Up, Key::Down, Key::Paste("text".to_string())]
+        );
     }
 
     #[test]
@@ -4401,5 +4514,49 @@ mod paste_tests {
         // Two escapes in a row: the first one is a real Esc.
         let keys = feed("\u{1b}\u{1b}");
         assert_eq!(keys, vec![Key::Esc]);
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+
+    fn app() -> App {
+        App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        )
+    }
+
+    #[test]
+    fn an_empty_input_puts_the_cursor_after_the_prompt_mark() {
+        let app = app();
+        let (row, col) = app.cursor_screen_position(100, 30);
+        // The input line is the 4th row from the bottom.
+        assert_eq!(row, 27);
+        assert_eq!(col, 3);
+    }
+
+    #[test]
+    fn wide_characters_advance_the_cursor_by_two_cells() {
+        let mut app = app();
+        app.input = "你好".chars().collect();
+        app.cursor = 2;
+        let (_, col) = app.cursor_screen_position(100, 30);
+        assert_eq!(col, 3 + 4);
+    }
+
+    #[test]
+    fn the_input_window_scrolls_with_a_long_line() {
+        let mut app = app();
+        // 200 characters: the visible window starts past the beginning.
+        app.input = "a".repeat(200).chars().collect();
+        app.cursor = 200;
+        let (_, col) = app.cursor_screen_position(100, 30);
+        // inner = 96, start = 104, so the cursor sits at the end of the window.
+        assert_eq!(col, 1 + text_width(USER_MARK) + 96);
     }
 }

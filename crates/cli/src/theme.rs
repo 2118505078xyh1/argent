@@ -34,13 +34,15 @@ impl Theme {
         match name {
             "dark" => Some(Theme {
                 name: "dark".to_string(),
-                // 232 是 256 色里的近黑，比纯黑柔和，长时间看不刺眼。
-                background: Color::Fixed(234),
+                // 纯黑：和终端的默认底色一致，块状元素（代码块、选中行）
+                // 的深浅层次才不会发灰。
+                background: Color::Fixed(16),
                 // 低饱和蓝绿：比基础青色柔和，长时间看也不刺眼。
                 accent: Color::Fixed(73),
                 secondary: Color::Fixed(140),
                 text: Color::Fixed(253),
-                dim: Color::Fixed(244),
+                // 244 在 234 的底上发虚，状态栏小字看不清；提亮一档。
+                dim: Color::Fixed(249),
                 success: Color::Fixed(108),
                 warning: Color::Fixed(179),
                 error: Color::Fixed(174),
@@ -52,7 +54,7 @@ impl Theme {
                 accent: Color::Fixed(25),
                 secondary: Color::Fixed(96),
                 text: Color::Fixed(235),
-                dim: Color::Fixed(245),
+                dim: Color::Fixed(240),
                 success: Color::Fixed(28),
                 warning: Color::Fixed(136),
                 error: Color::Fixed(160),
