@@ -251,7 +251,13 @@ impl Line {
         }
 
         // Pad the remainder so the row is exactly `cols` cells wide.
+        // Padding 不能沿用最后一个 span 的样式：反显光标后接一整行
+        // 反显空格，看起来就像输入框后面拖了一条色带。
         if used < cols {
+            if colors {
+                out.push_str(&base.sgr());
+                out.push_str("\x1b[K");
+            }
             out.push_str(&" ".repeat(cols - used));
         }
         if !base_sgr.is_empty() {

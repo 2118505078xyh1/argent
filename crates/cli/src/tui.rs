@@ -3002,25 +3002,23 @@ impl App {
         };
         let visible: Vec<char> = self.input.iter().skip(start).take(inner).copied().collect();
         let mut line = Line::new().push(Span::new(USER_MARK, Style::bold(crate::theme::current().accent)));
+        // 光标用正文色的反显（浅色小块），不用 accent：绿色宽条在
+        // 输入框末尾看起来像渲染残留。
+        let cursor_style = Style::reverse(crate::theme::current().text);
         if self.input.is_empty() {
-            line = line
-                .push(Span::new(
-                    argent_i18n::t(self.locale, "tui.placeholder"),
-                    Style::dim(crate::theme::current().dim),
-                ))
-                .push(Span::new(" ", Style::reverse(crate::theme::current().accent)));
-            return line;
+            // 占位符文字去掉：空输入框就只有一个光标。
+            return line.push(Span::new(" ", cursor_style));
         }
         let cursor_at = self.cursor.saturating_sub(start).min(visible.len());
         for (index, ch) in visible.iter().enumerate() {
             if index == cursor_at {
-                line = line.push(Span::new(ch.to_string(), Style::reverse(crate::theme::current().accent)));
+                line = line.push(Span::new(ch.to_string(), cursor_style));
             } else {
                 line = line.push(Span::new(ch.to_string(), Style::plain()));
             }
         }
         if cursor_at >= visible.len() {
-            line = line.push(Span::new(" ", Style::reverse(crate::theme::current().accent)));
+            line = line.push(Span::new(" ", cursor_style));
         }
         line
     }
