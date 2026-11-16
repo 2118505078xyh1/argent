@@ -116,11 +116,8 @@ impl Metrics {
 
     /// Share of the prompt that the provider served from its cache.
     pub fn cache_hit_percent(&self) -> Option<u64> {
-        if self.prompt_tokens == 0 {
-            None
-        } else {
-            Some(self.cached_tokens.min(self.prompt_tokens) * 100 / self.prompt_tokens)
-        }
+        let capped = self.cached_tokens.min(self.prompt_tokens);
+        (self.prompt_tokens > 0).then(|| capped * 100 / self.prompt_tokens)
     }
 
     /// How long the current or last turn took.

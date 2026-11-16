@@ -344,7 +344,7 @@ fn run_script(
         }
     });
 
-    let seconds = ctx.timeout_secs.min(1800).max(1);
+    let seconds = ctx.timeout_secs.clamp(1, 1800);
     let spec = CommandSpec::new(&program)
         .arg(path.to_string_lossy().to_string())
         .cwd(ctx.cwd.to_string_lossy().to_string())

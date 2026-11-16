@@ -46,8 +46,7 @@ impl MemoryTool {
         MemoryTool { store: None }
     }
 
-    fn resolve_store(&self, ctx: &ToolCtx) -> SharedStore {
-        if let Some(path) = ctx.var("memory_store") {
+    fn resolve_store(&self, ctx: &ToolCtx) -> SharedStore {        if let Some(path) = ctx.var("memory_store") {
             let root = PathBuf::from(path);
             let slug = argent_session_slug(&ctx.cwd);
             return std::sync::Arc::new(Mutex::new(argent_memory::MemoryStore::new(root, slug)));
@@ -63,6 +62,12 @@ impl MemoryTool {
             argent_memory::MemoryStore::default_root(),
             slug,
         )))
+    }
+}
+
+impl Default for MemoryTool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

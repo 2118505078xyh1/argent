@@ -1593,7 +1593,7 @@ fn print_token_breakdown(registry: &ToolRegistry, system_prompt: &str) -> Result
         };
         rows.push((size, name, group));
     }
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.0));
 
     let system_tokens = argent_agent::estimate_tokens(&[argent_ai::Message::system(system_prompt)]);
     let plugins = registry.plugin_infos();

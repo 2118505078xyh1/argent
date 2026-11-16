@@ -297,11 +297,8 @@ impl Transcript {
             matches!(self.entries.last(), Some(Entry::Assistant(_)))
         };
         if target {
-            if let Some(entry) = self.entries.last_mut() {
-                match entry {
-                    Entry::Thinking(text) | Entry::Assistant(text) => text.push_str(chunk),
-                    _ => {}
-                }
+            if let Some(Entry::Thinking(text) | Entry::Assistant(text)) = self.entries.last_mut() {
+                text.push_str(chunk);
             }
             return;
         }

@@ -930,7 +930,7 @@ fn project_init_text(cwd: &Path) -> String {
         *counts.entry(language).or_default() += 1;
     }
     let mut languages: Vec<_> = counts.into_iter().collect();
-    languages.sort_by(|a, b| b.1.cmp(&a.1));
+    languages.sort_by_key(|a| std::cmp::Reverse(a.1));
     for (language, count) in languages.iter().take(6) {
         out.push_str(&format!("- {}: {} files
 ", language, count));
@@ -4649,6 +4649,19 @@ mod cursor_tests {
             Vec::new(),
             crate::keybindings::Bindings::default(),
         )
+    }
+
+    #[test]
+    fn the_body_cache_never_hides_a_new_message() {
+        // The layout cache is keyed on the transcript version. If a rebuild
+        // reused a version number, the frame would keep showing the old
+        // conversation and the new message would never appear.
+        let mut app = app();
+        let before = app.frame(80, 24).join("\n");
+        assert!(!before.contains("hello there"));
+        app.transcript.push_user("hello there");
+        let after = app.frame(80, 24).join("\n");
+        assert!(after.contains("hello there"), "{}", after);
     }
 
     #[test]

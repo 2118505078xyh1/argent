@@ -1833,7 +1833,11 @@ fn usage(args: &[String]) -> Result<i32> {
     let hit = if summary.prompt_tokens == 0 {
         0
     } else {
-        summary.cached_tokens * 100 / summary.prompt_tokens
+        summary
+            .cached_tokens
+            .min(summary.prompt_tokens)
+            * 100
+            / summary.prompt_tokens
     };
     println!(
         "usage: {} turn(s), {} request(s), {}",

@@ -70,9 +70,8 @@ impl SseDecoder {
         self.decode(bytes);
         let mut events = Vec::new();
         loop {
-            let split = match self.find_line_end() {
-                Some(idx) => idx,
-                None => break,
+            let Some(split) = self.find_line_end() else {
+                break;
             };
             let line = self.buffer[..split.0].to_string();
             let consumed = split.1;

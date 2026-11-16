@@ -581,12 +581,12 @@ impl Tool for LsTool {
         }
 
         let mut out = String::new();
-        list_dir(&root, &root, depth, 0, &mut out);
+        list_dir(&root, depth, 0, &mut out);
         Ok(ToolResult::ok(out.trim_end().to_string()))
     }
 }
 
-fn list_dir(root: &Path, dir: &Path, depth: usize, level: usize, out: &mut String) {
+fn list_dir(dir: &Path, depth: usize, level: usize, out: &mut String) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(_) => return,
@@ -614,7 +614,7 @@ fn list_dir(root: &Path, dir: &Path, depth: usize, level: usize, out: &mut Strin
             ));
         }
         if is_dir && depth > level {
-            list_dir(root, &path, depth, level + 1, out);
+            list_dir(&path, depth, level + 1, out);
         }
     }
 }
