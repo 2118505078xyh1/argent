@@ -9,9 +9,9 @@
 
 
 mod keys;
-pub(crate) use keys::{
-    flush_pending, handle_paste_key, key_from_console_record, spawn_input, Key, PasteMode,
-};
+pub(crate) use keys::{spawn_input, Key};
+#[cfg(test)]
+pub(crate) use keys::{flush_pending, handle_paste_key, key_from_console_record, PasteMode};
 #[cfg(any(not(windows), test))]
 pub(crate) use keys::next_key;
 

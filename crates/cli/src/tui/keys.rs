@@ -1,6 +1,7 @@
 //! Terminal input: the key enum, the bracketed-paste state machine and the
 //! platform input threads.
 
+#[cfg(any(not(windows), test))]
 use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
 
