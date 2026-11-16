@@ -92,7 +92,7 @@
       形成"发现问题 → 复现 → 回归测试"闭环。
 - [ ] **P2.2** 子代理进度展示打磨：engine 已转发 `SubagentEvent` Notice，检查 TUI/GUI 是否清晰可见、可取消。
 - [ ] **P2.3** 依赖重复治理：只处理**直接依赖**可统一的部分；传递依赖（syn 3 / thiserror 1）不动。
-- [ ] **P2.4** 清理 8 个 clippy 警告（轻度，随缘）。
+- [x] **P2.4** 清理 8 个 clippy 警告（随另一会话的修复一起完成，见下方验证记录）。
 
 ### 不做（明确排除）
 - ❌ WebView / Electron 桌面 / ChatGPT 内嵌 / Artifact / Remote Control
@@ -120,6 +120,14 @@
 - **2026-11-16 P1.3 完成**：`@path` 图片 → `Content::Image` → `run_message`；`Command::Prompt`
   改为带 images 的结构体；新增 `image_attachments_become_vision_content` 测试。
   `cargo test -p argent-cli --bin argent tui::` 46 passed（同 1 个环境测试除外）；全量测试与 release 无回归。
+- **2026-11-16 会话合并提交 5aea0d3**：本会话（另一对话）的全部未提交工作
+  （script-plugin Rhai 插件、codemode 沙箱、TUI P0 性能、P1.2 异步 hooks、P1.3 图片输入、
+  FlushPolicy、CacheWarming/FollowUpMode、ui_request 等）随一次综合提交全部落库。
+  同时落库：`-c` Windows cwd 规范化修复（此前 `--continue` 每次静默新建会话）、
+  OpenAI 兼容端点 reasoning_content 重发（续轮 KV 缓存命中从 96 新 token → 37）、
+  CacheWarming/FollowUpMode/set_approve 从调用方重建。clippy 全 workspace 0 警告。
+  全量测试 1020 passed / 0 failed——之前记录的 2 个环境测试失败在本机不成立
+  （本机 PATH 带 Git Bash printf/echo）。
 - **2026-11-16 P0 完成**：TUI 三处分配热点已优化；`cargo test -p argent-cli --bin argent tui::` 45 passed
   （含新增 draw_at 同步测试与长 transcript 帧预算测试），仅 `bang_commands_run_without_the_model`
   因缺 Git Bash 预先失败；`cargo check --workspace` 通过；`cargo test --workspace --no-fail-fast`
