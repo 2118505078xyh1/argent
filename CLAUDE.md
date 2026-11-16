@@ -33,6 +33,9 @@ cargo test --workspace
 cargo test -p argent-agent a_token_budget_stops_before_the_next_tool_batch   # single test
 ```
 
+CI (`.github/workflows/ci.yml`) runs `cargo clippy --workspace -- -D warnings` and
+`cargo test --workspace` on Windows, and builds `docker/Dockerfile` on Linux.
+
 Most tests are inline `#[cfg(test)]` modules in `crates/*/src`. Integration tests live in `crates/*/tests` and auto-skip when their prerequisites are missing:
 
 - MCP live tests need Python 3 (`python`/`python3`/`py`) and use `tests/fixtures/*.py`.

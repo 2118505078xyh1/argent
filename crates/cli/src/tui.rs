@@ -2011,6 +2011,10 @@ impl App {
                 self.metrics.context_used = context_used;
                 if let FinishReason::Error(message) = reason {
                     self.transcript.push_notice(NoticeKind::Error, message);
+                    // 错误不是终点：状态行明确告诉操作者可以直接重发。
+                    self.set_status(
+                        argent_i18n::t(self.locale, "tui.error_hint").to_string(),
+                    );
                 }
             }
             UiEvent::Sessions(rows) => self.sessions = rows,
@@ -3224,6 +3228,21 @@ impl App {
                             lines.push(Line::plain(format!(
                                 "   … {} more lines",
                                 run.output.lines().count() - 16
+                            )));
+                        }
+                    } else if run.state.is_failed() {
+                        // 失败原因不藏在 Ctrl+E 后面：一眼要能看出错在哪。
+                        if let Some(first) = run
+                            .output
+                            .lines()
+                            .find(|line| !line.trim().is_empty())
+                        {
+                            lines.push(Line::new().push(Span::new(
+                                format!(
+                                    "   {}",
+                                    clip_to_width(first, width.saturating_sub(4))
+                                ),
+                                Style::fg(crate::theme::current().error),
                             )));
                         }
                     }
@@ -4647,6 +4666,24 @@ mod cursor_tests {
             Vec::new(),
             crate::keybindings::Bindings::default(),
         )
+    }
+
+    #[test]
+    fn a_failed_tool_shows_the_reason_without_expanding() {
+        let mut app = app();
+        app.transcript.apply(&argent_agent::AgentEvent::ToolRequested(
+            argent_ai::ToolCall::new("c1", "bash", r#"{"command":"nope"}"#),
+        ));
+        app.transcript
+            .apply(&argent_agent::AgentEvent::ToolFinished {
+                call_id: "c1".to_string(),
+                name: "bash".to_string(),
+                content: "command not found: nope\nsecond line".to_string(),
+                is_error: true,
+                duration_ms: 3,
+            });
+        let frame = app.frame(100, 24).join("\n");
+        assert!(frame.contains("command not found: nope"), "{}", frame);
     }
 
     #[test]

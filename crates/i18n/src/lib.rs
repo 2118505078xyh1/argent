@@ -52,6 +52,8 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::Zh, "tui.hint") => {
             "Enter 发送 · Esc 中止 · Ctrl+E 展开 · /help 查看键位与命令"
         }
+        (Locale::En, "tui.error_hint") => "failed — send the prompt again to retry",
+        (Locale::Zh, "tui.error_hint") => "出错 · 重新发送即可重试",
         (Locale::En, "tui.ready") => "ready",
         (Locale::Zh, "tui.ready") => "就绪",
         (Locale::En, "tui.working") => "working",
@@ -344,6 +346,7 @@ mod tests {
             "tui.placeholder",
             "tui.empty",
             "tui.hint",
+            "tui.error_hint",
             "tui.ready",
             "tui.help.title",
             "ui.new_chat",
