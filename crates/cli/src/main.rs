@@ -521,6 +521,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
     if let Some(policy) = settings.string("cacheWarming") {
         agent_config.cache_warming = argent_agent::CacheWarming::parse(policy);
     }
+    let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
     if let Some(turns) = cli
         .max_turns
         .or_else(|| profile.as_ref().and_then(|p| p.max_turns))
@@ -1284,6 +1285,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
                     &hook_config,
                     &cli.cwd,
                     cli.fallback_model.as_deref(),
+                    background,
                 ),
             }
         }
@@ -1305,7 +1307,9 @@ fn run_repl(
     hooks: &HookConfig,
     cwd: &Path,
     fallback_model: Option<&str>,
+    background: Option<crate::mainx::background::BackgroundAssistant>,
 ) -> Result<i32> {
+    let mut first_run = true;
     // Compaction upgrades (background model) land here and are applied at
     // the top of the loop, guarded by the revision they were drafted on.
     let pending_upgrade: Arc<std::sync::Mutex<Option<(u64, String)>>> =
@@ -1395,6 +1399,35 @@ fn run_repl(
         renderer.finish(&reason);
         record_usage(session, agent);
         renderer.usage(agent.usage(), agent.requests());
+        // The first run of the session gets a real title from the background
+        // model. REPL has no worker loop to route through, so the title is
+        // applied inline after the thread finishes — the session is idle
+        // here, and a rename is a header append.
+        if first_run {
+            first_run = false;
+            if let Some(assistant) = &background {
+                let exchange = format!(
+                    "user: {}
+assistant: {}",
+                    prompt,
+                    agent
+                        .history()
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == argent_ai::Role::Assistant)
+                        .map(|m| m.text())
+                        .unwrap_or_default()
+                );
+                // Inline is fine in the REPL: there is no live run to block,
+                // and the operator sees the rename immediately.
+                if let Some(title) = assistant.title_for(&exchange) {
+                    let index = argent_session::SessionIndex::new(
+                        argent_config::Paths::new(&cwd).sessions(),
+                    );
+                    let _ = index.rename(&session.path, &title);
+                }
+            }
+        }
     }
     session_end_hook(hooks, cwd);
     session.close();
