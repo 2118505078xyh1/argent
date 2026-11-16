@@ -1357,6 +1357,38 @@ fn run_repl(
         if prompt.is_empty() {
             continue;
         }
+        if prompt == "/title" {
+            let Some(assistant) = &background else {
+                println!("background intelligence is off (backgroundIntelligence: true)");
+                continue;
+            };
+            let exchange: String = agent
+                .history()
+                .iter()
+                .filter(|m| matches!(m.role, argent_ai::Role::User | argent_ai::Role::Assistant))
+                .map(|m| format!("[{}] {}", m.role.as_str(), m.text()))
+                .take(4)
+                .collect::<Vec<_>>()
+                .join("
+");
+            if exchange.is_empty() {
+                println!("nothing to name yet");
+                continue;
+            }
+            match assistant.title_for(&exchange) {
+                Some(title) => {
+                    let index = argent_session::SessionIndex::new(
+                        argent_config::Paths::new(cwd).sessions(),
+                    );
+                    match index.rename(&session.path, &title) {
+                        Ok(()) => println!("session renamed: {}", title),
+                        Err(e) => println!("rename failed: {}", e),
+                    }
+                }
+                None => println!("the background model returned no title"),
+            }
+            continue;
+        }
         if prompt.starts_with('/') {
             match repl_command(
                 agent,
