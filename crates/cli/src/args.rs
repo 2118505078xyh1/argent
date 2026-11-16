@@ -254,10 +254,10 @@ OPTIONS:
                             (a file path, or inline JSON beginning with '{')
         --bg                Run in the background; prints an id, then `logs <id>`
         --worktree[=NAME]   Run in a fresh git worktree (auto-named if omitted)
-        --sandbox-mode <M>  File-tool policy: read-only | workspace-write |
-                            danger-full-access (default). workspace-write confines
-                            write/edit to cwd and --add-dir roots; bash is not
-                            path-jailed (use --sandbox for the Job Object).
+        --sandbox-mode <M>  File-tool policy: read-only | workspace-write (default) |
+                            danger-full-access. workspace-write confines write/edit
+                            to cwd and --add-dir roots; bash is not path-jailed
+                            (use --sandbox for the Job Object).
         --sessions          List stored sessions
         --models            List available models
         --approval <MODE>   always | sensible | never
@@ -375,10 +375,10 @@ pub const HELP_ZH: &str = r#"argent — Rust 编写的 coding agent
                             （文件路径，或以 '{' 开头的内联 JSON）
         --bg                后台运行；立即打印 id，之后用 `logs <id>` 查看
         --worktree[=NAME]   在新的 git worktree 中运行（省略名字则自动生成）
-        --sandbox-mode <M>  文件工具策略：read-only | workspace-write |
-                            danger-full-access（默认）。workspace-write 把
-                            write/edit 限制在 cwd 与 --add-dir；bash 不做路径
-                            jail（进程沙箱用 --sandbox）。
+        --sandbox-mode <M>  文件工具策略：read-only | workspace-write（默认）|
+                            danger-full-access。workspace-write 把 write/edit
+                            限制在 cwd 与 --add-dir；bash 不做路径 jail
+                            （进程沙箱用 --sandbox）。
         --sessions          列出已有会话
         --models            列出模型目录
         --approval <MODE>   always | sensible | never

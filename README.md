@@ -491,6 +491,9 @@ argent --sessions               列出已有会话
 - 进程沙箱 v1：`--sandbox` 或 `ARGENT_SANDBOX=1` 把工具子进程放进 Windows
   Job Object，带 kill-on-close、64 个子进程上限、单进程 8GB/整组 16GB
   内存上限和 UI 限制；子进程崩溃不会拖垮桌面。
+- 文件写边界默认开：`workspace-write`（默认）把 write/edit 限制在 cwd 与
+  `--add-dir` 声明的目录里；`--sandbox-mode danger-full-access` 恢复无边界。
+  bash 不受此约束——进程级沙箱用 `--sandbox`，强隔离用容器。
 - 提示词缓存：Anthropic 协议显式发送 `cache_control` 断点（system、tools、
   最后一条消息），`ARGENT_PROMPT_CACHE=0` 可关闭；usage 仍统计 cached tokens，
   TUI 状态栏显示 cache 命中率和本次成本。

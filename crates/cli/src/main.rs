@@ -2459,11 +2459,15 @@ fn build_ctx(config: &Config, cwd: &Path) -> ToolCtx {
     ctx.auto_approve_bash = config.auto_approve_bash;
     // workspace-write：write/edit 只能落在 cwd 与 --add-dir 里。read-only 由
     // 工具注册表直接摘掉写工具，这里不必再设根。danger-full-access 保持空。
+    //
+    // 默认收紧到 workspace-write：写工具弹审批只是 UX，bash 不会问，所以
+    // 文件边界必须在工具层兜底。要完全放开的操作者显式传
+    // `--sandbox-mode danger-full-access`（或配 profile）。
     let mode = config
         .extra
         .get("sandboxMode")
         .and_then(Json::as_str)
-        .unwrap_or("danger-full-access");
+        .unwrap_or("workspace-write");
     if mode == "workspace-write" {
         let mut roots = vec![cwd.to_path_buf()];
         if let Some(Json::Arr(dirs)) = config.extra.get("addDirs") {
@@ -2790,8 +2794,16 @@ mod tests {
         let ctx = build_ctx(&config, &cwd);
         assert_eq!(ctx.write_roots, vec![cwd, PathBuf::from("/extra")]);
 
-        // 默认（danger-full-access）不设边界。
+        // 默认收紧到 workspace-write：cwd 就在边界内。
         let ctx = build_ctx(&Config::default(), &PathBuf::from("/work"));
+        assert_eq!(ctx.write_roots, vec![PathBuf::from("/work")]);
+
+        // danger-full-access 仍然保持无边界的旧行为。
+        let mut config = Config::default();
+        config
+            .extra
+            .insert("sandboxMode".to_string(), Json::string("danger-full-access"));
+        let ctx = build_ctx(&config, &PathBuf::from("/work"));
         assert!(ctx.write_roots.is_empty());
     }
 }
