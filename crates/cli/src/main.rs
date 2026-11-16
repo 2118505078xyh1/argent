@@ -1872,7 +1872,15 @@ pub(crate) fn doctor() -> Result<i32> {
         Ok(settings) => {
             let mut catalog = ProviderCatalog::builtin();
             catalog.merge(settings.raw());
+            let mut resolved_ok = false;
+            let mut resolved_context_window = 0usize;
             if let Ok(resolved) = catalog.resolve(settings.provider(), settings.model()) {
+                resolved_ok = true;
+                resolved_context_window = settings
+                    .get("maxContextTokens")
+                    .and_then(|value| value.as_f64())
+                    .map(|n| n as usize)
+                    .unwrap_or(128_000);
                 println!();
                 println!(
                     "provider           : {} ({})",
@@ -1949,6 +1957,51 @@ pub(crate) fn doctor() -> Result<i32> {
             );
             let audit = argent_security::AuditLog::new(settings.paths().storage());
             println!("audit log          : {}", audit.path().display());
+
+            // 傻瓜式体检：配置与实际能力不一致时，一句人话指出修法。
+            let mut warnings: Vec<String> = Vec::new();
+            if resolved_ok {
+                let window = resolved_context_window;
+                let reserved = settings
+                    .get("reservedContextTokens")
+                    .and_then(|value| value.as_f64())
+                    .unwrap_or(16_000.0);
+                if reserved as usize >= window {
+                    warnings.push(format!(
+                        "reservedContextTokens ({}) >= the model window ({}); auto-compaction would
+                         fire on every turn. Lower it or raise maxContextTokens.",
+                        reserved, window
+                    ));
+                }
+            }
+            match argent_tools::ShellFlavor::detect() {
+                argent_tools::ShellFlavor::Posix => {}
+                argent_tools::ShellFlavor::WindowsCmd => {
+                    warnings.push(
+                        "no POSIX shell and no PowerShell found; bash commands fall back to
+                         cmd.exe, which understands neither pipes nor globs reliably.".to_string(),
+                    );
+                }
+                argent_tools::ShellFlavor::PowerShell => {}
+            }
+            let skill_roots = argent_tools::SkillRegistry::default_roots(&cwd);
+            if skill_roots.iter().all(|root| !root.is_dir()) {
+                warnings.push(format!(
+                    "no skills directory yet; create {} (or ./.argent/skills) and drop a
+                         SKILL.md in to teach the model a procedure",
+                    skill_roots
+                        .first()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
+                ));
+            }
+            if !warnings.is_empty() {
+                println!();
+                println!("warnings:");
+                for warning in warnings {
+                    println!("  ! {}", warning);
+                }
+            }
         }
         Err(error) => println!("configuration      : {}", error),
     }

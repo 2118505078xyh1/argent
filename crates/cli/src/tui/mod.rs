@@ -1363,6 +1363,9 @@ struct App {
     queued: usize,
     /// Prompts queued with Alt+Enter; sent one after another when a run ends.
     follow_ups: std::collections::VecDeque<String>,
+    /// The prompt of the run that just failed with an error: pressing Enter
+    /// on an empty input re-sends it, so a retry is one keystroke.
+    failed_prompt: Option<String>,
     status: Option<(String, Instant)>,
     quit: bool,
     tick: u64,
@@ -1414,6 +1417,7 @@ impl App {
             plan: false,
             queued: 0,
             follow_ups: std::collections::VecDeque::new(),
+            failed_prompt: None,
             status: None,
             quit: false,
             tick: 0,
@@ -1487,6 +1491,9 @@ impl App {
                     self.set_status(
                         argent_i18n::t(self.locale, "tui.error_hint").to_string(),
                     );
+                } else {
+                    // 正常结束：重试候选作废，空输入的 Enter 回到原语义。
+                    self.failed_prompt = None;
                 }
             }
             UiEvent::Sessions(rows) => self.sessions = rows,
@@ -2022,10 +2029,21 @@ impl App {
         let text: String = self.input.iter().collect();
         let text = text.trim().to_string();
         if text.is_empty() {
+            // 运行刚失败：空输入的 Enter 把原 prompt 再发一遍。
+            if let Some(prompt) = self.failed_prompt.take() {
+                self.set_status(argent_i18n::t(self.locale, "tui.retry"));
+                self.history.push(prompt.clone());
+                self.working = true;
+                self.queued = self.queued.saturating_add(1);
+                self.scroll = 0;
+                self.dirty = true;
+                let _ = worker.commands.send(Command::Prompt(prompt));
+            }
             return;
         }
         self.history.push(text.clone());
         self.history_pos = None;
+        self.failed_prompt = Some(text.clone());
         self.input.clear();
         self.cursor = 0;
         self.palette_index = 0;
