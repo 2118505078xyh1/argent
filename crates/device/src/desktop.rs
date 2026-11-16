@@ -329,7 +329,7 @@ pub fn encode_bmp(image: &Screenshot) -> Vec<u8> {
     let mut out = Vec::with_capacity(file_size as usize);
     // BITMAPFILEHEADER
     out.extend_from_slice(b"BM");
-    out.extend_from_slice(&(file_size as u32).to_le_bytes());
+    out.extend_from_slice(&file_size.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&54u32.to_le_bytes());

@@ -55,7 +55,7 @@ pub fn write_ico(path: &std::path::Path, size: usize) -> std::io::Result<()> {
     let height = size as u32;
     // BMP rows are bottom-up and padded to four bytes; 32-bit pixels are always
     // aligned, so there is no padding to add.
-    let mask_bytes = ((width as usize + 31) / 32) * 4 * height as usize;
+    let mask_bytes = (width as usize).div_ceil(32) * 4 * height as usize;
     let image_bytes = (width * height * 4) as usize + mask_bytes;
 
     let mut out: Vec<u8> = Vec::with_capacity(22 + image_bytes);
@@ -96,7 +96,7 @@ pub fn write_ico(path: &std::path::Path, size: usize) -> std::io::Result<()> {
         }
     }
     // AND mask: fully opaque, so all zero.
-    out.extend(std::iter::repeat(0u8).take(mask_bytes));
+    out.extend(std::iter::repeat_n(0u8, mask_bytes));
 
     std::fs::write(path, out)
 }

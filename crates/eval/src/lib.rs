@@ -307,7 +307,7 @@ impl Provider for ScriptedProvider {
                     events.push(Ok(StreamEvent::ToolCall(ToolCall::new(
                         &id,
                         &name,
-                        &arguments.dump(),
+                        arguments.dump(),
                     ))));
                 }
             }

@@ -496,7 +496,7 @@ pub fn spawn(
                                 }
                                 let _ = argent_session::sweep_empty_sessions(
                                     &index,
-                                    &[path.clone()],
+                                    std::slice::from_ref(&path),
                                     Duration::from_secs(60),
                                 );
                                 let _ = event_tx.send(UiEvent::SessionOpened {
@@ -1840,12 +1840,14 @@ struct PaletteItem {
     description: String,
 }
 
-/// The cached, laid-out transcript body.
+/// The cached, laid-out transcript body. `Arc` lets every frame share the
+/// laid-out lines without cloning them; a new `Arc` is only built when the
+/// transcript version, width or fold state changes.
 struct BodyCache {
     width: usize,
     expand: bool,
     version: u64,
-    lines: Vec<Line>,
+    lines: Arc<Vec<Line>>,
 }
 
 struct App {
@@ -2912,14 +2914,14 @@ impl App {
             .saturating_sub(palette_height)
             .max(1);
 
-        let mut body = self.transcript_lines(width);
+        let body = self.transcript_lines(width);
         let total = body.len();
         let max_scroll = total.saturating_sub(body_height);
         self.scroll = self.scroll.min(max_scroll);
         let end = total.saturating_sub(self.scroll);
         let start = end.saturating_sub(body_height);
         let mut visible: Vec<Line> = if start < end {
-            body.drain(start..end).collect()
+            body[start..end].to_vec()
         } else {
             Vec::new()
         };
@@ -3063,11 +3065,7 @@ impl App {
 
     fn input_line(&self, width: usize) -> Line {
         let inner = width.saturating_sub(4).max(1);
-        let start = if self.cursor > inner {
-            self.cursor - inner
-        } else {
-            0
-        };
+        let start = self.cursor.saturating_sub(inner);
         let visible: Vec<char> = self.input.iter().skip(start).take(inner).copied().collect();
         let mut line = Line::new().push(Span::new(USER_MARK, Style::bold(crate::theme::current().accent)));
         // 光标交给终端原生光标（位置见 `cursor_screen_position`）：不再画
@@ -3085,11 +3083,7 @@ impl App {
     fn cursor_screen_position(&self, width: usize, height: usize) -> (usize, usize) {
         let row = height.saturating_sub(3).max(1);
         let inner = width.saturating_sub(4).max(1);
-        let start = if self.cursor > inner {
-            self.cursor - inner
-        } else {
-            0
-        };
+        let start = self.cursor.saturating_sub(inner);
         let text: String = self.input[start..self.cursor.min(self.input.len())].iter().collect();
         let col = 1 + text_width(USER_MARK) + text_width(&text);
         (row, col.max(1).min(width))
@@ -3109,20 +3103,20 @@ impl App {
         Line::plain(text).with_style(style)
     }
 
-    fn transcript_lines(&mut self, width: usize) -> Vec<Line> {
+    fn transcript_lines(&mut self, width: usize) -> Arc<Vec<Line>> {
         let version = self.transcript.version();
         let expand = self.expand;
         if let Some(cache) = &self.body_cache {
             if cache.width == width && cache.expand == expand && cache.version == version {
-                return cache.lines.clone();
+                return Arc::clone(&cache.lines);
             }
         }
-        let lines = self.transcript_lines_uncached(width);
+        let lines = Arc::new(self.transcript_lines_uncached(width));
         self.body_cache = Some(BodyCache {
             width,
             expand,
             version,
-            lines: lines.clone(),
+            lines: Arc::clone(&lines),
         });
         lines
     }
@@ -3303,8 +3297,8 @@ impl App {
                 let mut content: Vec<(String, String)> = self
                     .sessions
                     .iter()
-                    .enumerate()
-                    .map(|(_position, row)| {
+                    
+                    .map(|row| {
                         (
                             row.title.clone(),
                             format!(
@@ -3712,12 +3706,14 @@ pub fn run_remote(
     // 状态栏由调用方给的 Ready 事件填好（远端会话没有本地模型信息）。
     let _ = &title;
     let initial_size = terminal::size();
+    let mut last_frame: Vec<String> = Vec::new();
     draw_at(
         &app.frame(initial_size.cols as usize, initial_size.rows as usize),
         Some(app.cursor_screen_position(
             initial_size.cols as usize,
             initial_size.rows as usize,
         )),
+        &mut last_frame,
     );
     // The stand-in worker is the same for every key: its commands go nowhere.
     let worker = remote_worker();
@@ -3764,6 +3760,7 @@ pub fn run_remote(
                     size.cols as usize,
                     size.rows as usize,
                 )),
+                &mut last_frame,
             );
             last_size = size;
         } else {
@@ -3778,6 +3775,7 @@ pub fn run_remote(
                         size.cols as usize,
                         size.rows as usize,
                     )),
+                    &mut last_frame,
                 );
             }
         }
@@ -3835,12 +3833,14 @@ pub fn run(
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
     // 首帧就显示一次键位提示；后续帧由 hint_shown 保证不再重复。
     let initial_size = terminal::size();
+    let mut last_frame: Vec<String> = Vec::new();
     draw_at(
         &app.frame(initial_size.cols as usize, initial_size.rows as usize),
         Some(app.cursor_screen_position(
             initial_size.cols as usize,
             initial_size.rows as usize,
         )),
+        &mut last_frame,
     );
     let mut last_sweep = Instant::now();
     let mut last_size = initial_size;
@@ -3887,6 +3887,7 @@ pub fn run(
                     size.cols as usize,
                     size.rows as usize,
                 )),
+                &mut last_frame,
             );
             last_size = size;
         } else {
@@ -3902,6 +3903,7 @@ pub fn run(
                         size.cols as usize,
                         size.rows as usize,
                     )),
+                    &mut last_frame,
                 );
             }
         }
@@ -3966,20 +3968,32 @@ fn transcript_plain(app: &App) -> Vec<String> {
 ///
 /// The cursor is hidden while the frame paints (so it does not chase the
 /// redraw across the screen) and shown again at the input position.
-fn draw_at(lines: &[String], cursor: Option<(usize, usize)>) {
-    let mut out = String::from("\x1b[?25l\x1b[H");
-    for (index, line) in lines.iter().enumerate() {
-        out.push_str(line);
-        if index + 1 < lines.len() {
+fn draw_at(lines: &[String], cursor: Option<(usize, usize)>, last: &mut Vec<String>) {
+    let mut out = String::new();
+    // 帧间 diff：行数变了（首帧 / resize）才全屏重画；否则只写变化的行。
+    // 每帧重画整屏会让慢终端的 VT 解析跟不上，表现为消息好几百毫秒、
+    // 甚至几秒才出现。
+    if last.len() != lines.len() {
+        out.push_str("\x1b[?25l\x1b[H");
+        for line in lines {
+            out.push_str(line);
             out.push_str("\r\n");
         }
+        out.push_str("\x1b[J");
+    } else {
+        for (index, line) in lines.iter().enumerate() {
+            if last[index] != *line {
+                out.push_str(&format!("\x1b[{};1H", index + 1));
+                out.push_str(line);
+            }
+        }
     }
-    out.push_str("\x1b[J");
     if let Some((row, col)) = cursor {
         out.push_str(&format!("\x1b[{};{}H", row, col));
     }
     out.push_str("\x1b[?25h");
     terminal::write_raw(&out);
+    *last = lines.to_vec();
 }
 
 #[cfg(test)]

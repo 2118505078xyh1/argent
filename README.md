@@ -387,7 +387,7 @@ function call）。
 ```
 argent [prompt]                 一次性运行（--locale en-US|zh-CN|auto）
 argent tui                      全屏终端 UI
-argent --gui                    打开 Tauri 窗口
+argent --gui                    打开桌面窗口（需要 argent-native.exe）
 argent --rpc                    stdin/stdout 上的换行分隔 JSON
 argent acp                      Agent Client Protocol 服务端
 argent app-server               ZCode 兼容别名，等价 --rpc

@@ -583,7 +583,7 @@ pub fn summarize(messages: &[Message]) -> String {
                         (call.name.clone(), call.arguments.clone()),
                     );
                     if let Some((path, diff)) = edit_change(&call.name, &call.arguments) {
-                        let entry = changed.entry(path).or_insert_with(EditInfo::default);
+                        let entry = changed.entry(path).or_default();
                         entry.count += 1;
                         if entry.diff.is_none() {
                             entry.diff = diff;

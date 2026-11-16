@@ -206,7 +206,7 @@ fn session_exe(storage: &Path, id: &str) -> Result<PathBuf> {
                 e
             ))
         })?;
-        return Ok(copy);
+        Ok(copy)
     }
     #[cfg(not(windows))]
     {

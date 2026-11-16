@@ -241,14 +241,11 @@ impl CheckpointStore {
             }
         }
         if errors.is_empty() {
-            let marker = format!(
-                "{}",
-                Json::from_pairs(vec![
+            let marker = Json::from_pairs(vec![
                     ("kind", Json::string("rewind")),
                     ("through", Json::num(target as f64)),
                 ])
-                .dump()
-            );
+                .dump().to_string();
             let _ = append_line(&manifest, &marker);
         }
         (restored, errors)

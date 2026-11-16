@@ -6,6 +6,7 @@
 //! knows about pixels, terminals or threads.
 
 use argent_agent::AgentEvent;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// How a tool call ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,9 +153,15 @@ pub struct Transcript {
 
 impl Transcript {
     pub fn new() -> Transcript {
+        // Version keys the TUI's layout cache. It must never restart from a
+        // small number: a rebuilt transcript (session load) with the same
+        // entry count as an earlier frame would collide with the cached
+        // version and render stale content. Each new transcript starts a
+        // million apart, far beyond any realistic entry count.
+        static SEQ: AtomicU64 = AtomicU64::new(1);
         Transcript {
             entries: Vec::new(),
-            version: 0,
+            version: SEQ.fetch_add(1_000_000, Ordering::Relaxed),
         }
     }
 
@@ -385,6 +392,21 @@ impl Transcript {
 mod tests {
     use super::*;
     use argent_ai::ToolCall;
+
+    #[test]
+    fn rebuilt_transcripts_never_reuse_a_version() {
+        // The TUI keys its layout cache on the version. A session reload
+        // rebuilds the transcript; if the new one started at 0 again, its
+        // version could match an earlier frame and stale content would
+        // stick on screen.
+        let first = Transcript::new();
+        let second = Transcript::new();
+        assert_ne!(first.version(), second.version());
+        let mut third = Transcript::new();
+        third.push_user("hi");
+        third.clear();
+        assert!(third.version() > second.version());
+    }
 
     fn tool_event(id: &str, name: &str) -> AgentEvent {
         AgentEvent::ToolRequested(ToolCall::new(id, name, r#"{"path":"a"}"#))

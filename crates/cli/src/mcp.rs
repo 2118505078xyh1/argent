@@ -102,8 +102,8 @@ fn list(cwd: &Path) -> Result<i32> {
     }
 
     println!(
-        "{:<20} {:<8} {:<14} {:>5}  {}",
-        "name", "transport", "auth", "tools", "status"
+        "{:<20} {:<8} {:<14} {:>5}  status",
+        "name", "transport", "auth", "tools"
     );
     let mut failed = false;
     for status in config.probe() {

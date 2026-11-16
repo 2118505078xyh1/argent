@@ -133,8 +133,8 @@ fn list(settings: &Settings, json: bool) -> Result<i32> {
         return Ok(0);
     }
     println!(
-        "{:<32} {:>10} {:<8} {:<10} {}",
-        "id", "context", "tools", "reasoning", "vision"
+        "{:<32} {:>10} {:<8} {:<10} vision",
+        "id", "context", "tools", "reasoning"
     );
     for model in catalog.list() {
         println!(

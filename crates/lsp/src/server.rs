@@ -670,7 +670,7 @@ fn collect_symbols(value: &Json) -> Vec<Symbol> {
         // carries a `location`.
         let location = item
             .get("selectionRange")
-            .map(|r| crate::protocol::describe_range(r))
+            .map(crate::protocol::describe_range)
             .or_else(|| {
                 item.get("location").map(|loc| {
                     let uri = loc.str_or("uri", "");

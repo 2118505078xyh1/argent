@@ -389,7 +389,7 @@ fn rust_symbol(line: &str) -> Option<(String, String)> {
             return None;
         }
         let target = rest
-            .split(|ch| ch == '{' || ch == '(')
+            .split(['{', '('])
             .next()
             .unwrap_or(rest)
             .trim();

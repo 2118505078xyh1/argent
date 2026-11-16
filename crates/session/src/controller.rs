@@ -68,7 +68,7 @@ pub fn model_context_window(agent: &Agent, configured: usize) -> usize {
             models
                 .into_iter()
                 .find(|model| model.id == agent.model())
-                .map(|model| model.context_length.max(0) as usize)
+                .map(|model| model.context_length)
         });
     context_window(configured, model_window)
 }

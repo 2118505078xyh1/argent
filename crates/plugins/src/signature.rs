@@ -22,20 +22,17 @@ use crate::manifest::find_manifest;
 
 /// 签名校验级别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum SignatureMode {
     /// 缺少或签名无效时拒绝安装。
     Required,
     /// 缺少或签名无效时只提示。
     Warn,
     /// 跳过校验。
+    #[default]
     Off,
 }
 
-impl Default for SignatureMode {
-    fn default() -> SignatureMode {
-        SignatureMode::Off
-    }
-}
 
 impl SignatureMode {
     pub fn parse(value: &str) -> SignatureMode {

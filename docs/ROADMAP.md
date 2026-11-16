@@ -12,7 +12,7 @@ agent 已经可用；剩余工作主要是表面层和较大的插件能力。
 - MCP 客户端（stdio/HTTP/SSE）、插件清单、skills、commands、hooks
 - CLI：一次性、行式 REPL、RPC、login/logout、plugins、skills、commands、
   hooks trust、doctor
-- Tauri 桌面聊天窗口：无边框标题栏、侧栏项目/任务分组、消息操作栏、
+- iced 原生桌面窗口（`argent-native`）：侧栏会话/任务分组、消息操作栏、
   圆角输入框和橙色权限徽标
 
 ## M1 — 对等表面

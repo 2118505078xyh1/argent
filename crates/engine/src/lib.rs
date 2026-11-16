@@ -424,8 +424,7 @@ pub fn start_session(
 /// model, credential and profile that go with it.
 ///
 /// Every frontend starts the same way; sharing this means a profile or a
-/// settings file behaves identically in the Tauri window, the native window
-/// and the terminal.
+/// settings file behaves identically in the native window and the terminal.
 pub fn prepare_config(cwd: &Path) -> Result<Config, String> {
     prepare_config_with_profile(cwd, None)
 }
@@ -1149,7 +1148,7 @@ pub fn catalog(config: &Config) -> (usize, Vec<(String, usize)>) {
     let entries: Vec<(String, usize)> = match provider.models() {
         Ok(models) => models
             .into_iter()
-            .map(|info| (info.id, info.context_length.max(0) as usize))
+            .map(|info| (info.id, info.context_length))
             .collect(),
         Err(_) => Vec::new(),
     };

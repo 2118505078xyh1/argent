@@ -344,10 +344,7 @@ mod platform {
 
     impl Session {
         pub fn exited(&self) -> bool {
-            match self.exit_code() {
-                Some(_) => true,
-                None => false,
-            }
+            self.exit_code().is_some()
         }
 
         pub fn exit_code(&self) -> Option<i32> {

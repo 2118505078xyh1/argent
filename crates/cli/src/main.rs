@@ -1309,7 +1309,7 @@ fn run_repl(
         let history = agent.history().to_vec();
         session.record_new(&history, before)?;
         renderer.finish(&reason);
-        record_usage(&session, &agent);
+        record_usage(session, agent);
         renderer.usage(agent.usage(), agent.requests());
     }
     session_end_hook(hooks, cwd);
@@ -1875,10 +1875,10 @@ pub(crate) fn cost_report(agent: &Agent, max_context: usize) -> String {
     };
     let mut out = format!(
         "usage    prompt {} · completion {} · cached {} · total {}",
-        format_count(usage.prompt_tokens as u64),
-        format_count(usage.completion_tokens as u64),
-        format_count(usage.cached_tokens as u64),
-        format_count(usage.total_tokens as u64),
+        format_count(usage.prompt_tokens),
+        format_count(usage.completion_tokens),
+        format_count(usage.cached_tokens),
+        format_count(usage.total_tokens),
     );
     let cost = match agent.usage_cost() {
         Some(cost) => format!("${:.4}", cost),

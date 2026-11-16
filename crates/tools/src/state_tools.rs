@@ -267,7 +267,7 @@ impl AskChannel for TerminalAnswerChannel {
                 } else {
                     format!(" - {}", option.description)
                 };
-                let _ = write!(stdout, "  {}) {}{}\n", index + 1, option.label, suffix);
+                let _ = writeln!(stdout, "  {}) {}{}", index + 1, option.label, suffix);
             }
             let prompt = if question.multi_select {
                 "  (comma-separated numbers, or text) > "

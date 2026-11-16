@@ -536,7 +536,7 @@ impl StreamingChild {
             None if detail.is_empty() => "child was terminated by a signal".to_string(),
             None => format!("child was terminated: {}", detail),
         };
-        Err(std::io::Error::new(std::io::ErrorKind::Other, message))
+        Err(std::io::Error::other(message))
     }
 }
 

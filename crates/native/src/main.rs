@@ -1,8 +1,8 @@
 //! Native argent frontend: iced owns the window, `argent-engine` owns the agent.
 //!
-//! There is no WebView and no JavaScript. The same worker that backs the Tauri
-//! window is polled from the iced event loop, and `argent-ui-core` decides what a
-//! run means before this crate draws it.
+//! There is no WebView and no JavaScript. The engine worker is polled from the
+//! iced event loop, and `argent-ui-core` decides what a run means before this
+//! crate draws it.
 
 // A window, not a console: opening the app from a shortcut should not show a
 // black box next to it.

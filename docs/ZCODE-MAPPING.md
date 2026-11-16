@@ -82,6 +82,6 @@ config 里替换。
 
 - 产品 / 窗口 / README：**argent**
 - CLI 二进制：**argent**
-- 桌面二进制：**argent-gui**
+- 桌面二进制：**argent-native**
 - 配置与数据根：`~/.argent`
 - 项目目录：`.argent`

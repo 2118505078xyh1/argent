@@ -305,7 +305,7 @@ pub fn glob_matches(pattern: &str, path: &str) -> bool {
     };
     let pattern = pattern.trim_start_matches('/');
     let path = path.trim_start_matches('/');
-    if glob_here(&pattern, &path) {
+    if glob_here(pattern, path) {
         return true;
     }
     // Match the pattern against every suffix of the path, so `*.env` matches
@@ -313,7 +313,7 @@ pub fn glob_matches(pattern: &str, path: &str) -> bool {
     let segments: Vec<&str> = path.split('/').collect();
     for start in 0..segments.len() {
         let tail = segments[start..].join("/");
-        if glob_here(&pattern, &tail) {
+        if glob_here(pattern, &tail) {
             return true;
         }
     }

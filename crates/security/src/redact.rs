@@ -30,7 +30,7 @@ fn redact_line(line: &str) -> String {
         match find_secret(rest) {
             Some((start, end, kind)) => {
                 out.push_str(&rest[..start]);
-                out.push_str(&placeholder(kind));
+                out.push_str(placeholder(kind));
                 rest = &rest[end..];
             }
             None => {

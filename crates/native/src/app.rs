@@ -1,9 +1,10 @@
 //! The native window's state.
 //!
 //! The UI thread owns pixels; the agent owns a worker thread. The only link
-//! between them is the same [`argent_engine`] channel pair the Tauri window uses:
-//! commands go in, events and approval requests come out. A short timer drains
-//! those channels, so streaming text appears without blocking the renderer.
+//! between them is the same [`argent_engine`] channel pair every GUI frontend
+//! uses: commands go in, events and approval requests come out. A short timer
+//! drains those channels, so streaming text appears without blocking the
+//! renderer.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;

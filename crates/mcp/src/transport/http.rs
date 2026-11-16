@@ -168,8 +168,8 @@ impl HttpTransport {
         }
 
         if let Some(expect) = expect_id {
-            if response_id(&value) != Some(expect) {
-                if is_response(&value) {
+            if response_id(&value) != Some(expect)
+                && is_response(&value) {
                     return Err(Error::provider(format!(
                         "'{}' answered request {} instead of {}",
                         self.name,
@@ -177,7 +177,6 @@ impl HttpTransport {
                         expect
                     )));
                 }
-            }
         }
         unwrap_result(&value)
     }

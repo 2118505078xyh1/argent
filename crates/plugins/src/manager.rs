@@ -13,6 +13,7 @@ use crate::signature::{verify, SignatureMode, SignaturePolicy, SignatureStatus};
 /// 安装插件时使用的策略参数。
 ///
 /// `notify` 用来把提示信息交给调用方输出，`argent-plugins` 自己不打印。
+#[derive(Default)]
 pub struct InstallPolicy<'a> {
     pub signature: SignaturePolicy,
     pub notify: Option<&'a mut dyn FnMut(&str)>,
@@ -45,14 +46,6 @@ impl<'a> InstallPolicy<'a> {
     }
 }
 
-impl<'a> Default for InstallPolicy<'a> {
-    fn default() -> InstallPolicy<'a> {
-        InstallPolicy {
-            signature: SignaturePolicy::default(),
-            notify: None,
-        }
-    }
-}
 
 /// How deep below a root the scanner looks for plugin directories.
 const MAX_DEPTH: usize = 3;
@@ -316,7 +309,7 @@ impl PluginManager {
             Json::Arr(
                 enabled_names
                     .into_iter()
-                    .map(|name| Json::string(name))
+                    .map(Json::string)
                     .collect(),
             ),
         );
@@ -325,7 +318,7 @@ impl PluginManager {
             Json::Arr(
                 disabled_names
                     .into_iter()
-                    .map(|name| Json::string(name))
+                    .map(Json::string)
                     .collect(),
             ),
         );

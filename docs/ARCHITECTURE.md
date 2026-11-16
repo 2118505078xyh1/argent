@@ -15,7 +15,7 @@ core            无依赖
 │   ├── agent   循环、事件、子代理、角色
 │   │   ├── session   JSONL 树 + compaction
 │   │   ├── ui-core   前端无关的 transcript
-│   │   └── desktop   Tauri 宿主
+│   │   └── native   iced 原生窗口
 │   ├── mcp     stdio / HTTP / SSE MCP 客户端（含 OAuth）
 │   ├── plugins ZCode 兼容清单（config、mcp、hooks、update）
 │   ├── commands markdown 斜杠命令
@@ -46,7 +46,7 @@ argent "..." / tui 行输入
       → 工具结果进 history
       → 下一轮，或结束
   → SessionStore 把新消息记成 JSONL
-  → Renderer（终端）或 bridge（Tauri）消费同一事件流
+  → Renderer（终端）或 iced 窗口（native）消费同一事件流
 ```
 
 agent 与 provider 无关。Anthropic 特有的转换全部在
@@ -141,24 +141,24 @@ Hook 进程默认用 bash（Windows 上是 Git Bash），找不到可用的 bash
 
 ## 桌面
 
-`crates/desktop` 是 Tauri v2 宿主。窗口是纯 HTML/CSS/JS，没有构建步骤，
-没有 `node_modules`。窗口使用 `decorations: false`，标题栏、最小化/最大化/
-关闭按钮都由页面画，拖拽区交给 Tauri 的 `data-tauri-drag-region` 处理。
-Rust 拥有 agent，通过一个 channel 发送扁平 JSON 事件；页面只负责像素，对
-工具策略没有决定权。
+`crates/native` 是 iced 原生窗口宿主：没有 WebView，没有 JavaScript，也没有
+前端构建步骤。Rust 拥有 agent，通过 `argent-engine` 的同一对 channel 通信——
+命令进去，事件和审批请求出来；一个短周期 timer 排空 channel，流式文本不阻塞
+渲染。UI 只负责像素，对工具策略没有决定权。
 
-侧栏按工作区把会话分成“项目”，任务列表可搜索、可按当前项目过滤；顶部
-“…”菜单提供重命名、运行信息、工作区路径和删除。输入框是圆角面板：
-附件、权限徽标、模型、思考强度、语音和发送按钮都在同一行，发送中则把
-发送按钮换成停止。transcript 的助手消息带复制/赞/踩/时间操作栏，思考行
-显示持续秒数，工具行显示耗时和输出行数。
+侧栏提供会话列表和“任务/自动化/文档”三个页面的导航，会话行显示标题、
+工作区和更新时间；顶部有新建任务按钮，输入中的任务在首条 prompt 前一直
+是占位状态。输入框是圆角面板：模型、思考强度和发送按钮在同一行，发送中
+则把发送按钮换成停止。transcript 的助手消息带复制/赞/踩/时间操作栏，
+工具行显示耗时和输出行数。
 
-每个会话一个 worker：从侧栏切换会话时，后台 session 继续运行；事件带
-session 字段，页面只把当前会话的内容画进 transcript。审批弹窗标明来源
-会话。插件面板通过 asset protocol 加载插件自带的 `panel.html`。
+每个会话一个 worker（`argent_engine::start_session`）：切到不同工作区的
+任务会 shutdown 旧 worker 再起一个，同工作区的会话通过 `Command::OpenSession`
+在同一 worker 上重载历史；事件带 session 字段，窗口只把当前会话的内容画进
+transcript。审批卡片标明来源会话。文档页面用 `argent_tools::office` 提取
+文本预览本地的 office 文件。
 
-内存：CLI 路径不启动 WebView。窗口路径使用系统 WebView2 运行时，与系统
-共享，而不是自带一份 Chromium。
+内存：CLI 路径不创建任何窗口。窗口路径是 iced 原生渲染，不启动 WebView。
 
 ## 权限、审计与预算
 
@@ -239,7 +239,7 @@ MCP 服务器可以直接连接。
 `~/.argent/automation-runs/<id>/<epoch>.log`，再把状态和日志路径记回
 `~/.argent/automations.json`。子进程用 `ARGENT_APPROVAL=never`，但策略门禁和
 审计仍然在子进程里生效。`argent automation daemon --once` 适合系统计划任务，
-不带 `--once` 时是前台循环；桌面端通过 Tauri 命令列出、运行和启停任务。
+不带 `--once` 时是前台循环；native 窗口的自动化页面列出、运行和启停任务。
 
 ## 构建缓存
 

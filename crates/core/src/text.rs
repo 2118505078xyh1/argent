@@ -11,7 +11,7 @@ pub fn fuzzy_match(needle: &str, haystack: &str) -> Option<i64> {
     let mut last_match: Option<usize> = None;
     for (idx, needle_char) in needle_lower.chars().enumerate() {
         let mut found = false;
-        while let Some(hay_char) = hay_chars.next() {
+        for hay_char in hay_chars.by_ref() {
             if hay_char == needle_char {
                 found = true;
                 last_match = Some(idx);
