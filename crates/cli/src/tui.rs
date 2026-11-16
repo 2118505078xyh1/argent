@@ -3254,7 +3254,7 @@ impl App {
                 argent_i18n::t(self.locale, "tui.help.title").to_string(),
                 vec![
                     ("Enter", argent_i18n::t(self.locale, "tui.help.enter")),
-                    ("Esc", argent_i18n::t(self.locale, "tui.help.ctrl_c")),
+                    ("Esc", argent_i18n::t(self.locale, "tui.help.esc")),
                     ("Ctrl+D", argent_i18n::t(self.locale, "tui.help.ctrl_d")),
                     (
                         "↑ ↓",
