@@ -476,6 +476,26 @@ argent --sessions               列出已有会话
   `PostToolUse`、`PostToolUseFailure`、`Stop`），带 SHA-256 信任库；
   `UserPromptSubmit` 和 `PermissionRequest` 可以阻断。hook 命令可设
   `"async": true` 在后台执行、不阻塞工具调用，输出完成后以 Notice 报告。
+- 后台小模型助手（opt-in）：`backgroundIntelligence: true` 后，会话标题、
+  压缩摘要、分支切换摘要由 `backgroundModel` 生成（默认主模型），失败自动
+  回退启发式，任何后台调用失败都不影响运行
+- 压缩协程化：超过阈值后的第一次运行结束，模型摘要升级在同一线程的协程里
+  与后续对话交错推进，永不阻塞主线（写回带 revision 守卫）
+- 子代理单线程模型：一个对话一个执行线程，delegate 批次最多 8 个子代理，
+  以 corosensei 协程在同一线程交错推进（模型流读取互相让出）
+- bash 也进检查点：执行前扫描命令里的删除/移动/覆盖目标并快照，
+  `/rewind` 对 bash 造成的改动同样有效
+- 会话回放 → eval 闭环：`argent replay <session> --to-eval <name>` 把真实
+  会话转成 eval 场景（工具调用序列、初始文件、期望断言自动还原）
+- `argent bug` / REPL `/bug`：本地脱敏报告（版本/平台/provider/配置），
+  不联网，手动附到 issue
+- 宽松预算：工具结果 15k/轮 60k tokens（超出溢出到磁盘可取回）、read
+  10k 行/3MB、输出 32k、超时 300s、100 轮、策略拒绝重试 3 次
+- KV 缓存命中修复：assistant 的 reasoning 原样随历史重发
+  （`reasoning_content`），本地端点（llama.cpp/DeepSeek）的续轮前缀命中
+  从 96 新 token 降到 ~15
+- `--continue` 在 Windows 上修复：会话头 cwd 规范化后存储，
+  此前每次 `-c` 都静默新建会话
 - JSONL 会话树：resume、compaction、fork/rename、会话标签。
 - 会话命名与清理：新任务先叫“新任务”，第一条消息发出前即时改名为第一句；
   空占位会话超过 60 秒自动删除（TUI/CLI/图形端共用规则）。
