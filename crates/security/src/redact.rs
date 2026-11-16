@@ -11,15 +11,7 @@
 
 /// Replace anything that looks like a secret with a placeholder.
 pub fn redact_text(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for (index, line) in text.split_inclusive('\n').enumerate() {
-        if index > 0 {
-            out.push_str(&redact_line(line));
-        } else {
-            out.push_str(&redact_line(line));
-        }
-    }
-    out
+    text.split_inclusive('\n').map(redact_line).collect()
 }
 
 /// Redact one line, keeping the key so the log still says what was set.

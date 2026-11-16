@@ -298,9 +298,7 @@ impl Message {
         let all_text = self.content.iter().all(|c| matches!(c, Content::Text(_)));
         if self.content.is_empty() {
             entries.push(("content".to_string(), Json::string("")));
-        } else if self.role == Role::Tool {
-            entries.push(("content".to_string(), Json::string(self.text())));
-        } else if all_text {
+        } else if self.role == Role::Tool || all_text {
             entries.push(("content".to_string(), Json::string(self.text())));
         } else {
             entries.push((

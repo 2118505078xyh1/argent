@@ -1022,9 +1022,7 @@ pub fn sanitize(text: &str) -> String {
     for ch in text.chars() {
         if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
             out.push(ch.to_ascii_lowercase());
-        } else if ch == '/' || ch == '\\' || ch == ':' {
-            out.push('-');
-        } else if ch.is_whitespace() {
+        } else if ch == '/' || ch == '\\' || ch == ':' || ch.is_whitespace() {
             out.push('-');
         }
     }

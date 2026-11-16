@@ -76,7 +76,7 @@ impl ChildFactory {
             batch.tasks.iter().cloned().enumerate().collect(),
         ));
         let done = Arc::new(AtomicBool::new(false));
-        let (signal, wait) = (Arc::new(Condvar::new()), ());
+        let signal = Arc::new(Condvar::new());
 
         let workers = batch.max_concurrency.clamp(1, count.max(1));
         let mut handles = Vec::with_capacity(workers);

@@ -49,6 +49,9 @@ impl McpToolAdapter {
 }
 
 impl Tool for McpToolAdapter {
+    // 模型看到的是限定名 `mcp__<server>__<tool>`；未限定的 `name` 字段留给
+    // call_tool 按服务器侧名字调用。名字是有意错开的。
+    #[allow(clippy::misnamed_getters)]
     fn name(&self) -> &str {
         &self.qualified
     }
