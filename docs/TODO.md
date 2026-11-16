@@ -85,7 +85,7 @@
 - [ ] **P1.4** 外部编辑器：`Ctrl+E` / `externalEditor` 设置，调用 `$VISUAL`/`$EDITOR` 编辑多行 prompt。
       ⚠️ 暂缓：当前 TUI 的输入线程独立运行、且无 raw-mode suspend/resume 封装，阻塞式调用外部编辑器
       会与输入线程争抢终端；正确实现需要先给 terminal 层加 suspend/resume + 输入线程暂停，风险高于收益。
-- [ ] **P1.5** `/bug` 报告命令：收集版本/平台/provider/配置脱敏摘要，写入本地文件（不联网）。
+- [x] **P1.5** `/bug` 报告命令：收集版本/平台/provider/配置脱敏摘要，写入本地文件（不联网）。
 
 ### P2 — 可靠性工程与打磨
 - [x] **P2.1** 会话回放 → eval 流水线：`argent replay <session> --to-eval <name>` 一条命令
