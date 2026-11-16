@@ -206,8 +206,7 @@ impl Transcript {
 
     /// Fold one agent event into the list.
     pub fn apply(&mut self, event: &AgentEvent) {
-        match event {
-            AgentEvent::TurnStart { .. } => {}
+        match event {            AgentEvent::TurnStart { .. } => {}
             AgentEvent::AssistantText(chunk) => self.append_text(chunk, false),
             AgentEvent::Thinking(chunk) => self.append_text(chunk, true),
             AgentEvent::ToolRequested(call) => {
@@ -288,6 +287,10 @@ impl Transcript {
                     .push(Entry::Notice(NoticeKind::Warning, "aborted".to_string()));
             }
         }
+        // 流式 delta 是原地追加的（append_text 复用最后一条），但 UI 的排版
+        // 缓存以 version 为键：不在这里 bump，回复要等到下一次结构性变化
+        // 才会画出来，表现为整段文字延迟一次性出现。
+        self.version += 1;
     }
 
     fn append_text(&mut self, chunk: &str, thinking: bool) {

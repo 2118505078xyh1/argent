@@ -350,7 +350,16 @@ pub fn spawn(
                             });
                         }
                         Err(error) => {
-                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                            // 必须发 TurnDone：只发 Error 的话 UI 的 working
+                            // 永远为 true，下一条 prompt 会进 steering 队列而
+                            // 不是新回合，表现为「发第二条消息没有回复」。
+                            let _ = event_tx.send(UiEvent::TurnDone {
+                                reason: FinishReason::Error(error.to_string()),
+                                usage: agent.usage(),
+                                requests: agent.requests(),
+                                context_used: argent_agent::estimate_tokens(agent.history()),
+                                cost: None,
+                            });
                         }
                     }
                 }
@@ -1887,8 +1896,6 @@ struct App {
     /// Plan mode: ask the model for a plan before it edits anything.
     plan: bool,
     queued: usize,
-    /// 开场键位提示只显示一次；之后状态行留空或显示临时状态。
-    hint_shown: bool,
     status: Option<(String, Instant)>,
     quit: bool,
     tick: u64,
@@ -1938,7 +1945,6 @@ impl App {
             working: false,
             plan: false,
             queued: 0,
-            hint_shown: false,
             status: None,
             quit: false,
             tick: 0,
@@ -3008,13 +3014,9 @@ impl App {
     }
 
     fn status_line(&mut self, width: usize) -> Line {
+        // 状态行只显示临时状态；开场键位提示不再占据这一行。
         let hint = match &self.status {
             Some((text, at)) if at.elapsed() < Duration::from_secs(6) => text.clone(),
-            _ if !self.hint_shown => {
-                self.hint_shown = true;
-                argent_i18n::t(self.locale, "tui.hint").to_string()
-            }
-            // 开场提示只显示一次；临时状态过期后这一行留空。
             _ => String::new(),
         };
         let right = if let Some(ready) = &self.ready {
@@ -3831,7 +3833,6 @@ pub fn run(
     let (key_tx, key_rx) = mpsc::channel();
     spawn_input(key_tx);
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
-    // 首帧就显示一次键位提示；后续帧由 hint_shown 保证不再重复。
     let initial_size = terminal::size();
     let mut last_frame: Vec<String> = Vec::new();
     draw_at(
@@ -3974,10 +3975,12 @@ fn draw_at(lines: &[String], cursor: Option<(usize, usize)>, last: &mut Vec<Stri
     // 每帧重画整屏会让慢终端的 VT 解析跟不上，表现为消息好几百毫秒、
     // 甚至几秒才出现。
     if last.len() != lines.len() {
+        // 逐行绝对定位，而不是在行尾写 `\r\n`：最后一行带换行会让终端
+        // 滚一行，整帧上移、第一行被吃掉，输入框上下两条线也会错位。
         out.push_str("\x1b[?25l\x1b[H");
-        for line in lines {
+        for (index, line) in lines.iter().enumerate() {
+            out.push_str(&format!("\x1b[{};1H", index + 1));
             out.push_str(line);
-            out.push_str("\r\n");
         }
         out.push_str("\x1b[J");
     } else {
@@ -4071,7 +4074,7 @@ mod tests {
     }
 
     #[test]
-    fn the_opening_hint_is_not_repeated() {
+    fn the_status_line_never_shows_the_opening_hint() {
         let mut app = App::new(
             Vec::new(),
             crate::prompts::PromptLibrary::new(),
@@ -4086,7 +4089,7 @@ mod tests {
                 .collect()
         };
         let first = text(app.status_line(100));
-        assert!(first.contains("Enter 发送"), "{}", first);
+        assert!(!first.contains("Enter 发送"), "{}", first);
         let second = text(app.status_line(100));
         assert!(!second.contains("Enter 发送"), "{}", second);
     }
@@ -4289,7 +4292,7 @@ mod tests {
     }
 
     #[test]
-    fn the_opening_hint_only_appears_in_the_first_frame() {
+    fn the_opening_hint_never_appears_in_a_frame() {
         let mut app = App::new(
             Vec::new(),
             crate::prompts::PromptLibrary::new(),
@@ -4297,11 +4300,9 @@ mod tests {
             Vec::new(),
             crate::keybindings::Bindings::default(),
         );
-        let first = app.frame(100, 24).join("
-");
-        assert!(first.contains("Enter 发送"), "{}", first);
-        let second = app.frame(100, 24).join("
-");
+        let first = app.frame(100, 24).join("\n");
+        assert!(!first.contains("Enter 发送"), "{}", first);
+        let second = app.frame(100, 24).join("\n");
         assert!(!second.contains("Enter 发送"), "{}", second);
     }
 
@@ -4315,11 +4316,8 @@ mod tests {
             crate::keybindings::Bindings::default(),
         );
         let lines = app.frame(80, 24);
-        let joined = lines.join(
-            "
-",
-        );
-        assert!(joined.contains("Enter 发送"), "{}", joined);
+        let joined = lines.join("\n");
+        assert!(!joined.contains("Enter 发送"), "{}", joined);
         // 空会话不再渲染引导文字，也不能再重复键位提示。
         assert!(!joined.contains("问点什么"), "{}", joined);
         let second = app.frame(80, 24).join("\n");
@@ -4662,6 +4660,27 @@ mod cursor_tests {
         app.transcript.push_user("hello there");
         let after = app.frame(80, 24).join("\n");
         assert!(after.contains("hello there"), "{}", after);
+    }
+
+    #[test]
+    fn streamed_text_reaches_the_frame_as_it_arrives() {
+        // apply() appends into the last entry in place. If that did not bump
+        // the version, the body cache would keep serving the pre-stream
+        // layout and the whole answer would appear at once (or never).
+        let mut app = app();
+        app.transcript.push_user("hi");
+        let before = app.frame(80, 24).join("\n");
+        assert!(!before.contains("streamed answer"));
+        app.transcript
+            .apply(&argent_agent::AgentEvent::AssistantText(
+                "streamed answer".to_string(),
+            ));
+        let after = app.frame(80, 24).join("\n");
+        assert!(after.contains("streamed answer"), "{}", after);
+        app.transcript
+            .apply(&argent_agent::AgentEvent::AssistantText("!".to_string()));
+        let tail = app.frame(80, 24).join("\n");
+        assert!(tail.contains("streamed answer!"), "{}", tail);
     }
 
     #[test]
