@@ -28,9 +28,9 @@ CLI/TUI 路径完全不启动浏览器引擎；原生 iced 前端（`argent-nati
 | `argent tui`（全屏） | 4.0 MB | 8.6 MB |
 | `argent-native`（iced + tiny-skia） | 6.4 MB | 约 32 MB |
 
-## argent 独有的六个能力
+## argent 独有的七个能力
 
-这六个能力是 argent 区别于 mpi / minzcode 的地方：
+这七个能力是 argent 区别于 mpi / minzcode 的地方：
 
 ### 1. 命名 profiles
 
@@ -130,7 +130,22 @@ argent --serve --serve-port 7777 --serve-token mytoken
 `ARGENT_SERVE_TOKEN` 启用 Bearer 认证。9 个集成测试用真实 HTTP 连接验证了
 认证、SSE、历史与未知端点。
 
-### 6. 自动化任务
+### 6. 纯 Rust 进程内插件
+
+插件清单可以声明一个 `.rhai` 脚本，在 argent 进程内注册**自定义工具**与斜杠命令——对标 Pi 的 TypeScript extension，但完全纯 Rust：没有 WebView、Node、WASM 运行时或 C 依赖。脚本运行在 Rhai 沙箱中，无文件系统与网络访问，操作数上限防止死循环。
+
+```json
+{
+  "name": "hello",
+  "script": { "module": "plugin.rhai", "operations": 10000000 }
+}
+```
+
+脚本定义 `arg_init`（返回工具/命令声明）和 `arg_call`（执行工具）。宿主提供 `argent_log`、`argent_call_tool`、`argent_var`、`argent_now`；`argent_call_tool` 走同一套 ToolRegistry，权限、审批与审计不会绕过。CLI 与桌面 GUI 启动时加载插件，工具在模型看到前注册完成。`code` 工具也新增 `language: "rhai"` 内置沙箱，不再需要外部 node/python；脚本可用 `store(key, value)` / `load(key)` 在多次调用间保留小状态（失败的脚本不提交写入）。详见 [docs/SCRIPT-PLUGINS.md](docs/SCRIPT-PLUGINS.md)。
+
+插件功能默认关闭（保持最小体积）。启用：`cargo build --release -p argent-cli -p argent-native --features script-plugins`，二进制增加约 1.5 MB。
+
+### 7. 自动化任务
 
 `argent automation` 是真正的调度器，不是说明页：
 
@@ -213,6 +228,13 @@ echo '{"id":1,"method":"get_session_stats"}' | argent --rpc   # 脚本驱动（�
 `--mode json` 与 `--rpc` 的 stdout 只走协议，诊断走 stderr；失败时 exit 1，
 `result.reason` 为 `"error"`。
 
+RPC 的 extension UI 子协议：需要操作者批准工具调用时，服务端发出
+`{"type":"extension_ui_request","id":"ui-1","method":"confirm","title":...,"params":...}`
+并**阻塞等待**；客户端回
+`{"type":"extension_ui_response","id":"ui-1","result":{"value":true}}`
+即批准。支持 `confirm` / `select` / `input` / `notify`，响应 id 必须与请求一致，
+300 秒无响应视为拒绝（不会挂死 agent）。
+
 ### 常用子命令
 
 ```powershell
@@ -278,7 +300,10 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
   "approval": "sensible",
   "autoCompaction": true,
   "theme": "dark",
-  "statusline": ["session", "tokens", "cache", "cost"]
+  "statusline": ["session", "tokens", "cache", "cost"],
+  "followUpMode": "one-at-a-time",
+  "cacheWarming": "streaming",
+  "enabledModels": ["gpt-*", "anthropic/claude-sonnet-4"]
 }
 ```
 
@@ -286,6 +311,10 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 - 键位：`keybindings.json` 重绑 quit/abort/redraw/expand/history 六个动作
 - 状态栏：`statusline` 决定分段与顺序
 - 关闭自动压缩：`autoCompaction: false` 或 `--no-auto-compact`
+- follow-up 队列：`followUpMode: "one-at-a-time" | "all"` 控制运行结束后排队的消息是一条一条还是一次性投递；RPC 用 `follow_up` 方法入队
+- 提示词缓存预热：`cacheWarming: "off" | "streaming"`，streaming 在每次运行结束后发一个最小请求续期缓存（Anthropic）；默认 off
+- 模型范围：`enabledModels` 限制模型选择器与循环范围（支持 `*` 通配，匹配可含 `provider/` 前缀）；为空表示全部
+- 分支摘要：`/tree` 切换分支时会把目标分支独有的消息作为摘要注入上下文，避免丢失另一条分支做过的事
 - profiles：`.argent/profiles/<name>.md` 固定模型/工具/预算，`--profile reviewer`
 
 ### 桌面窗口（可选）
@@ -442,7 +471,8 @@ argent --sessions               列出已有会话
 - Skills、markdown 斜杠命令（`$ARGUMENTS`/`$1`），以及全部七个 hook 事件
   （`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PermissionRequest`、
   `PostToolUse`、`PostToolUseFailure`、`Stop`），带 SHA-256 信任库；
-  `UserPromptSubmit` 和 `PermissionRequest` 可以阻断。
+  `UserPromptSubmit` 和 `PermissionRequest` 可以阻断。hook 命令可设
+  `"async": true` 在后台执行、不阻塞工具调用，输出完成后以 Notice 报告。
 - JSONL 会话树：resume、compaction、fork/rename、会话标签。
 - 会话命名与清理：新任务先叫“新任务”，第一条消息发出前即时改名为第一句；
   空占位会话超过 60 秒自动删除（TUI/CLI/图形端共用规则）。
@@ -541,6 +571,7 @@ crates/
   mcp        MCP 客户端：stdio / HTTP / SSE
   plugins    插件清单、安装、marketplace
   hooks      生命周期 hook 与信任库
+  script-plugin 纯 Rust Rhai 进程内插件（自定义工具与命令）
   commands   markdown 斜杠命令
   workflow   依赖感知的子代理工作流
   profiles   命名 profile：提示、模型、工具策略、预算

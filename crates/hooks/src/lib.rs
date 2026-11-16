@@ -97,6 +97,9 @@ pub struct HookCommand {
     /// `allow` means a failure is reported but does not block the action.
     pub on_error: String,
     pub matcher: Option<String>,
+    /// Run in the background: the hook cannot block the action, and its output
+    /// is reported asynchronously as a notice. JSON key is `async`.
+    pub async_hook: bool,
 }
 
 impl HookCommand {
@@ -159,6 +162,7 @@ impl HookConfig {
                             } else {
                                 Some(matcher.clone())
                             },
+                            async_hook: command.bool_or("async", false),
                         },
                     ));
                 }
@@ -235,6 +239,36 @@ impl HookOutcome {
     pub fn blocks(&self, command: &HookCommand) -> bool {
         !self.success && command.blocks_on_failure()
     }
+
+    /// A one-line notice describing what the hook did, for async reporting.
+    pub fn as_notice(&self) -> String {
+        let detail = clip_hook_output(&self.stdout, &self.stderr);
+        if self.success {
+            format!("{} hook (async) {}: {}", self.event.name(), self.command, detail)
+        } else {
+            format!(
+                "{} hook (async) failed for {}: {}",
+                self.event.name(),
+                self.command,
+                detail
+            )
+        }
+    }
+}
+
+/// Shared truncation for hook notices.
+fn clip_hook_output(stdout: &str, stderr: &str) -> String {
+    let combined = [stdout, stderr]
+        .iter()
+        .map(|text| text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if combined.is_empty() {
+        "(no output)".to_string()
+    } else {
+        argent_core::text::truncate(&combined, 400)
+    }
 }
 
 /// Run every hook for one event, in declaration order.
@@ -242,8 +276,52 @@ pub fn run(config: &HookConfig, event: HookEvent, ctx: &HookContext) -> Vec<Hook
     config
         .for_event(event, ctx.tool_name.as_deref())
         .into_iter()
+        .filter(|command| !command.async_hook)
         .map(|command| run_command(event, command, ctx))
         .collect()
+}
+
+/// A handle to hooks running in the background. Call [`AsyncHookRun::collect`]
+/// once the agent reaches a reporting point to retrieve their outcomes.
+pub struct AsyncHookRun {
+    handles: Vec<std::thread::JoinHandle<HookOutcome>>,
+}
+
+impl AsyncHookRun {
+    /// True when no async hooks were scheduled.
+    pub fn is_empty(&self) -> bool {
+        self.handles.is_empty()
+    }
+
+    /// Wait for all async hooks and collect their outcomes.
+    pub fn collect(self) -> Vec<HookOutcome> {
+        self.handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .collect()
+    }
+}
+
+/// Schedule every async hook for `event` without waiting for them.
+///
+/// Sync hooks are intentionally excluded: callers must run those through
+/// [`run`] so their block/allow decision stays synchronous.
+pub fn run_async(
+    config: &HookConfig,
+    event: HookEvent,
+    ctx: &HookContext,
+) -> AsyncHookRun {
+    let handles = config
+        .for_event(event, ctx.tool_name.as_deref())
+        .into_iter()
+        .filter(|command| command.async_hook)
+        .map(|command| {
+            let command = command.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || run_command(event, &command, &ctx))
+        })
+        .collect();
+    AsyncHookRun { handles }
 }
 
 /// 组装 hook 进程的环境变量。
@@ -677,6 +755,7 @@ mod tests {
             timeout_ms: 5_000,
             on_error: "block".to_string(),
             matcher: None,
+            async_hook: false,
         };
         let ctx = HookContext {
             cwd: std::env::temp_dir(),
@@ -685,6 +764,35 @@ mod tests {
         let outcome = run_command(HookEvent::SessionStart, &hook, &ctx);
         assert!(outcome.success, "stderr: {}", outcome.stderr);
         assert!(outcome.stdout.contains("argent-hook"));
+    }
+
+    #[test]
+    fn async_hooks_run_in_the_background_and_report_notices() {
+        let value = Json::parse(
+            r#"{"hooks":{"PostToolUse":[
+                {"hooks":[{"command":"echo sync-hook"}]},
+                {"hooks":[{"command":"echo async-hook","async":true}]}
+            ]}}"#,
+        )
+        .unwrap();
+        let config = HookConfig::from_json(&value).expect("parse");
+        let ctx = HookContext {
+            cwd: std::env::temp_dir(),
+            ..HookContext::default()
+        };
+
+        // run() is unaffected: the sync hook still blocks and runs inline.
+        let sync = run(&config, HookEvent::PostToolUse, &ctx);
+        assert_eq!(sync.len(), 1);
+        assert!(sync[0].stdout.contains("sync-hook"));
+
+        // run_async() picks only the async hook.
+        let async_run = run_async(&config, HookEvent::PostToolUse, &ctx);
+        assert!(!async_run.is_empty());
+        let outcomes = async_run.collect();
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].stdout.contains("async-hook"));
+        assert!(outcomes[0].as_notice().contains("PostToolUse hook (async)"));
     }
 
     #[test]

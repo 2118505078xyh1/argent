@@ -165,9 +165,11 @@ POST，无同意绝不联网；`Workflow::load` 接受 `.dwf.ts` 的
   "error"，stderr 只承载重试等诊断）；`--mode json` 是输出格式而非审批
   策略，与 pi 语义一致。
 - RPC 自省补齐 **完成**：`get_session_stats` / `get_tree` /
-  `export_html`（写入 `params.path`，stdout 保持纯协议）。`follow_up` 与
-  queue modes 不做：argent 只有一条 steering 队列，`steer` 已覆盖脚本
-  驱动语义，硬加是假接口。
+  `export_html`（写入 `params.path`，stdout 保持纯协议）。
+- follow-up 队列与 queue modes **完成**：agent 同时维护 steering（运行中插入）
+  与 follow-up（运行结束后作为新一轮用户消息）两条队列；RPC 新增 `follow_up`
+  方法，`followUpMode: "one-at-a-time" | "all"` 控制投递粒度。`cacheWarming:
+  "streaming"` 在运行结束后发最小请求续期 Anthropic 提示词缓存。
 - RPC 会话生命周期 **完成**：`new_session`（可选 `title`，清空 agent 历史）、
   `switch_session`（`params.session` 接受编号 / 路径 / 文件名子串，恢复完整
   历史）、`fork`（/clone 语义：当前全部历史复制到新文件并就地切换）、
@@ -188,6 +190,14 @@ POST，无同意绝不联网；`Workflow::load` 接受 `.dwf.ts` 的
   - `/fork <n>`：沿活跃路径第 n 条消息分叉；不带参数仍是整会话 clone。
   - `/import <path>`：外部 JSONL 拷入 sessions 目录，保留 id/parent/cwd，
     导入前做结构校验（逐行 JSON + 父链完整性）。
+  - branch summary **完成**：切换分支时用 `branch_summary_messages`（共同祖先
+    之后的分支独有消息）生成摘要，注入新分支上下文；无需额外模型调用。
+- scoped models **完成**：`enabledModels` 限制模型选择器与循环范围，`*`
+  通配、大小写不敏感、匹配裸 id 或 `provider/id`。
+- extension UI 子协议 **完成**：`argent-ui-core::UiBridge` 提供
+  `confirm`/`select`/`input`/`notify` 请求-响应关联与超时；RPC 模式把工具审批
+  接到该桥，发出 `extension_ui_request` 并等待客户端的 `extension_ui_response`
+  （对标 Pi 的 `rpc-extension-ui`）。
 - 真机联调 **完成**（llama.cpp + Qwen2.5-0.5B，OpenAI 兼容 + jinja 工具模板）：
   一次性 JSONL、真工具循环（tool_call → 执行 → tool_result → 第二轮）、
   RPC 多轮上下文、错误路径（provider 退避重试 4 次、协议行纯净、exit 1）。

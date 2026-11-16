@@ -116,6 +116,48 @@ impl Budget {
     }
 }
 
+/// What happens to follow-up prompts queued while a run was active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FollowUpMode {
+    /// Each queued prompt starts its own run, one after another.
+    #[default]
+    OneAtATime,
+    /// Every queued prompt joins one batch, sent together.
+    All,
+}
+
+impl FollowUpMode {
+    /// Parse a settings value; unknown names keep the default.
+    pub fn parse(value: &str) -> FollowUpMode {
+        match value.to_ascii_lowercase().as_str() {
+            "all" | "batch" => FollowUpMode::All,
+            _ => FollowUpMode::OneAtATime,
+        }
+    }
+}
+
+/// Whether the harness spends one minimal request after each run to keep the
+/// provider's prompt cache warm. Only meaningful on providers that bill cache
+/// reads far below a cold prompt (Anthropic); a local llama.cpp pays the same
+/// either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CacheWarming {
+    #[default]
+    Off,
+    /// After each finished run, resend the last prompt with max_tokens = 1.
+    Streaming,
+}
+
+impl CacheWarming {
+    /// Parse a settings value; unknown names keep the default.
+    pub fn parse(value: &str) -> CacheWarming {
+        match value.to_ascii_lowercase().as_str() {
+            "streaming" | "on" => CacheWarming::Streaming,
+            _ => CacheWarming::Off,
+        }
+    }
+}
+
 /// Tuning knobs for one agent run.
 #[derive(Clone)]
 pub struct AgentConfig {
@@ -153,6 +195,10 @@ pub struct AgentConfig {
     /// CLI 用它给文件检查点编号：整轮运行里的所有写入（含子代理）记在
     /// 同一个运行号下，回滚以“运行”为粒度。
     pub on_run_start: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// How prompts queued during a run are dispatched once it ends.
+    pub follow_up_mode: FollowUpMode,
+    /// Prompt-cache keep-alive policy.
+    pub cache_warming: CacheWarming,
 }
 
 impl std::fmt::Debug for AgentConfig {
@@ -191,6 +237,8 @@ impl AgentConfig {
             pre_tool: None,
             post_tool: None,
             on_run_start: None,
+            follow_up_mode: FollowUpMode::default(),
+            cache_warming: CacheWarming::default(),
         }
     }
 }
@@ -281,6 +329,9 @@ pub struct Agent {
     /// here directly; the loop drains it between turns so a tool batch does
     /// not have to finish before the operator can redirect the agent.
     steering: Arc<Mutex<VecDeque<String>>>,
+    /// Prompts queued while a run was active; dispatched as new runs when the
+    /// current one ends, one at a time or as one batch (follow_up_mode).
+    followups: Arc<Mutex<VecDeque<String>>>,
     /// Token totals the provider has reported for this session.
     usage: Usage,
     /// How many logical requests were made, including failed ones. One request
@@ -324,6 +375,7 @@ impl Agent {
             mutation_epoch: 0,
             abort: AbortHandle::new(),
             steering: Arc::new(Mutex::new(VecDeque::new())),
+            followups: Arc::new(Mutex::new(VecDeque::new())),
             usage: Usage::default(),
             requests: 0,
             run_started: None,
@@ -352,9 +404,72 @@ impl Agent {
         Arc::clone(&self.steering)
     }
 
+    /// The queue of follow-up prompts; a frontend pushes while a run is
+    /// active, and the run loop dispatches them when the run ends.
+    pub fn followups_handle(&self) -> Arc<Mutex<VecDeque<String>>> {
+        Arc::clone(&self.followups)
+    }
+
+    /// Pop the next follow-up per the configured mode, or `None` when the
+    /// queue is empty.
+    ///
+    /// `OneAtATime` returns the oldest prompt; `All` joins every queued
+    /// prompt into one message, because a provider charges per request and
+    /// the operator asked for one batch.
+    fn follow_up_mode(&self) -> Option<String> {
+        let Ok(mut queue) = self.followups.lock() else {
+            return None;
+        };
+        if queue.is_empty() {
+            return None;
+        }
+        match self.config.follow_up_mode {
+            FollowUpMode::OneAtATime => queue.pop_front(),
+            FollowUpMode::All => {
+                let joined: Vec<String> = queue.drain(..).collect();
+                Some(joined.join("
+
+"))
+            }
+        }
+    }
+
+    /// One minimal request against the current history so the provider's
+    /// prompt cache does not go cold between runs. A failure here is noise:
+    /// warming is an optimization, never a turn of its own.
+    fn warm_cache(&mut self) {
+        if self.config.cache_warming != CacheWarming::Streaming {
+            return;
+        }
+        let system = if self.system_prompt.is_empty() {
+            None
+        } else {
+            Some(self.system_prompt.as_str())
+        };
+        let wire = self
+            .wire
+            .sync(system, &self.history, self.history_revision);
+        let mut request = ChatRequest::new(self.config.model.clone(), Vec::new())
+            .with_wire_messages(wire);
+        request.max_tokens = Some(1);
+        if let Ok(events) = self.provider.chat(&request) {
+            for event in events {
+                if event.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
     /// Adopt a steering queue created by the host process.
     pub fn set_steering(&mut self, handle: Arc<Mutex<VecDeque<String>>>) {
         self.steering = handle;
+    }
+
+    /// Replace the approval gate after construction; an RPC frontend installs
+    /// its own bridge here because the interactive dialog cannot be.
+    pub fn set_approve(&mut self, approve: Option<argent_core::hooks::ApproveHook>) {
+        self.config.approve = approve;
     }
 
     /// True when a correction is queued but not yet in the conversation.
@@ -1005,6 +1120,15 @@ impl Agent {
                 if self.inject_steering(sink) {
                     continue;
                 }
+                // A follow-up queued mid-run becomes the next prompt. Nothing
+                // is announced as finished until the queue drains; an abort,
+                // error or policy stop skips this entirely, so a broken run
+                // never auto-continues.
+                if let Some(follow_up) = self.follow_up_mode() {
+                    self.push_history(Message::user(follow_up));
+                    continue;
+                }
+                self.warm_cache();
                 let reason = FinishReason::Complete;
                 sink.emit(AgentEvent::Finished {
                     reason: reason.clone(),
@@ -1329,10 +1453,11 @@ impl Agent {
                     sink.emit(AgentEvent::Thinking(chunk));
                 }
                 Ok(StreamEvent::ReasoningBlock { text, signature }) => {
-                    // 没有签名就无法回传，带了反而会被 API 拒绝。
-                    if let Some(signature) = signature.filter(|value| !value.is_empty()) {
-                        thinking.push(Content::Thinking { text, signature });
-                    }
+                    // 无签名也要存：OpenAI 兼容端点不校验签名，下一轮把
+                    // reasoning 原样带回去才能命中服务端的 KV 缓存。Anthropic
+                    // 的请求构造会跳过空签名的块，不会因此被 400。
+                    let signature = signature.unwrap_or_default();
+                    thinking.push(Content::Thinking { text, signature });
                 }
                 Ok(StreamEvent::RedactedThinking(data)) => {
                     thinking.push(Content::RedactedThinking { data });

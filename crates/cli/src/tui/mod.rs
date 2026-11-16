@@ -93,7 +93,12 @@ pub struct ApprovalRequest {
 
 /// What the UI asks the worker to do.
 pub enum Command {
-    Prompt(String),
+    /// A user prompt, optionally carrying image attachments (`@path` on an
+    /// image file becomes a `Content::Image` data URL).
+    Prompt {
+        text: String,
+        images: Vec<argent_ai::Content>,
+    },
     Shell(String),
     SetModel(String),
     SetThinking(String),
@@ -298,7 +303,7 @@ pub fn spawn(
                         duration_ms: started.elapsed().as_millis() as u64,
                     }));
                 }
-                Command::Prompt(text) => {
+                Command::Prompt { text, images } => {
                     let submit_ctx = HookContext {
                         cwd: cwd.clone(),
                         prompt: Some(text.clone()),
@@ -354,7 +359,14 @@ pub fn spawn(
                         let mut sink = ChannelSink {
                             tx: event_tx.clone(),
                         };
-                        agent.run(&text, &mut sink)
+                        if images.is_empty() {
+                            agent.run(&text, &mut sink)
+                        } else {
+                            agent.run_message(
+                                argent_ai::Message::user_with_images(text.clone(), images.clone()),
+                                &mut sink,
+                            )
+                        }
                     };
                     match result {
                         Ok(reason) => {
@@ -582,8 +594,28 @@ pub fn spawn(
                 Command::Tree => {
                     let _ = event_tx.send(UiEvent::TreeRows(tree_rows(&session)));
                 }
-                Command::CheckoutNode(id) => match session.checkout(&id) {
-                    Ok(messages) => {
+                Command::CheckoutNode(id) => {
+                    let previous_leaf = session.tree.active().map(str::to_string);
+                    match session.checkout(&id) {
+                    Ok(mut messages) => {
+                        // Pi-style branch summary: make the messages unique to
+                        // the branch we left visible in the new context.
+                        if let Some(previous) = previous_leaf {
+                            let branch = session.tree.branch_summary_messages(&id, &previous);
+                            if !branch.is_empty() {
+                                let mut text = String::from(
+                                    "The conversation switched to a different branch. \
+                                     The other branch contained these messages:\n",
+                                );
+                                for message in branch.iter().take(40) {
+                                    let role = message.role.as_str();
+                                    let body = message.text();
+                                    let body = if body.len() > 600 { &body[..600] } else { &body };
+                                    text.push_str(&format!("\n[{}] {}", role, body));
+                                }
+                                messages.push(argent_ai::Message::system(text));
+                            }
+                        }
                         argent_session::controller::open(&mut agent, messages.clone());
                         let entries =
                             Transcript::from_messages(&messages).entries().to_vec();
@@ -600,7 +632,8 @@ pub fn spawn(
                     Err(error) => {
                         let _ = event_tx.send(UiEvent::Error(error.to_string()));
                     }
-                },
+                    }
+                }
                 Command::ForkNode(id) => match session.fork_at(&id) {
                     Ok(messages) => {
                         argent_session::controller::open(&mut agent, messages.clone());
@@ -699,7 +732,11 @@ pub fn spawn(
                 Command::ListModels => match agent.models() {
                     Ok(models) => {
                         let _ = event_tx.send(UiEvent::Models(
-                            models.into_iter().map(|model| model.id).collect(),
+                            models
+                                .into_iter()
+                                .map(|model| model.id)
+                                .filter(|id| config.model_in_scope(id))
+                                .collect(),
                         ));
                     }
                     Err(error) => {
@@ -1899,9 +1936,18 @@ impl App {
         self.dirty = true;
     }
 
+    /// True when the input looks like a slash command query (no spaces yet).
+    /// Does not build the palette list — callers that need items build them once.
+    fn palette_input_active(&self) -> bool {
+        let mut chars = self.input.iter();
+        match chars.next() {
+            Some('/') => !chars.any(|ch| *ch == ' '),
+            _ => false,
+        }
+    }
+
     fn palette_visible(&self) -> bool {
-        let text: String = self.input.iter().collect();
-        text.starts_with('/') && !text.contains(' ') && !self.palette_items().is_empty()
+        self.palette_input_active() && !self.palette_items().is_empty()
     }
 
     fn palette_items(&self) -> Vec<PaletteItem> {
@@ -2037,7 +2083,10 @@ impl App {
                 self.queued = self.queued.saturating_add(1);
                 self.scroll = 0;
                 self.dirty = true;
-                let _ = worker.commands.send(Command::Prompt(prompt));
+                let _ = worker.commands.send(Command::Prompt {
+                    text: prompt,
+                    images: Vec::new(),
+                });
             }
             return;
         }
@@ -2067,7 +2116,7 @@ impl App {
             self.dirty = true;
             return;
         }
-        let (prompt, attached) = self.expand_attachments(&text);
+        let (prompt, attached, images) = self.expand_attachments(&text);
         let prompt = if self.plan {
             format!(
                 "[Plan mode] Analyze the request and produce a concrete plan first.                  Do not edit files or run mutating commands until the operator approves.
@@ -2101,7 +2150,10 @@ impl App {
                 return;
             }
         } else {
-            let _ = worker.commands.send(Command::Prompt(prompt));
+            let _ = worker.commands.send(Command::Prompt {
+                text: prompt,
+                images,
+            });
         }
         self.transcript.push_user(text);
         self.note_attachments(&attached);
@@ -2122,11 +2174,24 @@ impl App {
         worker.abort.abort();
     }
 
+    /// MIME type for image attachments argent sends to vision models.
+    fn image_mime_for_path(path: &Path) -> Option<&'static str> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        match extension.as_str() {
+            "png" => Some("image/png"),
+            "jpg" | "jpeg" => Some("image/jpeg"),
+            "gif" => Some("image/gif"),
+            "webp" => Some("image/webp"),
+            "bmp" => Some("image/bmp"),
+            _ => None,
+        }
+    }
+
     /// Expand `@path` tokens into a context block appended to the prompt.
     ///
     /// Three files maximum, 40k characters each, so an accidental `@huge.log`
     /// cannot eat the whole context window.
-    fn expand_attachments(&self, text: &str) -> (String, Vec<String>) {
+    fn expand_attachments(&self, text: &str) -> (String, Vec<String>, Vec<argent_ai::Content>) {
         let cwd = self
             .ready
             .as_ref()
@@ -2134,6 +2199,7 @@ impl App {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
         let mut attached = Vec::new();
+        let mut images = Vec::new();
         let mut context = String::new();
         for token in text.split_whitespace() {
             if attached.len() >= 3 {
@@ -2170,6 +2236,19 @@ impl App {
                 attached.push(format!("{}/", raw));
                 continue;
             }
+            // Image files become vision content, not text. The model-side
+            // capability rules strip them again for non-vision models.
+            if let Some(mime) = Self::image_mime_for_path(&path) {
+                match std::fs::read(&path) {
+                    Ok(bytes) if !bytes.is_empty() => {
+                        let url = format!("data:{mime};base64,{}", argent_core::base64::encode(&bytes));
+                        images.push(argent_ai::Content::Image { url, detail: None });
+                        attached.push(raw.to_string());
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             let Ok(content) = std::fs::read_to_string(&path) else {
                 continue;
             };
@@ -2187,10 +2266,10 @@ impl App {
             }
         }
         if attached.is_empty() {
-            (text.to_string(), attached)
+            (text.to_string(), attached, images)
         } else {
             (format!("{}
-{}", text, context), attached)
+{}", text, context), attached, images)
         }
     }
 
@@ -2338,14 +2417,20 @@ impl App {
                 let name = other.trim_start_matches('/');
                 if let Some(doc) = argent_commands::find(&self.commands, name) {
                     let expanded = doc.expand(argument);
-                    let _ = worker.commands.send(Command::Prompt(expanded.clone()));
+                    let _ = worker.commands.send(Command::Prompt {
+                        text: expanded.clone(),
+                        images: Vec::new(),
+                    });
                     self.transcript.push_user(expanded);
                     self.working = true;
                     self.queued = self.queued.saturating_add(1);
                     self.scroll = 0;
                 } else if let Some(template) = self.prompts.get(name) {
                     let expanded = template.expand(argument);
-                    let _ = worker.commands.send(Command::Prompt(expanded.clone()));
+                    let _ = worker.commands.send(Command::Prompt {
+                        text: expanded.clone(),
+                        images: Vec::new(),
+                    });
                     self.transcript.push_user(expanded);
                     self.working = true;
                     self.queued = self.queued.saturating_add(1);
@@ -2424,7 +2509,10 @@ impl App {
         match self.prompts.get(name) {
             Some(template) => {
                 let expanded = template.expand(args);
-                let _ = worker.commands.send(Command::Prompt(expanded.clone()));
+                let _ = worker.commands.send(Command::Prompt {
+                text: expanded.clone(),
+                images: Vec::new(),
+            });
                 self.transcript.push_user(expanded);
                 self.working = true;
                 self.queued = self.queued.saturating_add(1);
@@ -2443,8 +2531,10 @@ impl App {
         let width = width.max(20);
         let height = height.max(8);
 
-        let palette = if self.palette_visible() {
-            let items = self.palette_items();
+        // Build the palette once. `palette_visible()` also builds the list, so
+        // calling it here would construct the same Vec twice per frame.
+        let items = self.palette_items();
+        let palette = if !items.is_empty() && self.palette_input_active() {
             let shown = items.len().min(6);
             Some((items, shown))
         } else {
@@ -2605,14 +2695,15 @@ impl App {
         let inner = width.saturating_sub(4).max(1);
         let start = self.cursor.saturating_sub(inner);
         let visible: Vec<char> = self.input.iter().skip(start).take(inner).copied().collect();
-        let mut line = Line::new().push(Span::new(USER_MARK, Style::bold(crate::theme::current().accent)));
+        let line = Line::new().push(Span::new(USER_MARK, Style::bold(crate::theme::current().accent)));
         // 光标交给终端原生光标（位置见 `cursor_screen_position`）：不再画
         // 反显块，深浅色主题下都不会看起来像渲染残留。行尾留一个空格
         // 占位，光标停在它上面。
-        for ch in visible.iter() {
-            line = line.push(Span::new(ch.to_string(), Style::plain()));
-        }
-        line
+        // One span for the whole visible input: a per-character String + Span
+        // allocation for every keystroke is wasteful, and `text_width` already
+        // measures the full string (including CJK width) correctly.
+        let text: String = visible.iter().collect();
+        line.push(Span::new(text, Style::plain()))
     }
 
     /// 终端光标应该停在的位置（ANSI 1 基 row/col）。
@@ -3427,7 +3518,10 @@ pub fn run(
             app.working = true;
             app.queued = app.queued.saturating_add(1);
             app.scroll = 0;
-            let _ = worker.commands.send(Command::Prompt(next));
+            let _ = worker.commands.send(Command::Prompt {
+                text: next,
+                images: Vec::new(),
+            });
             changed = true;
         }
         // 子代理在 worker 线程上跑；进度从独立通道进来，追加成一条提示。
@@ -3548,11 +3642,19 @@ fn draw_at(lines: &[String], cursor: Option<(usize, usize)>, last: &mut Vec<Stri
             out.push_str(line);
         }
         out.push_str("\x1b[J");
+        // 原地同步快照：resize_with + clone_from 复用每行已有容量，
+        // 避免每帧重建一整份 Vec<String>（行数变化时才会走到这里）。
+        last.resize_with(lines.len(), String::new);
+        for (slot, line) in last.iter_mut().zip(lines.iter()) {
+            slot.clone_from(line);
+        }
     } else {
         for (index, line) in lines.iter().enumerate() {
             if last[index] != *line {
                 out.push_str(&format!("\x1b[{};1H", index + 1));
                 out.push_str(line);
+                // 只复制变化的行，且 clone_from 复用已有分配。
+                last[index].clone_from(line);
             }
         }
     }
@@ -3561,7 +3663,6 @@ fn draw_at(lines: &[String], cursor: Option<(usize, usize)>, last: &mut Vec<Stri
     }
     out.push_str("\x1b[?25h");
     terminal::write_raw(&out);
-    *last = lines.to_vec();
 }
 
 #[cfg(test)]
@@ -3688,9 +3789,53 @@ mod tests {
             session: "s".to_string(),
             session_path: String::new(),
         });
-        let (prompt, attached) = app.expand_attachments("@a.txt summarize this");
+        let (prompt, attached, images) = app.expand_attachments("@a.txt summarize this");
         assert!(prompt.contains("attached body"), "{}", prompt);
         assert_eq!(attached, vec!["a.txt".to_string()]);
+        assert!(images.is_empty(), "a text file is not a vision attachment");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_attachments_become_vision_content() {
+        let dir = std::env::temp_dir().join(format!("argent-tui-image-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 1x1 transparent PNG.
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99,
+            0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        std::fs::write(dir.join("pixel.png"), png).unwrap();
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.ready = Some(ReadyInfo {
+            model: "m".to_string(),
+            thinking: "auto".to_string(),
+            provider: "p".to_string(),
+            protocol: "openai-chat-completions".to_string(),
+            cwd: dir.display().to_string(),
+            session: "s".to_string(),
+            session_path: String::new(),
+        });
+        let (_prompt, attached, images) = app.expand_attachments("@pixel.png what is this");
+        assert_eq!(attached, vec!["pixel.png".to_string()]);
+        assert_eq!(images.len(), 1);
+        match &images[0] {
+            argent_ai::Content::Image { url, .. } => {
+                assert!(url.starts_with("data:image/png;base64,"), "{}", url);
+                assert!(url.len() > 40);
+            }
+            other => panic!("expected image content, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4257,6 +4402,23 @@ mod cursor_tests {
             Duration::from_millis(2)
         };
         assert!(per_frame < budget, "warm frame took {:?}", per_frame);
+    }
+
+    #[test]
+    fn draw_at_keeps_its_snapshot_in_sync_without_rebuilding() {
+        // The frame diff compares against `last`; if the snapshot is not
+        // updated in place, a changed line is either never repainted or the
+        // whole Vec is cloned every frame.
+        let mut last = vec!["one".to_string(), "two".to_string()];
+        draw_at(&["one".into(), "TWO".into()], None, &mut last);
+        assert_eq!(last, vec!["one", "TWO"]);
+        draw_at(&["ONE".into(), "TWO".into()], None, &mut last);
+        assert_eq!(last, vec!["ONE", "TWO"]);
+        // Row-count changes (resize / first frame) resync the whole snapshot.
+        draw_at(&["x".into()], None, &mut last);
+        assert_eq!(last, vec!["x"]);
+        draw_at(&["x".into(), "y".into()], None, &mut last);
+        assert_eq!(last, vec!["x", "y"]);
     }
 
     #[test]

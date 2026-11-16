@@ -8,8 +8,70 @@ use std::path::{Path, PathBuf};
 
 use argent_mcp::{McpConfig, ServerConfig, TransportKind};
 
+#[cfg(feature = "script-plugins")]
+use argent_tools::registry::ToolRegistry;
+#[cfg(feature = "script-plugins")]
+use argent_tools::tool::ToolCtx;
+
 use crate::manifest::PluginManifest;
 use crate::PluginManager;
+
+/// Load every Rhai script declared by enabled plugins and register their tools.
+///
+/// Failures are reported (not fatal): a broken plugin must not prevent the
+/// agent from starting.
+#[cfg(feature = "script-plugins")]
+pub fn load_script_plugins(
+    plugins: &PluginManager,
+    registry: &mut ToolRegistry,
+    ctx: &ToolCtx,
+    cwd: &Path,
+    storage: &Path,
+    notify: &mut dyn FnMut(&str),
+) -> Vec<std::sync::Arc<argent_script_plugin::LoadedScript>> {
+    use argent_script_plugin::{load, ScriptTool};
+    let mut loaded = Vec::new();
+    for manifest in plugins.enabled() {
+        let Some(decl) = &manifest.script else {
+            continue;
+        };
+        let mut init_input = argent_core::json::Json::obj();
+        init_input.set("plugin", argent_core::json::Json::Str(manifest.name.clone()));
+        init_input.set("root", argent_core::json::Json::Str(manifest.root_string()));
+        init_input.set("cwd", argent_core::json::Json::Str(cwd.display().to_string()));
+        init_input.set(
+            "plugin_data",
+            argent_core::json::Json::Str(
+                storage.join("plugin-data").join(&manifest.name).display().to_string(),
+            ),
+        );
+        match load(
+            &manifest.name,
+            &decl.module,
+            &init_input,
+            decl.operations,
+            std::sync::Arc::new(ToolRegistry::new()),
+            ctx.clone(),
+        ) {
+            Ok(plugin) => {
+                let tool_decls = plugin.declarations().tools.clone();
+                registry.declare_plugin(&manifest.name, &manifest.description);
+                for tool_decl in tool_decls {
+                    registry.register_plugin_tool(
+                        &manifest.name,
+                        Box::new(ScriptTool::new(&manifest.name, plugin.clone(), tool_decl)),
+                    );
+                }
+                loaded.push(plugin);
+            }
+            Err(error) => notify(&format!(
+                "script plugin {} failed to load: {}",
+                manifest.name, error
+            )),
+        }
+    }
+    loaded
+}
 
 /// 复制已启用插件的 MCP server 声明到运行时配置。
 ///

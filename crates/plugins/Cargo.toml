@@ -9,9 +9,17 @@ description = "ZCode-compatible plugin manifests, discovery and installation"
 [lints]
 workspace = true
 
+[features]
+# Pure-Rust in-process Rhai plugins. Off by default; enabling it adds ~1.5 MB
+# (rhai) to the binary. Build with `--features script-plugins` to opt in.
+default = []
+script-plugins = ["dep:argent-script-plugin", "dep:argent-tools"]
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-config = { path = "../config" }
 argent-mcp = { path = "../mcp" }
 argent-hooks = { path = "../hooks" }
 argent-update = { path = "../update" }
+argent-script-plugin = { path = "../script-plugin", optional = true }
+argent-tools = { path = "../tools", optional = true }

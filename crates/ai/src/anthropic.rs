@@ -549,8 +549,10 @@ fn content_blocks(parts: &[Content], caps: Capabilities, model: &str) -> Vec<Jso
             }
             Content::Thinking { text, signature } => {
                 // 换到不支持 reasoning 的模型时，历史里的思考块必须剥掉，
-                // 否则端点会因不认识的块类型拒绝整条请求。
-                if !caps.reasoning {
+                // 否则端点会因不认识的块类型拒绝整条请求。空签名的块同样
+                // 跳过——那是 OpenAI 协议存下的 reasoning，Anthropic 会以
+                // 400 拒绝无签名思考块。
+                if !caps.reasoning || signature.is_empty() {
                     continue;
                 }
                 blocks.push(Json::Obj(vec![

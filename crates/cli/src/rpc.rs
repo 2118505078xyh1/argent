@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use argent_agent::{Agent, AgentEvent, EventSink, FinishReason};
 use argent_core::error::Result;
 use argent_core::json::Json;
+use argent_ui_core::{UiBridge, UiResponse};
 
 /// One request from the client.
 #[derive(Debug, Clone)]
@@ -671,6 +672,35 @@ pub fn serve(
     let out: Arc<Mutex<std::io::Stdout>> = Arc::new(Mutex::new(std::io::stdout()));
     let abort = agent.abort_handle();
     let steering = agent.steering_handle();
+    let followups = agent.followups_handle();
+
+    // Extension UI sub-protocol: route approvals to the RPC client as
+    // `extension_ui_request` / `extension_ui_response` pairs.
+    let ui = UiBridge::new();
+    {
+        let ui = ui.clone();
+        let approve_out = Arc::clone(&out);
+        agent.set_approve(Some(Arc::new(move |tool: &str, args: &Json| {
+            let mut params = Json::obj();
+            params.set("tool", Json::string(tool));
+            params.set("arguments", args.clone());
+            let out = Arc::clone(&approve_out);
+            ui.confirm(
+                "Approve tool call?",
+                format!("{tool} {}", args.dump()),
+                std::time::Duration::from_secs(300),
+                move |request| {
+                    if let Ok(mut stdout) = out.lock() {
+                        let line = request.to_json().dump();
+                        let _ = stdout.write_all(line.as_bytes());
+                        let _ = stdout.write_all(b"\n");
+                        let _ = stdout.flush();
+                    }
+                },
+            )
+            .unwrap_or(false)
+        })));
+    }
 
     let (sender, receiver): (mpsc::Sender<Request>, Receiver<Request>) = mpsc::channel();
     let worker_out = Arc::clone(&out);
@@ -704,6 +734,14 @@ pub fn serve(
         if trimmed.is_empty() {
             continue;
         }
+        // Extension UI responses are not ordinary requests: they answer a
+        // blocking `extension_ui_request` emitted by the approval hook.
+        if let Ok(value) = Json::parse(trimmed) {
+            if let Some(response) = UiResponse::from_json(&value) {
+                ui.respond(&response);
+                continue;
+            }
+        }
         let request = match Request::parse(trimmed) {
             Ok(request) => request,
             Err(message) => {
@@ -719,6 +757,24 @@ pub fn serve(
                 continue;
             }
             let queued = steering
+                .lock()
+                .map(|mut queue| {
+                    queue.push_back(text);
+                    true
+                })
+                .unwrap_or(false);
+            let mut data = Json::obj();
+            data.set("queued", Json::bool(queued));
+            write_line(&out, &result_line(request.id, data));
+            continue;
+        }
+        if request.method == "follow_up" {
+            let text = request.params.str_or("text", "");
+            if text.trim().is_empty() {
+                write_line(&out, &error_line(request.id, "follow_up needs params.text"));
+                continue;
+            }
+            let queued = followups
                 .lock()
                 .map(|mut queue| {
                     queue.push_back(text);

@@ -14,6 +14,7 @@ members = [
     "crates/plugins",
     "crates/commands",
     "crates/hooks",
+    "crates/script-plugin",
     "crates/workflow",
     "crates/telemetry",
     "crates/update",

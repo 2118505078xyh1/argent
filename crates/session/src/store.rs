@@ -1,12 +1,27 @@
 //! Session persistence: JSONL transcripts, session tree, compaction.
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use argent_ai::Message;
 use argent_core::error::{Error, Result};
 use argent_core::json::Json;
+
+/// How often to force data to disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FlushPolicy {
+    #[default]
+    /// Flush after every append (safest, default).
+    EveryAppend,
+    /// Flush periodically; a background task or explicit `sync()` drives it.
+    Interval(Duration),
+    /// Never auto-flush; caller must call `sync()`.
+    Manual,
+}
+
+
 
 /// One recorded entry in a session transcript.
 #[derive(Debug, Clone)]
@@ -68,19 +83,32 @@ impl Entry {
 /// A session file on disk.
 pub struct SessionStore {
     path: PathBuf,
-    file: Option<File>,
+    writer: Option<BufWriter<File>>,
     /// Optional live SQLite mirror; JSONL remains the source of truth.
     mirror: Option<crate::sqlite::SqliteMirror>,
+    /// When to force data to disk.
+    flush_policy: FlushPolicy,
+    /// Accumulated bytes since last flush (for Interval policy).
+    bytes_since_flush: usize,
 }
 
 impl SessionStore {
-    /// Open or create a session file.
+    /// Open or create a session file with default flush policy (EveryAppend).
     pub fn open(path: PathBuf) -> Result<SessionStore> {
         SessionStore::open_with_mirror(path, crate::sqlite::configured_db_path())
     }
 
-    /// Open with an explicit SQLite mirror path.
+    /// Open with an explicit SQLite mirror path and default flush policy.
     pub fn open_with_mirror(path: PathBuf, db_path: Option<PathBuf>) -> Result<SessionStore> {
+        SessionStore::open_with_mirror_and_policy(path, db_path, FlushPolicy::default())
+    }
+
+    /// Open with an explicit SQLite mirror path and flush policy.
+    pub fn open_with_mirror_and_policy(
+        path: PathBuf,
+        db_path: Option<PathBuf>,
+        flush_policy: FlushPolicy,
+    ) -> Result<SessionStore> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| Error::io(format!("create {} failed: {}", parent.display(), e)))?;
@@ -95,8 +123,10 @@ impl SessionStore {
             .transpose()?;
         Ok(SessionStore {
             path,
-            file: Some(file),
+            writer: Some(BufWriter::new(file)),
             mirror,
+            flush_policy,
+            bytes_since_flush: 0,
         })
     }
 
@@ -107,21 +137,58 @@ impl SessionStore {
 
     /// Append one entry.
     pub fn append(&mut self, entry: &Entry) -> Result<()> {
-        let file = self
-            .file
+        let writer = self
+            .writer
             .as_mut()
             .ok_or_else(|| Error::internal("session store is closed"))?;
         let mut line = entry.to_json().dump();
         line.push('\n');
-        file.write_all(line.as_bytes())
+        let bytes = line.as_bytes();
+        writer.write_all(bytes)
             .map_err(|e| Error::io(format!("write session failed: {}", e)))?;
-        file.flush()
-            .map_err(|e| Error::io(format!("flush session failed: {}", e)))?;
+        self.bytes_since_flush += bytes.len();
+        self.maybe_flush()?;
         if let Some(mirror) = &self.mirror {
             // The mirror is for external readers; a locked database must not
             // lose the transcript that was just flushed to JSONL.
             let _ = mirror.append(entry);
         }
+        Ok(())
+    }
+
+    /// Flush if policy demands it.
+    fn maybe_flush(&mut self) -> Result<()> {
+        let writer = self.writer.as_mut().ok_or_else(|| Error::internal("session store is closed"))?;
+        match self.flush_policy {
+            FlushPolicy::EveryAppend => {
+                writer.flush()
+                    .map_err(|e| Error::io(format!("flush session failed: {}", e)))?;
+            }
+            FlushPolicy::Interval(_) => {
+                // For Interval, we flush when enough bytes accumulated or a timer
+                // would fire. Since we don't have a background timer here, we use
+                // a byte threshold as a proxy (e.g., 64 KiB). The caller can also
+                // call `sync()` explicitly at logical boundaries.
+                const INTERVAL_THRESHOLD: usize = 64 * 1024;
+                if self.bytes_since_flush >= INTERVAL_THRESHOLD {
+                    writer.flush()
+                        .map_err(|e| Error::io(format!("flush session failed: {}", e)))?;
+                    self.bytes_since_flush = 0;
+                }
+            }
+            FlushPolicy::Manual => {
+                // Caller controls flushing via sync().
+            }
+        }
+        Ok(())
+    }
+
+    /// Force any buffered data to disk.
+    pub fn sync(&mut self) -> Result<()> {
+        let writer = self.writer.as_mut().ok_or_else(|| Error::internal("session store is closed"))?;
+        writer.flush()
+            .map_err(|e| Error::io(format!("flush session failed: {}", e)))?;
+        self.bytes_since_flush = 0;
         Ok(())
     }
 
@@ -151,9 +218,10 @@ impl SessionStore {
         Ok(entries)
     }
 
-    /// Close the file handle.
+    /// Close the file handle, flushing any buffered data first.
     pub fn close(&mut self) {
-        self.file = None;
+        let _ = self.sync();
+        self.writer = None;
     }
 
     /// Read the session as a tree.
@@ -212,18 +280,29 @@ impl SessionStore {
         entry.set("created_at", Json::num(node.created_at as f64));
         let mut line = entry.dump();
         line.push('\n');
-        let file = self
-            .file
+        let bytes = line.as_bytes();
+        let writer = self
+            .writer
             .as_mut()
             .ok_or_else(|| Error::internal("session store is closed"))?;
-        file.write_all(line.as_bytes())
+        writer.write_all(bytes)
             .map_err(|e| Error::io(format!("write session failed: {}", e)))?;
-        file.flush()
-            .map_err(|e| Error::io(format!("flush session failed: {}", e)))?;
+        self.bytes_since_flush += bytes.len();
+        self.maybe_flush()?;
         if let Some(mirror) = &self.mirror {
             let _ = mirror.append_node(node, tree);
         }
         Ok(())
+    }
+
+    /// Get the current flush policy.
+    pub fn flush_policy(&self) -> FlushPolicy {
+        self.flush_policy
+    }
+
+    /// Set a new flush policy.
+    pub fn set_flush_policy(&mut self, policy: FlushPolicy) {
+        self.flush_policy = policy;
     }
 }
 
@@ -339,7 +418,11 @@ impl SessionIndex {
             let mut info = Json::obj();
             info.set("path", Json::string(path.to_string_lossy().into_owned()));
             info.set("title", Json::string(title));
-            info.set("cwd", Json::string(cwd));
+            // The header keeps the path as the OS spelled it; compare it in
+            // one shape. Without this, `latest_for` (which normalizes the
+            // requested directory) never matched a Windows header that used
+            // backslashes, and `--continue` silently started a new session.
+            info.set("cwd", Json::string(normalize_cwd(Path::new(&cwd))));
             info.set("modified", Json::num(modified as f64));
             info.set("modified_iso", Json::string(epoch_to_iso(modified)));
             info.set("size", Json::num(size as f64));

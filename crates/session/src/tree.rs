@@ -213,6 +213,38 @@ impl SessionTree {
         Ok(path)
     }
 
+    /// Messages on `target` that are not on `other` after their common
+    /// ancestor. Used to summarize a branch when switching to it (Pi's
+    /// `branchSummary`). Returns an empty list when the two paths share the
+    /// whole target, i.e. there is nothing branch-specific to report.
+    pub fn branch_summary_messages(&self, target: &str, other: &str) -> Vec<Message> {
+        let target_path = match self.path_to(target) {
+            Ok(path) => path,
+            Err(_) => return Vec::new(),
+        };
+        let other_path = match self.path_to(other) {
+            Ok(path) => path,
+            Err(_) => return Vec::new(),
+        };
+        let common = target_path
+            .iter()
+            .zip(other_path.iter())
+            .take_while(|(left, right)| left.id == right.id)
+            .count();
+        let mut out = Vec::new();
+        for node in target_path.into_iter().skip(common) {
+            match &node.payload {
+                Entry::Message(message) => out.push(message.clone()),
+                Entry::Summary(text) => out.push(Message::system(format!(
+                    "Earlier branch summary: {}",
+                    text
+                ))),
+                _ => {}
+            }
+        }
+        out
+    }
+
     /// The conversation on the active branch.
     pub fn messages(&self) -> Vec<Message> {
         let mut out = Vec::new();
@@ -403,6 +435,24 @@ mod tests {
         tree.set_active("n000002").expect("switch");
         let original = tree.messages();
         assert_eq!(original[1].text(), "two");
+    }
+
+    #[test]
+    fn branch_summary_returns_only_the_target_branchs_unique_messages() {
+        let mut tree = SessionTree::new();
+        let root = tree.append(user("one")).expect("append");
+        let original_leaf = tree.append(user("original")).expect("append");
+        let branch_leaf = tree.append_to(&root, user("alternative")).expect("branch");
+        tree.append_to(&branch_leaf, user("follow-up")).expect("append");
+
+        let summary = tree.branch_summary_messages(&branch_leaf, &original_leaf);
+        let texts: Vec<String> = summary.iter().map(|m| m.text()).collect();
+        assert_eq!(texts, ["alternative".to_string()], "shared root is not repeated");
+
+        // Switching the other way reports the messages unique to that side.
+        let reverse = tree.branch_summary_messages(&original_leaf, &branch_leaf);
+        let reverse_texts: Vec<String> = reverse.iter().map(|m| m.text()).collect();
+        assert_eq!(reverse_texts, ["original".to_string()]);
     }
 
     #[test]

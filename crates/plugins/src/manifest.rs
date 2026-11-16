@@ -49,6 +49,15 @@ pub struct UiSurface {
     pub availability: Option<String>,
 }
 
+/// A pure-Rust Rhai script contributed by a plugin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptDecl {
+    /// Path to the `.rhai` script, relative to the plugin root.
+    pub module: PathBuf,
+    /// Operation limit per call (Rhai `set_max_operations`).
+    pub operations: Option<u64>,
+}
+
 /// A user-configurable plugin setting.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserConfigSpec {
@@ -75,6 +84,7 @@ pub struct PluginManifest {
     pub mcp_servers: Vec<McpServerDecl>,
     pub ui_surfaces: Vec<UiSurface>,
     pub user_config: Vec<UserConfigSpec>,
+    pub script: Option<ScriptDecl>,
 }
 
 impl PluginManifest {
@@ -142,6 +152,7 @@ impl PluginManifest {
             mcp_servers,
             ui_surfaces: parse_ui(value.get("ui")),
             user_config: parse_user_config(value.get("userConfig")),
+            script: parse_script(value.get("script"), root),
         })
     }
 
@@ -324,6 +335,24 @@ fn localized(value: Option<&Json>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn parse_script(value: Option<&Json>, root: &Path) -> Option<ScriptDecl> {
+    let script = value?;
+    let module = script.str_or("module", "");
+    if module.is_empty() {
+        return None;
+    }
+    let module = Path::new(&module);
+    let module = if module.is_absolute() {
+        module.to_path_buf()
+    } else {
+        root.join(module)
+    };
+    Some(ScriptDecl {
+        module,
+        operations: script.get("operations").and_then(Json::as_i64).map(|n| n as u64),
+    })
+}
+
 fn parse_user_config(value: Option<&Json>) -> Vec<UserConfigSpec> {
     let Some(Json::Obj(entries)) = value else {
         return Vec::new();
@@ -377,6 +406,23 @@ mod tests {
         assert_eq!(manifest.mcp_servers.len(), 1);
         assert_eq!(manifest.mcp_servers[0].kind, "stdio");
         assert_eq!(manifest.ui_surfaces[0].title, "Documents");
+    }
+
+    #[test]
+    fn parses_a_script_plugin_declaration() {
+        let root = scratch("script");
+        std::fs::write(
+            root.join("plugin.json"),
+            r#"{
+                "name": "hello",
+                "script": { "module": "plugin.rhai", "operations": 5000000 }
+            }"#,
+        )
+        .unwrap();
+        let manifest = PluginManifest::load(&root).expect("load");
+        let script = manifest.script.expect("script declaration");
+        assert_eq!(script.module, root.join("plugin.rhai"));
+        assert_eq!(script.operations, Some(5_000_000));
     }
 
     #[test]

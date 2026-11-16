@@ -10,8 +10,8 @@ pub mod roles;
 
 pub use agent_loop::{
     build_system_prompt, estimate_message_tokens, estimate_text_tokens, estimate_tokens,
-    prune_tool_spills, AbortHandle, Agent, AgentConfig, ApprovalScope, Budget, StreamFailure,
-    DEFAULT_MAX_TURNS,
+    prune_tool_spills, AbortHandle, Agent, AgentConfig, ApprovalScope, Budget, CacheWarming,
+    FollowUpMode, StreamFailure, DEFAULT_MAX_TURNS,
 };
 pub use guards::{canonical_args, canonical_json, repeat_key, BlockedCall, RecentCall};
 pub use child::ChildFactory;

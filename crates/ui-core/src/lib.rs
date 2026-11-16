@@ -12,8 +12,10 @@ pub mod icon;
 pub mod metrics;
 pub mod palette;
 pub mod transcript;
+pub mod ui_request;
 
 pub use command::Command;
+pub use ui_request::{UiBridge, UiMethod, UiRequest, UiResponse};
 pub use icon::{rgba as icon_rgba, write_ico};
 pub use metrics::{format_duration, format_tokens, progress_bar, Metrics};
 pub use palette::{Palette, Rgb, Role};

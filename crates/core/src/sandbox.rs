@@ -261,7 +261,7 @@ mod imp {
     /// Mandatory integrity control denies a Low process any write to a
     /// Medium-labeled object. An allow ACE for this SID re-opens exactly the
     /// directories the operator granted.
-    fn low_integrity_sid(out: &mut [u8; SECURITY_MAX_SID_SIZE as usize]) -> usize {
+    fn low_integrity_sid(out: &mut [u8; SECURITY_MAX_SID_SIZE]) -> usize {
         out[0] = 1; // revision
         out[1] = 1; // one sub-authority
         out[2..8].copy_from_slice(&[0, 0, 0, 0, 0, 16]); // identifier authority 16
@@ -872,7 +872,7 @@ mod imp {
             // A Unicode environment block must be sorted by name (case-
             // insensitive); an unsorted one makes CreateProcessAsUserW fail
             // with ERROR_INVALID_PARAMETER.
-            pairs.sort_by(|a, b| a.0.to_uppercase().cmp(&b.0.to_uppercase()));
+            pairs.sort_by_key(|(key, _)| key.to_uppercase());
             let mut env_block: Vec<u16> = Vec::new();
             for (key, value) in &pairs {
                 env_block.extend(format!("{}={} ", key, value).encode_utf16());
@@ -881,7 +881,7 @@ mod imp {
             // CreateProcessAsUserW requires the environment block to be
             // DWORD-aligned; Vec<u16> is 2-byte aligned, which fails with
             // ERROR_INVALID_PARAMETER.
-            let mut env_block_aligned = vec![0u32; (env_block.len() + 1) / 2];
+            let mut env_block_aligned = vec![0u32; env_block.len().div_ceil(2)];
             for (index, chunk) in env_block.chunks(2).enumerate() {
                 let lo = chunk[0] as u32;
                 let hi = if chunk.len() > 1 { (chunk[1] as u32) << 16 } else { 0 };

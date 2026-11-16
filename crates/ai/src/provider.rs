@@ -108,7 +108,9 @@ pub enum StreamEvent {
     Reasoning(String),
     /// 一个完整的原生思考块，带签名，必须随历史原样回传。
     ///
-    /// `signature` 缺失说明流在签名到达前就断了，这一块无法回传。
+    /// `signature` 缺失说明流在签名到达前就断了，这一块无法回传——除非
+    /// 协议本身不校验签名（OpenAI 兼容端点），那种块照存，序列化层决定
+    /// 以什么字段发回去。
     ReasoningBlock {
         text: String,
         signature: Option<String>,

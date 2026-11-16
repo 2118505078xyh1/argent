@@ -41,6 +41,9 @@ pub struct Config {
     pub tool_timeout_secs: u64,
     pub bash_timeout_secs: u64,
     pub approval_mode: ApprovalMode,
+    /// Models shown in the picker and allowed by model cycling. Empty means
+    /// every model from the provider catalog (Pi's `enabledModels`).
+    pub enabled_models: Vec<String>,
     /// Plugins to load at startup, by name; `all` loads every one.
     pub plugins: Vec<String>,
     pub allowed_tools: Vec<String>,
@@ -112,6 +115,7 @@ impl Default for Config {
             tool_timeout_secs: 300,
             bash_timeout_secs: 300,
             approval_mode: ApprovalMode::Sensible,
+            enabled_models: Vec::new(),
             plugins: Vec::new(),
             allowed_tools: Vec::new(),
             excluded_tools: Vec::new(),
@@ -174,6 +178,51 @@ impl Config {
     pub fn auth_header(&self) -> Option<String> {
         self.api_key.as_ref().map(|key| format!("Bearer {}", key))
     }
+
+    /// Whether a model id is in the configured scope. An empty scope admits
+    /// all models. Patterns support `*` wildcards; matching is case-insensitive
+    /// and also tries the bare id after `provider/`.
+    pub fn model_in_scope(&self, id: &str) -> bool {
+        if self.enabled_models.is_empty() {
+            return true;
+        }
+        let bare = id.rsplit('/').next().unwrap_or(id);
+        self.enabled_models.iter().any(|pattern| {
+            let pattern = pattern.trim();
+            if pattern.is_empty() {
+                return false;
+            }
+            glob_matches(pattern, id) || glob_matches(pattern, bare)
+        })
+    }
+}
+
+/// Minimal case-insensitive glob matcher: only `*` is special.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let text = text.to_ascii_lowercase();
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    let mut position = 0usize;
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if index == 0 {
+            if !text.starts_with(part) {
+                return false;
+            }
+            position = part.len();
+        } else {
+            match text[position..].find(part) {
+                Some(found) => position += found + part.len(),
+                None => return false,
+            }
+        }
+    }
+    pattern.ends_with('*') || position == text.len()
 }
 
 /// Path of the global config file.
@@ -255,6 +304,14 @@ pub fn merge_into(config: &mut Config, text: &str, source: &Path) -> Result<()> 
             "model" => {
                 if let Some(s) = val.as_str() {
                     config.model = s.to_string();
+                }
+            }
+            "enabledModels" | "enabled_models" => {
+                if let Some(items) = val.as_array() {
+                    config.enabled_models = items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect();
                 }
             }
             "thinkingLevel" | "thinking_level" => {
@@ -437,6 +494,17 @@ pub fn apply_env(config: &mut Config) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn enabled_models_scope_filters_ids_and_glob_patterns() {
+        let mut config = super::Config::default();
+        assert!(config.model_in_scope("anything"), "empty scope admits all");
+        config.enabled_models = vec!["gpt-*".into(), "anthropic/claude-sonnet-4".into()];
+        assert!(config.model_in_scope("gpt-5"));
+        assert!(config.model_in_scope("openai/GPT-4o"), "bare id matches, case-insensitive");
+        assert!(config.model_in_scope("anthropic/claude-sonnet-4"));
+        assert!(!config.model_in_scope("deepseek-v4"));
+    }
+
     use super::*;
 
     #[test]

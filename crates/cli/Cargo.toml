@@ -9,6 +9,11 @@ description = "argent command-line entry point"
 [lints]
 workspace = true
 
+[features]
+default = []
+# Pure-Rust in-process Rhai plugins. Adds ~1.5 MB (rhai) to the binary.
+script-plugins = ["argent-plugins/script-plugins"]
+
 [[bin]]
 name = "argent"
 path = "src/main.rs"

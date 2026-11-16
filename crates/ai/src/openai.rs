@@ -234,6 +234,19 @@ impl OpenAiProvider {
         let Some(Json::Arr(parts)) = value.get("content").cloned() else {
             return json.to_string();
         };
+        // Reasoning blocks travel back as the `reasoning_content` field the
+        // endpoint generated them with (llama.cpp, DeepSeek): keeping the
+        // assistant turn byte-identical to what the model produced is what
+        // lets a KV-cache-backed server hit its prefix.
+        let mut reasoning = String::new();
+        for part in parts.iter() {
+            if part.str_or("type", "") == "thinking" {
+                reasoning.push_str(&part.str_or("thinking", ""));
+            }
+        }
+        if !reasoning.is_empty() {
+            value.set("reasoning_content", Json::string(reasoning));
+        }
         let kept: Vec<Json> = parts
             .into_iter()
             .filter(|part| {
@@ -492,6 +505,11 @@ fn split_http_url(url: &str) -> Result<(String, u16, String)> {
 #[derive(Debug, Default)]
 struct StreamAccumulator {
     calls: Vec<PartialCall>,
+    /// The model's reasoning, streamed separately from the answer. Kept so
+    /// the next request can resend it verbatim: a KV-cache-backed endpoint
+    /// (llama.cpp, DeepSeek) matches prefixes against what it generated, so
+    /// dropping this text invalidates the whole assistant turn's cache.
+    reasoning: String,
 }
 
 #[derive(Debug, Default)]
@@ -503,6 +521,14 @@ struct PartialCall {
 
 impl StreamAccumulator {
     fn apply(&mut self, delta: &Json) {
+        let reasoning = delta
+            .get("reasoning_content")
+            .or_else(|| delta.get("reasoning"))
+            .and_then(Json::as_str)
+            .unwrap_or("");
+        if !reasoning.is_empty() {
+            self.reasoning.push_str(reasoning);
+        }
         if let Some(Json::Arr(calls)) = delta.get("tool_calls") {
             for call in calls {
                 let index = call.get("index").and_then(Json::as_i64).unwrap_or(0) as usize;
@@ -527,6 +553,16 @@ impl StreamAccumulator {
 
     fn finish(self) -> Vec<StreamEvent> {
         let mut events = Vec::new();
+        if !self.reasoning.is_empty() {
+            // No signature: OpenAI-compatible endpoints do not check one.
+            // The agent stores it and the request builder resends it as
+            // `reasoning_content`, keeping the wire prefix identical to what
+            // the model generated.
+            events.push(StreamEvent::ReasoningBlock {
+                text: self.reasoning,
+                signature: None,
+            });
+        }
         for (index, call) in self.calls.into_iter().enumerate() {
             if call.name.is_empty() {
                 continue;
@@ -1018,13 +1054,15 @@ mod tests {
     }
 
     #[test]
-    fn thinking_blocks_are_stripped_from_openai_requests() {
-        // 这些块只对 Anthropic 有意义；OpenAI 兼容端点不认识该类型。
+    fn thinking_blocks_travel_back_as_reasoning_content() {
+        // OpenAI 兼容端点（llama.cpp、DeepSeek）生成时带着 reasoning；下一
+        // 轮请求把它作为 reasoning_content 原样带回，KV 缓存的前缀才能命中。
+        // 签名本身不外发——那是 Anthropic 的概念。
         let mut assistant = Message::assistant("answer");
         assistant.content.insert(
             0,
             crate::message::Content::Thinking {
-                text: "hidden reasoning".to_string(),
+                text: "visible reasoning".to_string(),
                 signature: "sig-abc".to_string(),
             },
         );
@@ -1032,8 +1070,10 @@ mod tests {
         let cached =
             ChatRequest::new("m1", Vec::new()).with_wire_messages(std::sync::Arc::new(wire));
         let dumped = OpenAiProvider::build_body(&cached).dump();
-        assert!(!dumped.contains("hidden reasoning"), "{}", dumped);
+        assert!(dumped.contains("visible reasoning"), "{}", dumped);
+        assert!(dumped.contains("reasoning_content"), "{}", dumped);
         assert!(!dumped.contains("sig-abc"), "{}", dumped);
+        assert!(!dumped.contains("\"type\":\"thinking\""), "{}", dumped);
         assert!(dumped.contains("answer"), "{}", dumped);
     }
 

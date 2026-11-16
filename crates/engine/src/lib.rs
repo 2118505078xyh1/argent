@@ -731,6 +731,26 @@ fn build_agent(
         plugin_manager.apply_state(settings);
     }
     registry.add_builtin_plugins();
+
+    // Pure-Rust script plugins (same loader as the CLI) contribute tools
+    // before the tool-search catalog and system prompt are built.
+    #[cfg(feature = "script-plugins")]
+    {
+        let storage = settings
+            .as_ref()
+            .map(|s| s.paths().storage().to_path_buf())
+            .unwrap_or_else(|| argent_config::Paths::new(cwd).storage().to_path_buf());
+        let script_ctx = argent_tools::ToolCtx::new(cwd.clone());
+        argent_plugins::load_script_plugins(
+            &plugin_manager,
+            &mut registry,
+            &script_ctx,
+            cwd,
+            &storage,
+            &mut |line| eprintln!("{line}"),
+        );
+    }
+
     for tool in argent_plugin::loader::load_all(cwd) {
         registry.register(tool);
     }
@@ -818,6 +838,14 @@ fn build_agent(
     agent_config.reasoning_effort = Some(config.thinking_level.clone());
     agent_config.promoted = Some(std::sync::Arc::clone(&promotions));
     agent_config.approval_scope = ApprovalScope::DestructiveOnly;
+    if let Some(settings) = &settings {
+        if let Some(mode) = settings.string("followUpMode") {
+            agent_config.follow_up_mode = argent_agent::FollowUpMode::parse(mode);
+        }
+        if let Some(policy) = settings.string("cacheWarming") {
+            agent_config.cache_warming = argent_agent::CacheWarming::parse(policy);
+        }
+    }
     // 每次用户 prompt 开始一轮运行；检查点按这个粒度回滚。
     {
         let checkpoints = checkpoints.clone();
@@ -848,8 +876,18 @@ fn build_agent(
                 tool_input: Some(args.dump()),
                 ..argent_hooks::HookContext::default()
             };
+            spawn_async_hooks(
+                &config_for_pre,
+                argent_hooks::HookEvent::PreToolUse,
+                &ctx,
+                &event_for_pre,
+            );
             let mut block = None;
-            for hook in config_for_pre.for_event(argent_hooks::HookEvent::PreToolUse, Some(name)) {
+            for hook in config_for_pre
+                .for_event(argent_hooks::HookEvent::PreToolUse, Some(name))
+                .into_iter()
+                .filter(|hook| !hook.async_hook)
+            {
                 let outcome = argent_hooks::run_command(argent_hooks::HookEvent::PreToolUse, hook, &ctx);
                 if !outcome.success {
                     let _ = event_for_pre.send(UiEvent::Agent(AgentEvent::Notice(format!(
@@ -884,7 +922,12 @@ fn build_agent(
                 tool_input: Some(args.dump()),
                 ..argent_hooks::HookContext::default()
             };
-            for hook in config_for_post.for_event(event, Some(name)) {
+            spawn_async_hooks(&config_for_post, event, &ctx, &event_for_post);
+            for hook in config_for_post
+                .for_event(event, Some(name))
+                .into_iter()
+                .filter(|hook| !hook.async_hook)
+            {
                 let outcome = argent_hooks::run_command(event, hook, &ctx);
                 if !outcome.success {
                     let _ = event_for_post.send(UiEvent::Agent(AgentEvent::Notice(format!(
@@ -1096,6 +1139,26 @@ fn build_agent(
 /// 截取 hook 输出用于显示：stderr 优先，去换行，限 300 字符。
 ///
 /// 与 CLI 的同名逻辑保持一致，桌面端通知面板空间有限。
+/// Schedule async hooks and report their output on `event_tx` once they
+/// finish. Never blocks the tool call that triggered them.
+fn spawn_async_hooks(
+    config: &argent_hooks::HookConfig,
+    event: argent_hooks::HookEvent,
+    ctx: &argent_hooks::HookContext,
+    event_tx: &std::sync::mpsc::Sender<UiEvent>,
+) {
+    let run = argent_hooks::run_async(config, event, ctx);
+    if run.is_empty() {
+        return;
+    }
+    let tx = event_tx.clone();
+    std::thread::spawn(move || {
+        for outcome in run.collect() {
+            let _ = tx.send(UiEvent::Agent(AgentEvent::Notice(outcome.as_notice())));
+        }
+    });
+}
+
 fn clip_hook_output(stdout: &str, stderr: &str) -> String {
     let text = if !stderr.trim().is_empty() {
         stderr.trim()

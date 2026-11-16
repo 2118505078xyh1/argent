@@ -628,7 +628,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn command_targets_covers_deletes_and_moves() {
         assert_eq!(
             command_targets("rm -rf build dist"),

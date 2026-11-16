@@ -28,6 +28,8 @@ use argent_core::process::CommandSpec;
 use crate::registry::ToolRegistry;
 use crate::tool::{arg_str, schema_object, Tool, ToolCtx, ToolResult};
 
+use rhai::{Dynamic, Engine, Map, Scope};
+
 /// Executes one tool call on behalf of a script.
 pub type ToolRunner = Arc<dyn Fn(&str, &Json) -> Result<ToolResult> + Send + Sync>;
 
@@ -133,11 +135,29 @@ impl ToolGate {
 /// The `code` tool.
 pub struct CodeTool {
     runner: RunnerSlot,
+    /// Small JSON values kept across `code` calls in one process, exposed to
+    /// Rhai scripts as `store(key, value)` / `load(key)`. Writes made by a
+    /// script that fails are discarded.
+    store: Arc<Mutex<BTreeMap<String, Json>>>,
 }
 
 impl CodeTool {
     pub fn new(runner: RunnerSlot) -> CodeTool {
-        CodeTool { runner }
+        CodeTool {
+            runner,
+            store: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    /// Share a store with other components (e.g. a session-scoped holder).
+    pub fn with_store(mut self, store: Arc<Mutex<BTreeMap<String, Json>>>) -> CodeTool {
+        self.store = store;
+        self
+    }
+
+    /// A cloneable handle to this tool's store.
+    pub fn store_handle(&self) -> Arc<Mutex<BTreeMap<String, Json>>> {
+        Arc::clone(&self.store)
     }
 
     /// The tool with no runner installed; every call reports that clearly.
@@ -152,15 +172,16 @@ impl Tool for CodeTool {
     }
 
     fn description(&self) -> &str {
-        "Run one script that calls tools through argent.call(name, args). Use it to \
+        "Run one script that calls tools through argent_call(name, args). Use it to \
          replace many tool round trips with one: read many files, filter results, \
-         loop. python or javascript."
+         loop. Prefer 'rhai' (pure Rust, built in); python and javascript need an \
+         external interpreter on PATH."
     }
 
     fn parameters(&self) -> Json {
         schema_object(
             vec![
-                ("language", "string", "Interpreter: python or javascript"),
+                ("language", "string", "Script language: rhai (built in), python or javascript"),
                 ("source", "string", "The script body"),
             ],
             vec!["language", "source"],
@@ -191,7 +212,7 @@ impl Tool for CodeTool {
                 }
             }
         };
-        run_script(&language, &source, ctx, runner)
+        run_script(&language, &source, ctx, runner, &self.store)
     }
 }
 
@@ -200,6 +221,8 @@ impl Tool for CodeTool {
 enum Flavor {
     Python,
     JavaScript,
+    /// Pure-Rust embedded Rhai: no external interpreter, no HTTP callback.
+    Rhai,
 }
 
 impl Flavor {
@@ -207,8 +230,9 @@ impl Flavor {
         match name.trim().to_ascii_lowercase().as_str() {
             "python" | "py" | "python3" => Ok(Flavor::Python),
             "javascript" | "js" | "node" => Ok(Flavor::JavaScript),
+            "rhai" => Ok(Flavor::Rhai),
             other => Err(Error::tool(format!(
-                "unknown language '{}'; use python or javascript",
+                "unknown language '{}'; use rhai, python or javascript",
                 other
             ))),
         }
@@ -218,6 +242,7 @@ impl Flavor {
         match self {
             Flavor::Python => &["python", "python3"],
             Flavor::JavaScript => &["node"],
+            Flavor::Rhai => &[],
         }
     }
 
@@ -225,6 +250,7 @@ impl Flavor {
         match self {
             Flavor::Python => "py",
             Flavor::JavaScript => "js",
+            Flavor::Rhai => "rhai",
         }
     }
 
@@ -233,6 +259,7 @@ impl Flavor {
         match self {
             Flavor::Python => PYTHON_PRELUDE,
             Flavor::JavaScript => JS_PRELUDE,
+            Flavor::Rhai => "", // host functions are registered into the engine
         }
     }
 }
@@ -284,8 +311,12 @@ fn run_script(
     source: &str,
     ctx: &ToolCtx,
     runner: ToolRunner,
+    store: &Arc<Mutex<BTreeMap<String, Json>>>,
 ) -> Result<ToolResult> {
     let flavor = Flavor::parse(language)?;
+    if flavor == Flavor::Rhai {
+        return run_rhai(source, ctx, runner, store);
+    }
     let program = find_program(flavor).ok_or_else(|| {
         Error::tool(format!(
             "code mode needs one of {} on PATH",
@@ -410,6 +441,166 @@ fn run_script(
     metadata.set("exit", Json::num(output.status as f64));
     metadata.set("interrupted", Json::bool(output.interrupted));
     Ok(result.with_metadata(metadata))
+}
+
+/// Run a Rhai script entirely in-process: no external interpreter, no HTTP
+/// callback server. `argent_call(name, args)` invokes the very same gated
+/// tool runner the HTTP callback path uses.
+fn run_rhai(
+    source: &str,
+    _ctx: &ToolCtx,
+    runner: ToolRunner,
+    store: &Arc<Mutex<BTreeMap<String, Json>>>,
+) -> Result<ToolResult> {
+    // Work on a copy: writes are committed only when the whole script succeeds.
+    let staged = Arc::new(Mutex::new(
+        store.lock().map(|map| map.clone()).unwrap_or_default(),
+    ));
+
+    let mut engine = Engine::new();
+    engine.set_max_expr_depths(256, 256);
+    engine.set_max_operations(10_000_000);
+    engine.set_max_string_size(16 * 1024 * 1024);
+    engine.set_max_array_size(100_000);
+    engine.set_max_map_size(100_000);
+
+    // Collect print() lines as the script's stdout.
+    let output_lines = Arc::new(Mutex::new(Vec::<String>::new()));
+    let print_lines = Arc::clone(&output_lines);
+    engine.on_print(move |line| {
+        if let Ok(mut lines) = print_lines.lock() {
+            lines.push(line.to_string());
+        }
+    });
+
+    // argent_call(name, args_map) -> String: run one tool through the gate.
+    engine.register_fn(
+        "argent_call",
+        move |name: String, args: Map| -> std::result::Result<String, Box<rhai::EvalAltResult>> {
+            let json_args = map_to_json(&args);
+            let result = runner(&name, &json_args).map_err(|e| {
+                Box::new(rhai::EvalAltResult::ErrorRuntime(
+                    format!("tool {name} failed: {e}").into(),
+                    rhai::Position::NONE,
+                ))
+            })?;
+            if result.is_error && !result.content.is_empty() {
+                // Surface the tool's error text as a script error so agents see
+                // it even if the script ignores return values.
+                return Err(Box::new(rhai::EvalAltResult::ErrorRuntime(
+                    result.content.into(),
+                    rhai::Position::NONE,
+                )));
+            }
+            Ok(result.content)
+        },
+    );
+
+    // store(key, value) / load(key): small JSON values shared across calls.
+    // `store` deletes the key when value is unit (Rhai's `()`).
+    let store_write = Arc::clone(&staged);
+    engine.register_fn("store", move |key: String, value: Dynamic| {
+        if let Ok(mut map) = store_write.lock() {
+            if value.is_unit() {
+                map.remove(&key);
+            } else {
+                map.insert(key, dynamic_to_json(&value));
+            }
+        }
+    });
+    let store_read = Arc::clone(&staged);
+    engine.register_fn("load", move |key: String| -> Dynamic {
+        let found = store_read
+            .lock()
+            .ok()
+            .and_then(|map| map.get(&key).cloned());
+        found.map(|value| json_to_dynamic(&value)).unwrap_or(Dynamic::UNIT)
+    });
+
+    let mut scope = Scope::new();
+    let result = engine.run_with_scope(&mut scope, source);
+    // Commit staged writes only on success (Pi semantics: failed scripts do not
+    // persist their state).
+    if result.is_ok() {
+        if let (Ok(mut destination), Ok(staged_map)) = (store.lock(), staged.lock()) {
+            *destination = staged_map.clone();
+        }
+    }
+    let lines = output_lines
+        .lock()
+        .map(|list| list.clone())
+        .unwrap_or_default();
+    let stdout = lines.join("\n");
+    let mut text = String::new();
+    if !stdout.is_empty() {
+        text.push_str("--- stdout ---\n");
+        text.push_str(&clip(&stdout, 40_000));
+        text.push('\n');
+    }
+    if stdout.is_empty() {
+        text.push_str("(the script printed nothing)\n");
+    }
+    match result {
+        Ok(()) => Ok(ToolResult::ok(text)),
+        Err(error) => Ok(ToolResult::error(format!(
+            "rhai script failed: {error}\n\n{text}"
+        ))),
+    }
+}
+
+/// Convert a Rhai map (the `args` argument of `argent_call`) to JSON.
+fn map_to_json(map: &Map) -> Json {
+    let mut out = Json::obj();
+    for (key, value) in map {
+        out.set(key.as_str(), dynamic_to_json(value));
+    }
+    out
+}
+
+fn dynamic_to_json(value: &Dynamic) -> Json {
+    if let Some(map) = value.clone().try_cast::<Map>() {
+        return map_to_json(&map);
+    }
+    if let Some(array) = value.clone().try_cast::<rhai::Array>() {
+        return Json::Arr(array.iter().map(dynamic_to_json).collect());
+    }
+    if let Some(flag) = value.clone().try_cast::<bool>() {
+        return Json::Bool(flag);
+    }
+    if let Some(number) = value.clone().try_cast::<f64>() {
+        return Json::Num(number);
+    }
+    if let Some(number) = value.clone().try_cast::<i64>() {
+        return Json::Num(number as f64);
+    }
+    if let Some(text) = value.clone().try_cast::<String>() {
+        return Json::Str(text);
+    }
+    Json::Null
+}
+
+/// Convert a JSON value to a Rhai dynamic, for `load(key)` results.
+fn json_to_dynamic(value: &Json) -> Dynamic {
+    match value {
+        Json::Null => Dynamic::UNIT,
+        Json::Bool(flag) => Dynamic::from(*flag),
+        Json::Num(number) => Dynamic::from(*number),
+        Json::Str(text) => Dynamic::from(text.clone()),
+        Json::Arr(items) => Dynamic::from(
+            items
+                .iter()
+                .map(json_to_dynamic)
+                .collect::<rhai::Array>(),
+        ),
+        Json::Obj(entries) => {
+            let mut map = Map::new();
+            for (key, child) in entries {
+                map.insert(key.clone().into(), json_to_dynamic(child));
+            }
+            Dynamic::from(map)
+        }
+        Json::Raw(text) => Dynamic::from(text.clone()),
+    }
 }
 
 /// Answer one callback request.
@@ -559,6 +750,7 @@ fn clip(text: &str, max: usize) -> String {
 /// The runtime viewer: which interpreters are available for code mode.
 pub fn available_languages() -> BTreeMap<&'static str, Option<String>> {
     let mut map = BTreeMap::new();
+    map.insert("rhai", Some("built in".to_string()));
     map.insert("python", find_program(Flavor::Python));
     map.insert("javascript", find_program(Flavor::JavaScript));
     map
@@ -581,6 +773,73 @@ mod tests {
         assert!(Flavor::parse("ruby").is_err());
         assert_eq!(Flavor::parse("PY").unwrap(), Flavor::Python);
         assert_eq!(Flavor::parse("node").unwrap(), Flavor::JavaScript);
+        assert_eq!(Flavor::parse("rhai").unwrap(), Flavor::Rhai);
+    }
+
+    #[test]
+    fn rhai_scripts_run_in_process_and_call_tools() {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = Arc::clone(&calls);
+        let runner: ToolRunner = Arc::new(move |name, args| {
+            sink.lock().unwrap().push(format!("{name}:{}", args.str_or("text", "")));
+            Ok(ToolResult::ok(format!("called {name}")))
+        });
+        let result = run_rhai(
+            r#"
+                let first = argent_call("echo", #{ text: "hello" });
+                print(first);
+                let second = argent_call("echo", #{ text: "world" });
+                print(second);
+            "#,
+            &ctx(),
+            runner,
+            &Arc::new(Mutex::new(BTreeMap::new())),
+        )
+        .expect("rhai script runs");
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("called echo"), "{}", result.content);
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            ["echo:hello", "echo:world"]
+        );
+    }
+
+    #[test]
+    fn rhai_store_persists_across_calls_and_discards_failed_writes() {
+        let runner: ToolRunner = Arc::new(|_name: &str, _args: &Json| {
+            Ok::<ToolResult, argent_core::error::Error>(ToolResult::ok("ok"))
+        });
+        let store = Arc::new(Mutex::new(BTreeMap::new()));
+        let result = run_rhai(
+            r#"store("cursor", 42); store("tags", ["a", "b"]); print(load("cursor")); "#,
+            &ctx(),
+            Arc::clone(&runner),
+            &store,
+        )
+        .expect("store script");
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains('4'), "{}", result.content);
+        {
+            let guard = store.lock().unwrap();
+            let cursor: Option<&Json> = guard.get("cursor");
+            assert_eq!(cursor, Some(&Json::num(42.0)));
+        }
+
+        // A failed script's writes must not be committed.
+        let failed = run_rhai(
+            r#"store("cursor", 99); store("should_not_exist", true); missing_function_here(); "#,
+            &ctx(),
+            Arc::clone(&runner),
+            &store,
+        )
+        .expect("failed script returns a ToolResult");
+        assert!(failed.is_error, "{}", failed.content);
+        {
+            let guard = store.lock().unwrap();
+            let cursor: Option<&Json> = guard.get("cursor");
+            assert_eq!(cursor, Some(&Json::num(42.0)));
+            assert!(guard.get("should_not_exist").is_none());
+        }
     }
 
     #[test]

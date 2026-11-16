@@ -13,3 +13,4 @@ workspace = true
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }
 argent-memory = { path = "../memory" }
+rhai = { version = "1", default-features = false, features = ["std", "sync"] }

@@ -9,6 +9,10 @@ description = "The agent worker behind every UI: sessions, commands, events and 
 [lints]
 workspace = true
 
+[features]
+default = []
+script-plugins = ["argent-plugins/script-plugins"]
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }

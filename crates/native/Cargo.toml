@@ -9,6 +9,10 @@ description = "argent native desktop frontend (iced, no WebView)"
 [lints]
 workspace = true
 
+[features]
+default = []
+script-plugins = ["argent-engine/script-plugins"]
+
 [[bin]]
 name = "argent-native"
 path = "src/main.rs"

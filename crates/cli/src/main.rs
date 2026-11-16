@@ -343,12 +343,29 @@ pub fn run(raw: &[String]) -> Result<i32> {
     let mut base_registry = ToolRegistry::with_core();
     base_registry.add_builtin_plugins();
 
+    let mut plugin_manager = PluginManager::for_workspace(&cli.cwd);
+    plugin_manager.apply_state(&settings);
+
+    // Pure-Rust script plugins contribute tools and slash commands. They are
+    // loaded before the system prompt is built so their schemas are visible to
+    // the model. A broken plugin reports a notice but never blocks startup.
+    #[cfg(feature = "script-plugins")]
+    {
+        let script_ctx = build_ctx(&config, &cli.cwd);
+        argent_plugins::load_script_plugins(
+            &plugin_manager,
+            &mut base_registry,
+            &script_ctx,
+            &cli.cwd,
+            settings.paths().storage(),
+            &mut |line| eprintln!("{line}"),
+        );
+    }
+
     // MCP servers contribute tools under `mcp__<server>__<tool>`.
     // Plugins add their declared servers to the same configuration before the
     // connection is opened, so an installed ZCode office plugin contributes its
     // tools the same way a hand-written mcp.json does.
-    let mut plugin_manager = PluginManager::for_workspace(&cli.cwd);
-    plugin_manager.apply_state(&settings);
     let telemetry = argent_telemetry::Telemetry::from_settings(&settings, &cli.cwd);
     {
         let mut data = Json::obj();
@@ -498,6 +515,12 @@ pub fn run(raw: &[String]) -> Result<i32> {
     let mut agent_config = AgentConfig::new(config.model.clone());
     agent_config.promoted = Some(Arc::clone(&promotions));
     agent_config.reasoning_effort = Some(config.thinking_level.clone());
+    if let Some(mode) = settings.string("followUpMode") {
+        agent_config.follow_up_mode = argent_agent::FollowUpMode::parse(mode);
+    }
+    if let Some(policy) = settings.string("cacheWarming") {
+        agent_config.cache_warming = argent_agent::CacheWarming::parse(policy);
+    }
     if let Some(turns) = cli
         .max_turns
         .or_else(|| profile.as_ref().and_then(|p| p.max_turns))
@@ -551,18 +574,41 @@ pub fn run(raw: &[String]) -> Result<i32> {
     // Lifecycle hooks. Only trusted hook documents run: a plugin hook is a
     // shell command with the operator's privileges.
     let hook_config = Arc::new(load_hooks(&plugin_manager, &cli.cwd));
+    let checkpoints_for_pre = checkpoints.clone();
+    let cwd_for_checkpoint = cli.cwd.clone();
     if !hook_config.is_empty() {
         let config_for_pre = Arc::clone(&hook_config);
         let cwd = cli.cwd.clone();
+        let checkpoints_for_hook = checkpoints_for_pre.clone();
         agent_config.pre_tool = Some(Arc::new(move |name, args| {
+            // bash 的删除/移动进检查点，与 hook 同处一个回调：此前这里被
+            // 两个 pre_tool 赋值互相覆盖，导致生命周期 hook 在 CLI 里从不执行。
+            if name == "bash" {
+                let command = args.get("command").and_then(Json::as_str).unwrap_or("");
+                checkpoints_for_hook.record_command_targets(command, &cwd);
+            }
             let ctx = HookContext {
                 cwd: cwd.clone(),
                 tool_name: Some(name.to_string()),
                 tool_input: Some(args.dump()),
                 ..HookContext::default()
             };
+            // Async hooks run in the background; their output is reported when
+            // they finish and never blocks this tool call.
+            let async_run = argent_hooks::run_async(&config_for_pre, HookEvent::PreToolUse, &ctx);
+            if !async_run.is_empty() {
+                std::thread::spawn(move || {
+                    for outcome in async_run.collect() {
+                        eprintln!("{}", outcome.as_notice());
+                    }
+                });
+            }
             let mut block = None;
-            for hook in config_for_pre.for_event(HookEvent::PreToolUse, Some(name)) {
+            for hook in config_for_pre
+                .for_event(HookEvent::PreToolUse, Some(name))
+                .into_iter()
+                .filter(|hook| !hook.async_hook)
+            {
                 let outcome = argent_hooks::run_command(HookEvent::PreToolUse, hook, &ctx);
                 if !outcome.success {
                     eprintln!(
@@ -581,17 +627,12 @@ pub fn run(raw: &[String]) -> Result<i32> {
             }
             block
         }));
-    }
-
-    // bash 的删除/移动也进检查点：执行前扫描命令目标并快照。检查点不是
-    // 门禁——识别失败时命令照常跑，只是少一层可回滚。
-    {
-        let checkpoints = checkpoints.clone();
-        let cwd = cli.cwd.clone();
+    } else {
+        // No hook document: still record bash targets for checkpoints.
         agent_config.pre_tool = Some(Arc::new(move |name, args| {
             if name == "bash" {
                 let command = args.get("command").and_then(Json::as_str).unwrap_or("");
-                checkpoints.record_command_targets(command, &cwd);
+                checkpoints_for_pre.record_command_targets(command, &cwd_for_checkpoint);
             }
             None
         }));
@@ -612,7 +653,19 @@ pub fn run(raw: &[String]) -> Result<i32> {
                 tool_input: Some(args.dump()),
                 ..HookContext::default()
             };
-            for hook in config_for_post.for_event(event, Some(name)) {
+            let async_run = argent_hooks::run_async(&config_for_post, event, &ctx);
+            if !async_run.is_empty() {
+                std::thread::spawn(move || {
+                    for outcome in async_run.collect() {
+                        eprintln!("{}", outcome.as_notice());
+                    }
+                });
+            }
+            for hook in config_for_post
+                .for_event(event, Some(name))
+                .into_iter()
+                .filter(|hook| !hook.async_hook)
+            {
                 let outcome = argent_hooks::run_command(event, hook, &ctx);
                 if !outcome.success {
                     eprintln!(
