@@ -512,9 +512,6 @@ argent --sessions               列出已有会话
   token、缓存命中率和估算花费；`ARGENT_USAGE_PATH` 可覆盖路径。
 - 思考强度 `auto`（默认）：短问答/单文件修改走 low/medium，重构、调试、
   架构/性能分析走 high；也可以显式 `--thinking low|medium|high|max`。
-- 仓库索引 `repo_map`：扫描文件、顶层符号和 import，缓存在
-  `~/.argent/index/`；`{"query":"build_agent"}` 找符号，`{"path":"src/lib.rs"}`
-  看行号大纲，先查索引再按行 `read`，不用整文件读。
 - 压缩保结构：摘要固定保留改过的文件、失败命令/错误、关键 `- old / + new`
   diff、决策和下一步，只压缩散文与重复工具输出。
 - 协议 steering：`--rpc` 增加 `steer` 方法，HTTP 增加 `POST /v1/steer`，

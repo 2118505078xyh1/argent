@@ -29,7 +29,7 @@ use argent_provider::ProviderCatalog;
 use argent_pty::ServiceTool;
 use argent_session::SessionIndex;
 use argent_tools::{
-    CatalogEntry, CodeTool, DelegateBatch, DelegateHandle, DelegateTool, SkillRegistry, SkillTool,
+    CatalogEntry, DelegateBatch, DelegateHandle, DelegateTool, SkillRegistry, SkillTool,
     ToolCtx, ToolRegistry, ToolSearchTool,
 };
 
@@ -410,14 +410,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
         Box::new(SkillTool::new(Arc::clone(&skills))),
     );
 
-    // Code mode: the tool runs an interpreter, which calls back into this
-    // registry over loopback. The runner is installed below, once the registry
-    // exists.
-    let code_runner: argent_tools::RunnerSlot = Arc::new(Mutex::new(None));
-    base_registry.register_plugin_tool(
-        argent_tools::plugin::CODE,
-        Box::new(CodeTool::new(Arc::clone(&code_runner))),
-    );
     base_registry.register_plugin_tool(
         argent_tools::plugin::DELEGATE,
         Box::new(DelegateTool::disabled()),
@@ -915,29 +907,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
         tool_ctx
             .vars
             .insert("ask_channel".to_string(), "terminal".to_string());
-    }
-
-    {
-        let registry_for_code = Arc::clone(&registry);
-        let ctx_for_code = tool_ctx.clone();
-        // 脚本里的每次 argent.call 都过和模型直接调用相同的门禁：策略、钩子、
-        // 审批和审计，否则 `code` 就是绕过策略的通道。
-        let gate = argent_tools::ToolGate {
-            policy: agent_config.policy.clone(),
-            audit: agent_config.audit.clone(),
-            pre_tool: agent_config.pre_tool.clone(),
-            post_tool: agent_config.post_tool.clone(),
-            approve: agent_config.approve.clone(),
-            approve_all_mutating: matches!(
-                agent_config.approval_scope,
-                argent_agent::ApprovalScope::AllMutating
-            ),
-        };
-        if let Ok(mut slot) = code_runner.lock() {
-            *slot = Some(Arc::new(move |name: &str, args: &Json| {
-                gate.run(&registry_for_code, &ctx_for_code, name, args)
-            }));
-        }
     }
 
     // 每次用户 prompt 开始新一轮运行；整轮中的写入（含子代理）记在同一号下。

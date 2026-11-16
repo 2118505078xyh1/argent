@@ -16,10 +16,9 @@
 //! is registered but off costs one line in the system prompt note and nothing
 //! in the request body.
 
-use crate::bash::{BashTool, CurrentTimeTool};
-use crate::fs_tools::{EditTool, FindTool, GrepTool, LsTool, ReadTool, WriteTool};
+use crate::bash::BashTool;
+use crate::fs_tools::{EditTool, FindTool, GrepTool, ReadTool, WriteTool};
 use crate::memory_tool::MemoryTool;
-use crate::repomap::RepoMapTool;
 use crate::state_tools::{AskTool, SubmitPlanTool, TodoTool};
 use crate::tool::Tool;
 use crate::websearch::WebSearchTool;
@@ -38,8 +37,6 @@ pub const WEB: &str = "web";
 pub const CODEINTEL: &str = "codeintel";
 /// Commands that outlive a turn.
 pub const JOBS: &str = "jobs";
-/// A script that calls tools over loopback.
-pub const CODE: &str = "code";
 /// Child agents with a narrower tool set.
 pub const DELEGATE: &str = "delegate";
 /// Browser, desktop and pseudoterminal control.
@@ -65,7 +62,6 @@ pub fn summary(name: &str) -> Option<&'static str> {
         WEB => "web search and current time",
         CODEINTEL => "language-server queries and structural search",
         JOBS => "background commands, logs and kill",
-        CODE => "run a script that calls tools",
         DELEGATE => "run a task in a child agent",
         DEVICE => "browser, desktop and pseudoterminal control",
         OFFICE => "read text from DOCX, PPTX, XLSX and PDF files",
@@ -101,12 +97,7 @@ pub fn builtin_plugins() -> Vec<Plugin> {
         Plugin {
             name: EXPLORE,
             summary: summary(EXPLORE).unwrap_or_default(),
-            tools: vec![
-                Box::new(GrepTool),
-                Box::new(FindTool),
-                Box::new(LsTool),
-                Box::new(RepoMapTool),
-            ],
+            tools: vec![Box::new(GrepTool), Box::new(FindTool)],
         },
         Plugin {
             name: PLAN,
@@ -125,7 +116,7 @@ pub fn builtin_plugins() -> Vec<Plugin> {
         Plugin {
             name: WEB,
             summary: summary(WEB).unwrap_or_default(),
-            tools: vec![Box::new(WebSearchTool), Box::new(CurrentTimeTool)],
+            tools: vec![Box::new(WebSearchTool)],
         },
         Plugin {
             name: OFFICE,

@@ -412,11 +412,8 @@ mod tests {
             "bash",
             "grep",
             "find",
-            "ls",
-            "repo_map",
             "todo",
             "ask",
-            "current_time",
         ] {
             assert!(
                 names.contains(&expected.to_string()),
@@ -451,7 +448,7 @@ mod tests {
         registry.add_builtin_plugins();
         assert!(registry.enable_plugin(plugin::EXPLORE));
         let live = registry.enabled_names();
-        for name in ["grep", "find", "ls"] {
+        for name in ["grep", "find"] {
             assert!(live.contains(&name.to_string()), "{} not listed", name);
         }
         assert!(!live.contains(&"todo".to_string()));
@@ -492,7 +489,7 @@ mod tests {
         registry.add_builtin_plugins();
         let note = registry.plugin_note();
         assert!(note.contains("explore"));
-        assert!(note.contains("grep, find, ls"));
+        assert!(note.contains("grep, find"));
         assert!(!note.contains("read ("));
         registry.enable_plugin(plugin::EXPLORE);
         assert!(!registry.plugin_note().contains("- explore:"));

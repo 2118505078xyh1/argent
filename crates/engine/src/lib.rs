@@ -23,7 +23,7 @@ use argent_core::json::Json;
 use argent_provider::ProviderCatalog;
 use argent_session::{entries_to_messages, Entry, SessionIndex, SessionStore};
 use argent_tools::{
-    CatalogEntry, CheckpointStore, CodeTool, DelegateBatch, DelegateHandle, DelegateTool, RunnerSlot,
+    CatalogEntry, CheckpointStore, DelegateBatch, DelegateHandle, DelegateTool,
     SkillRegistry, SkillTool, ToolCtx, ToolRegistry, ToolSearchTool,
 };
 use argent_ui_core::Command;
@@ -752,16 +752,6 @@ fn build_agent(
         Box::new(SkillTool::new(std::sync::Arc::clone(&skills))),
     );
 
-    // Code mode: the tool runs an interpreter, which calls back into this
-    // registry over loopback. The runner slot is filled below, once the
-    // registry is behind an `Arc`; registering the tool first keeps the
-    // catalog and the plugin table complete.
-    let code_runner: RunnerSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
-    registry.register_plugin_tool(
-        argent_tools::plugin::CODE,
-        Box::new(CodeTool::new(std::sync::Arc::clone(&code_runner))),
-    );
-
     // MCP servers contribute tools under `mcp__<server>__<tool>`; they stay
     // unlisted and are reachable through tool_search. 插件声明的服务器与
     // mcp.json 合并后一次连接，CLI 与 GUI 共用 argent_plugins::runtime 的展开规则。
@@ -824,7 +814,7 @@ fn build_agent(
 
     let mut agent_config = AgentConfig::new(config.model.clone());
     agent_config.reasoning_effort = Some(config.thinking_level.clone());
-    agent_config.promoted = Some(promotions);
+    agent_config.promoted = Some(std::sync::Arc::clone(&promotions));
     agent_config.approval_scope = ApprovalScope::DestructiveOnly;
     // 每次用户 prompt 开始一轮运行；检查点按这个粒度回滚。
     {
@@ -1019,6 +1009,7 @@ fn build_agent(
         })),
         // 子代理的写入记在父运行名下，回滚一次撤掉整轮。
         checkpoints: Some(checkpoints.clone()),
+        promotions: Some(std::sync::Arc::clone(&promotions)),
     };
     let delegate_handle = DelegateHandle::new(std::sync::Arc::new(move |batch: DelegateBatch| {
         factory.run_batch(batch)
@@ -1037,29 +1028,6 @@ fn build_agent(
     }
 
     let registry = std::sync::Arc::new(registry);
-
-    // 代码模式的回调必须和模型直接调用走同一套门禁；这一步放在策略、
-    // 钩子和审计都装好之后，脚本才借不到绕行通道。
-    {
-        let registry_for_code = std::sync::Arc::clone(&registry);
-        let ctx_for_code = tool_ctx.clone();
-        let gate = argent_tools::ToolGate {
-            policy: agent_config.policy.clone(),
-            audit: agent_config.audit.clone(),
-            pre_tool: agent_config.pre_tool.clone(),
-            post_tool: agent_config.post_tool.clone(),
-            approve: agent_config.approve.clone(),
-            approve_all_mutating: matches!(
-                agent_config.approval_scope,
-                argent_agent::ApprovalScope::AllMutating
-            ),
-        };
-        if let Ok(mut slot) = code_runner.lock() {
-            *slot = Some(std::sync::Arc::new(move |name: &str, args: &Json| {
-                gate.run(&registry_for_code, &ctx_for_code, name, args)
-            }));
-        }
-    }
 
     let mut notes = String::new();
     // 角色目录放在系统提示尾部块的最前面，与 CLI 的顺序一致。
