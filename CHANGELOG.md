@@ -1,0 +1,76 @@
+# Changelog
+
+All notable changes to argent are documented here. The format is a loose
+Keep-a-Changelog; versions track Cargo's `version.workspace`.
+
+## 0.2.0 — 2026-11-17
+
+A compression of everything learned from the first release: smaller models
+run the whole loop, background text is delegated to a cheap model, and one
+conversation now owns exactly one thread.
+
+### Thread model
+
+- **One conversation, one thread.** Subagent batches (`delegate`) run every
+  child as a corosensei coroutine on the caller's thread; children interleave
+  at the model-stream read, suspending while their pipe is empty so a
+  sibling can advance. Up to **8 subagents** per batch; the
+  `maxConcurrency` knob is gone — on one thread there is nothing left to
+  tune.
+- **Compaction as a coroutine.** Crossing the compaction threshold still
+  applies the heuristic trim instantly; the model-upgraded summary runs as
+  a coroutine that interleaves with the next conversation turns and writes
+  back under a history-revision guard. Compaction never blocks the
+  conversation, and a stale or failed upgrade never breaks it.
+
+### Token efficiency
+
+- **Reasoning travels back.** OpenAI-compatible endpoints stream
+  `reasoning_content`; argent stores it and resends it with the assistant
+  turn, keeping the request byte-identical to what the model produced. On
+  KV-cache-backed servers (llama.cpp, DeepSeek) a continued turn evaluates
+  ~15 new tokens instead of ~96+.
+- **Relaxed budgets** (spill-to-disk keeps the full output recoverable, so
+  a wider budget only saves read-back round-trips): per-result 6k → 15k
+  tokens, per-turn 20k → 60k, `read` 5k → 10k lines / 1 MB → 3 MB,
+  `maxOutputTokens` 8k → 32k, tool/bash timeout 120 s → 300 s, turn cap
+  40 → 100, policy-refusal retries 1 → 3.
+- **Background small-model assistant** (opt-in
+  `backgroundIntelligence: true`, `backgroundModel`): session titles,
+  compaction summaries and branch-switch summaries are drafted by a cheap
+  model. Every consumer is best-effort; failures fall back to the existing
+  heuristics and never touch the run.
+
+### Reliability
+
+- **bash enters the checkpoint ledger.** Before a bash call runs, its
+  delete/move/overwrite targets are snapshotted into the session checkpoint
+  store, so `/rewind` covers shell damage, not just `write`/`edit`. The
+  scanner is documented as heuristic: it errs toward over-recording.
+- **`--continue` works on Windows.** Session headers now store the working
+  directory normalized; previously `latest_for` compared forward slashes
+  against backslash headers and every `-c` silently started a new session.
+- **Eval pipeline.** `argent replay <session> --to-eval <name>` turns a
+  recorded session into a runnable eval scenario (scripted tool turns,
+  initial files, expectations) — the discovery → reproduce → regression
+  loop in one command.
+- **`argent bug` / `/bug`.** A sanitized local report (version, platform,
+  provider, effective settings) written under `~/.argent/bug-reports`; no
+  network, credentials never read.
+
+### Tool surface
+
+- Removed four tools whose work the core covers: `ls` (`read` lists,
+  `find` locates), `repo_map` (`grep`+`read`), `current_time` (infer from
+  context), `code` (a script calling bash needs no loopback interpreter) —
+  19 → 14 schemas, five fewer per request.
+- `lsp` + `ast` merged into a single `codeintel` tool.
+- Skills can carry their own script tools (`tools:` frontmatter block);
+  a 20-line SKILL.md contributes both a procedure and the tools to run it.
+- Delegate children share the parent's `tool_search` promotions.
+
+### Hygiene
+
+- Repository history rewritten with a neutral author identity; test
+  fixtures carry no local usernames or personal model choices.
+- Zero clippy warnings workspace-wide, 1020+ tests green.
