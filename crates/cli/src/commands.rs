@@ -66,6 +66,7 @@ pub fn dispatch(raw: &[String]) -> Result<Option<i32>> {
             Ok(Some(0))
         }
         "doctor" => Ok(Some(crate::doctor()?)),
+        "bug" => Ok(Some(bug_report(&raw[1..])?)),
         _ => Ok(None),
     }
 }
@@ -1148,6 +1149,7 @@ const COMMANDS: &[&str] = &[
     "stop",
     "rm",
     "doctor",
+    "bug",
     "help",
     "version",
 ];
@@ -2728,6 +2730,17 @@ fn workflow(args: &[String]) -> Result<i32> {
 
 // ---------------------------------------------------------------- helpers
 
+/// `argent bug`: sanitized local report. No network.
+fn bug_report(args: &[String]) -> Result<i32> {
+    let cwd = cwd_from(args);
+    let mut config = argent_core::config::Config::load(&cwd)?;
+    crate::mainx::settings::apply_settings(&mut config, &crate::args::Cli::default(), None)?;
+    let path = crate::mainx::bug_report::write_report(&config, &cwd)?;
+    println!("bug report written to {}", path.display());
+    println!("attach it manually if you file an issue; it never leaves your machine");
+    Ok(0)
+}
+
 pub(crate) fn cwd_from(args: &[String]) -> PathBuf {
     let mut index = 0;
     while index < args.len() {
@@ -2817,6 +2830,7 @@ mod tests {
             "stop",
             "rm",
             "doctor",
+    "bug",
             "help",
             "version",
         ] {

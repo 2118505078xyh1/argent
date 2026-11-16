@@ -1450,6 +1450,13 @@ fn repl_command(
         "/cost" => {
             println!("{}", cost_report(agent, config.max_context_tokens));
         }
+        "/bug" => {
+            match crate::mainx::bug_report::write_report(config, cwd) {
+                Ok(path) => println!("bug report written to {}
+attach it manually if you file an issue", path.display()),
+                Err(e) => println!("bug report failed: {}", e),
+            }
+        }
         "/compact" => {
             let compact_hook = move || pre_compact_hook(hooks, cwd);
             if let Some(summary) = compact_if_needed(
