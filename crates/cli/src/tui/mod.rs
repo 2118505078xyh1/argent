@@ -263,13 +263,19 @@ pub fn spawn(
     );
     let rows = session_rows(&index);
 
+    let worker_command_tx = command_tx.clone();
     std::thread::spawn(move || {
+        let command_tx = worker_command_tx;
         let _ = event_tx.send(ready);
         if !initial.is_empty() {
             let _ = event_tx.send(UiEvent::Loaded(initial));
         }
         let _ = event_tx.send(UiEvent::Sessions(rows));
 
+        let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
+        // The heuristic title (first prompt line) is replaced once: after the
+        // first run finishes, a background model writes a real one.
+        let mut title_pending: Option<String> = None;
         let session_ctx = HookContext {
             cwd: cwd.clone(),
             ..HookContext::default()
@@ -332,6 +338,7 @@ pub fn spawn(
                     // The first message names the task. Rename before the run so the
                     // title is right while the model is still thinking.
                     if agent.history().is_empty() {
+                        title_pending = Some(text.clone());
                         let title = title_from_prompt(&text);
                         let path = session.path.clone();
                         if index.rename(&path, &title).is_ok() {
@@ -390,6 +397,7 @@ pub fn spawn(
                                 requests,
                                 cost,
                             );
+                            let turn_ok = matches!(reason, FinishReason::Complete);
                             let _ = event_tx.send(UiEvent::TurnDone {
                                 reason,
                                 usage,
@@ -397,6 +405,33 @@ pub fn spawn(
                                 context_used: argent_agent::estimate_tokens(agent.history()),
                                 cost,
                             });
+                            // First run of the session: hand the exchange to
+                            // the background model, which answers with a real
+                            // title. Delivered as Command::Rename so the
+                            // worker thread (the only one allowed to reopen
+                            // the session file) applies it.
+                            if let Some(first) = title_pending.take() {
+                                if let Some(assistant) = &background {
+                                    if turn_ok {
+                                        let answer = agent
+                                            .history()
+                                            .iter()
+                                            .rev()
+                                            .find(|m| m.role == argent_ai::Role::Assistant)
+                                            .map(|m| m.text())
+                                            .unwrap_or_default();
+                                        let exchange = format!("user: {}
+assistant: {}", first, answer);
+                                        let tx = command_tx.clone();
+                                        let assistant = assistant.clone();
+                                        std::thread::spawn(move || {
+                                            if let Some(title) = assistant.title_for(&exchange) {
+                                                let _ = tx.send(Command::Rename(title));
+                                            }
+                                        });
+                                    }
+                                }
+                            }
                         }
                         Err(error) => {
                             // 必须发 TurnDone：只发 Error 的话 UI 的 working
@@ -612,6 +647,16 @@ pub fn spawn(
                                     let body = message.text();
                                     let body = if body.len() > 600 { &body[..600] } else { &body };
                                     text.push_str(&format!("\n[{}] {}", role, body));
+                                }
+                                if let Some(assistant) = &background {
+                                    if let Some(condensed) = assistant.branch_summary_for(&text)
+                                    {
+                                        text = format!(
+                                            "The conversation switched to a different \
+                                             branch. That branch did:\n{}",
+                                            condensed
+                                        );
+                                    }
                                 }
                                 messages.push(argent_ai::Message::system(text));
                             }

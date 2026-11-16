@@ -303,6 +303,8 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
   "statusline": ["session", "tokens", "cache", "cost"],
   "followUpMode": "one-at-a-time",
   "cacheWarming": "streaming",
+  "backgroundIntelligence": true,
+  "backgroundModel": "<cheap-model-id>",
   "enabledModels": ["gpt-*", "anthropic/claude-sonnet-4"]
 }
 ```
@@ -313,6 +315,7 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 - 关闭自动压缩：`autoCompaction: false` 或 `--no-auto-compact`
 - follow-up 队列：`followUpMode: "one-at-a-time" | "all"` 控制运行结束后排队的消息是一条一条还是一次性投递；RPC 用 `follow_up` 方法入队
 - 提示词缓存预热：`cacheWarming: "off" | "streaming"`，streaming 在每次运行结束后发一个最小请求续期缓存（Anthropic）；默认 off
+- 后台小模型助手（opt-in）：`backgroundIntelligence: true` 后，会话标题、压缩摘要、分支切换摘要由 `backgroundModel`（默认主模型）生成，失败自动回退到原有启发式，任何后台调用失败都不会影响运行
 - 模型范围：`enabledModels` 限制模型选择器与循环范围（支持 `*` 通配，匹配可含 `provider/` 前缀）；为空表示全部
 - 分支摘要：`/tree` 切换分支时会把目标分支独有的消息作为摘要注入上下文，避免丢失另一条分支做过的事
 - profiles：`.argent/profiles/<name>.md` 固定模型/工具/预算，`--profile reviewer`

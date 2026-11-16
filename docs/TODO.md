@@ -68,7 +68,7 @@
       已有 `a_long_transcript_keeps_the_warm_frame_cheap` 继续覆盖长会话帧预算。
 
 ### P1 — 上下文质量与异步化
-- [ ] **P1.1** 后台小模型助手（opt-in，settings `backgroundIntelligence: true`）：
+- [x] **P1.1** 后台小模型助手（opt-in，settings `backgroundIntelligence: true`）：
       - 会话标题生成（替代首句改名）
       - 分支切换时的模型摘要（可选，默认仍用原文）
       - compaction 摘要质量增强
@@ -104,7 +104,7 @@
 
 ## 3. 执行状态
 
-- 当前阶段：**P1 进行中**（P1.2 异步 Hooks、P1.3 图片输入已完成；下一步 P1.1 后台小模型）
+- 当前阶段：**P1 全部完成**（P1.1 后台小模型 / P1.2 异步 Hooks / P1.3 图片输入；仅 P1.4 外部编辑器按暂缓决定保留）
 - 已完成（本会话此前）：纯 Rust Rhai 插件、codemode 内置沙箱 + store/load、
   follow-up 队列、cache warming、scoped models、branch summary、extension UI 子协议。
 - 验证基线：`cargo test --workspace --no-fail-fast` 全绿，仅 2 个预先存在的 shell 环境测试失败
@@ -115,6 +115,11 @@
 每完成一项，勾选对应复选框并在此节追加一行验证记录。
 
 ### 验证记录
+- **2026-11-17 P1.1 完成**：`argent_ai::BackgroundAssistant`（provider 由宿主注入，
+  `backgroundModel` 可选更便宜模型）；三处接入——TUI 首轮 run 结束后台线程生成标题
+  （经 `Command::Rename` 回写，用户改名覆盖窗口小）、CLI/engine 的 compaction 摘要增强
+  （`Agent::replace_last_summary` 就地替换首条 system，尾部字节不变）、`/tree` 分支切换
+  摘要增强。全 workspace 测试 1020+ / clippy 0。
 - **2026-11-16 P1.2 完成**：`cargo test -p argent-hooks` 9 passed（含 async 往返测试）；
   全量测试与 `cargo check --workspace` 通过（同 2 个环境测试除外）。修复 CLI pre_tool 覆盖 bug。
 - **2026-11-16 P1.3 完成**：`@path` 图片 → `Content::Image` → `run_message`；`Command::Prompt`

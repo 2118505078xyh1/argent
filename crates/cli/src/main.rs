@@ -521,6 +521,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
     if let Some(policy) = settings.string("cacheWarming") {
         agent_config.cache_warming = argent_agent::CacheWarming::parse(policy);
     }
+    let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
     if let Some(turns) = cli
         .max_turns
         .or_else(|| profile.as_ref().and_then(|p| p.max_turns))
@@ -1095,7 +1096,12 @@ pub fn run(raw: &[String]) -> Result<i32> {
                 let cwd = cli.cwd.clone();
                 move || pre_compact_hook(&hooks, &cwd)
             };
-            if let Some(summary) = compact_if_needed(&mut agent, &config, Some(&compact_hook)) {
+            if let Some(summary) = compact_if_needed(
+                &mut agent,
+                &config,
+                Some(&compact_hook),
+                background.as_ref(),
+            ) {
                 let _ = session.record_summary(summary);
                 let after_tokens = argent_agent::estimate_tokens(agent.history());
                 let notice = format!(
@@ -1277,6 +1283,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
                     &hook_config,
                     &cli.cwd,
                     cli.fallback_model.as_deref(),
+                    background,
                 ),
             }
         }
@@ -1298,6 +1305,7 @@ fn run_repl(
     hooks: &HookConfig,
     cwd: &Path,
     fallback_model: Option<&str>,
+    background: Option<crate::mainx::background::BackgroundAssistant>,
 ) -> Result<i32> {
     println!(
         "argent interactive — /help for commands, /exit to quit\n\
@@ -1334,6 +1342,7 @@ fn run_repl(
                 hooks,
                 cwd,
                 &prompt,
+                background.as_ref(),
             ) {
                 ReplAction::Continue => continue,
                 ReplAction::Exit => break,
@@ -1397,6 +1406,7 @@ fn repl_command(
     hooks: &HookConfig,
     cwd: &Path,
     line: &str,
+    background: Option<&crate::mainx::background::BackgroundAssistant>,
 ) -> ReplAction {
     let mut parts = line.split_whitespace();
     let command = parts.next().unwrap_or("");
@@ -1442,7 +1452,12 @@ fn repl_command(
         }
         "/compact" => {
             let compact_hook = move || pre_compact_hook(hooks, cwd);
-            if let Some(summary) = compact_if_needed(agent, config, Some(&compact_hook)) {
+            if let Some(summary) = compact_if_needed(
+                agent,
+                config,
+                Some(&compact_hook),
+                background,
+            ) {
                 println!("compacted:\n{}", summary);
             } else {
                 println!("nothing to compact yet");
@@ -1800,6 +1815,7 @@ fn compact_if_needed(
     agent: &mut Agent,
     config: &Config,
     before: Option<&dyn Fn()>,
+    background: Option<&crate::mainx::background::BackgroundAssistant>,
 ) -> Option<String> {
     if agent.history().is_empty() {
         // Nothing to compact, and no reason to ask the provider for its
@@ -1818,12 +1834,22 @@ fn compact_if_needed(
             before();
         }
     }
-    argent_session::controller::compact(
+    let summary = argent_session::controller::compact(
         agent,
         max_context,
         config.reserved_context_tokens,
         config.keep_recent_tokens,
-    )
+    )?;
+    // The heuristic summary is already persisted; a background model can
+    // rewrite it into a denser narrative for the next request. Failure keeps
+    // the heuristic draft — an upgrade must never break compaction.
+    if let Some(assistant) = background {
+        if let Some(better) = assistant.summarize_for(&summary) {
+            agent.replace_last_summary(&better);
+            return Some(better);
+        }
+    }
+    Some(summary)
 }
 
 

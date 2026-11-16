@@ -606,6 +606,34 @@ impl Agent {
         self.ctx.mark_reads_compacted();
     }
 
+    /// Rewrite the leading compaction summary in place, after a background
+    /// model upgraded the heuristic draft. Keeps the tail byte-identical, so
+    /// the wire cache only invalidates for the first message.
+    ///
+    /// A no-op when the history does not start with a compaction summary or
+    /// when the replacement is empty.
+    pub fn replace_last_summary(&mut self, upgraded: &str) {
+        let upgraded = upgraded.trim();
+        if upgraded.is_empty() {
+            return;
+        }
+        let Some(first) = self.history.first_mut() else {
+            return;
+        };
+        if first.role != argent_ai::Role::System
+            || !first.text().starts_with("Summary of the earlier conversation:")
+        {
+            return;
+        }
+        *first = Message::system(format!(
+            "Summary of the earlier conversation:
+{}",
+            upgraded
+        ));
+        self.history_tokens = estimate_tokens(&self.history);
+        self.history_revision = self.history_revision.wrapping_add(1);
+    }
+
     fn reset_run_state(&mut self) {
         self.recent_calls.clear();
         self.blocked_calls.clear();

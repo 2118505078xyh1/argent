@@ -41,6 +41,11 @@ pub struct Config {
     pub tool_timeout_secs: u64,
     pub bash_timeout_secs: u64,
     pub approval_mode: ApprovalMode,
+    /// Let a cheap background model handle low-stakes text: session titles,
+    /// compaction summaries and branch summaries. `background_model` names
+    /// that model; when unset the main model serves the calls.
+    pub background_intelligence: bool,
+    pub background_model: Option<String>,
     /// Models shown in the picker and allowed by model cycling. Empty means
     /// every model from the provider catalog (Pi's `enabledModels`).
     pub enabled_models: Vec<String>,
@@ -115,6 +120,8 @@ impl Default for Config {
             tool_timeout_secs: 300,
             bash_timeout_secs: 300,
             approval_mode: ApprovalMode::Sensible,
+            background_intelligence: false,
+            background_model: None,
             enabled_models: Vec::new(),
             plugins: Vec::new(),
             allowed_tools: Vec::new(),
@@ -379,6 +386,16 @@ pub fn merge_into(config: &mut Config, text: &str, source: &Path) -> Result<()> 
             }
             "plugins" => {
                 config.plugins = string_list(&val);
+            }
+            "backgroundIntelligence" | "background_intelligence" => {
+                if let Some(b) = val.as_bool() {
+                    config.background_intelligence = b;
+                }
+            }
+            "backgroundModel" | "background_model" => {
+                if let Some(m) = val.as_str() {
+                    config.background_model = Some(m.to_string());
+                }
             }
             "autoApproveBash" | "auto_approve_bash" => {
                 if let Some(b) = val.as_bool() {

@@ -128,6 +128,17 @@ pub fn start_session(
         // GUI 的会话文件要到第一条 prompt 才存在，先拿一个未绑定的仓库；
         // 会话出现后再 retarget，之前的记录请求都是空操作。
         let checkpoints = CheckpointStore::detached();
+        let background = if config.background_intelligence {
+            let model = config
+                .background_model
+                .clone()
+                .unwrap_or_else(|| config.model.clone());
+            let provider: std::sync::Arc<dyn argent_ai::Provider> =
+                std::sync::Arc::from(build_provider(&config));
+            Some(argent_ai::BackgroundAssistant::new(provider, model))
+        } else {
+            None
+        };
         let mut agent = match build_agent(
             &config,
             &cwd,
@@ -250,14 +261,19 @@ pub fn start_session(
                     // Compact before the turn, not after: the model is the one
                     // paying for the history, and `before` below must describe
                     // the history that is about to be appended to.
-                    if argent_session::controller::compact(
+                    if let Some(summary) = argent_session::controller::compact(
                         &mut agent,
                         context_max,
                         config.reserved_context_tokens,
                         config.keep_recent_tokens,
-                    )
-                    .is_some()
-                    {
+                    ) {
+                        // Background intelligence rewrites the heuristic draft
+                        // into a denser narrative; the agent keeps the tail
+                        // byte-identical, so only the first message re-serializes.
+                        let upgraded = background.as_ref().and_then(|b| b.summarize_for(&summary));
+                        if let Some(better) = upgraded {
+                            agent.replace_last_summary(&better);
+                        }
                         let _ = event_tx.send(UiEvent::Agent(AgentEvent::Notice(
                             "context compacted".to_string(),
                         )));
