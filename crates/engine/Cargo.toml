@@ -26,5 +26,4 @@ argent-plugins = { path = "../plugins" }
 argent-plugin = { path = "../plugin" }
 argent-hooks = { path = "../hooks" }
 argent-lsp = { path = "../lsp" }
-argent-ast = { path = "../ast" }
 argent-jobs = { path = "../jobs" }

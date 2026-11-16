@@ -14,6 +14,8 @@ pub mod registry;
 pub mod server;
 pub mod tools;
 
+pub use tools::CodeIntelTool;
+
 pub use manager::LspManager;
 pub use protocol::{Inbound, Position, RpcMessage};
 pub use registry::{BuiltinResolver, LanguageResolver, ServerSpec};

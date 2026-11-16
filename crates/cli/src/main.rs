@@ -12,7 +12,6 @@ use argent_ai::{
     AnthropicConfig, AnthropicProvider, ChatRequest, OpenAiConfig, OpenAiProvider, Provider,
     ResponsesConfig, ResponsesProvider,
 };
-use argent_ast::AstTool;
 use argent_auth::AuthStore;
 use argent_config::{Paths, Settings};
 use argent_core::config::{ApprovalMode, Config};
@@ -21,7 +20,7 @@ use argent_core::json::Json;
 use argent_device::tools::{BrowserTool, DesktopTool};
 use argent_hooks::{HookConfig, HookContext, HookEvent, HookTrust};
 use argent_jobs::JobsTool;
-use argent_lsp::LspTool;
+use argent_lsp::CodeIntelTool;
 use argent_mcp::McpConfig;
 use argent_plugin::loader::load_all as load_plugins;
 use argent_plugins::PluginManager;
@@ -395,8 +394,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
 
     // Host-owned plugin tools. They carry state the tools crate cannot build:
     // a skill registry, a job table, a runner slot, an approval channel.
-    base_registry.register_plugin_tool(argent_tools::plugin::CODEINTEL, Box::new(LspTool));
-    base_registry.register_plugin_tool(argent_tools::plugin::CODEINTEL, Box::new(AstTool));
+    base_registry.register_plugin_tool(argent_tools::plugin::CODEINTEL, Box::new(CodeIntelTool));
     base_registry.register_plugin_tool(argent_tools::plugin::JOBS, Box::new(JobsTool));
 
     // Skills are markdown procedures on disk. Only their one-line index enters

@@ -32,6 +32,71 @@ fn with_manager<T>(
     }
 }
 
+/// The one code-intelligence tool: language-server queries plus structural
+/// search. The model sees a single schema; `action` decides the backend.
+pub struct CodeIntelTool;
+
+impl Tool for CodeIntelTool {
+    fn parallel_safe(&self) -> bool {
+        true
+    }
+    fn name(&self) -> &str {
+        "codeintel"
+    }
+
+    fn description(&self) -> &str {
+        "Code intelligence. Language-server actions: 'servers', 'symbols',          'definition', 'references', 'hover', 'workspace_symbol', 'diagnostics'.          Structural search on token patterns (no server needed): 'ast_search'          and 'ast_replace', where `pattern` uses $NAME (one token), $*NAME          (a balanced run) and $$ (a run without capturing); 'ast_replace' needs          `template` and `write: true` to touch files."
+    }
+
+    fn parameters(&self) -> Json {
+        schema_object(
+            vec![
+                (
+                    "action",
+                    "string",
+                    "servers | symbols | definition | references | hover | workspace_symbol | diagnostics | ast_search | ast_replace",
+                ),
+                ("pattern", "string", "Structural pattern for ast_search / ast_replace"),
+                ("template", "string", "Replacement text for ast_replace"),
+                ("write", "boolean", "For ast_replace: actually write the files (default false)"),
+                ("glob", "string", "For ast_search / ast_replace: restrict to files matching this glob"),
+                ("path", "string", "File or directory; relative paths resolve against the cwd"),
+                ("line", "integer", "1-based line for definition, references and hover"),
+                ("column", "integer", "1-based column for definition, references and hover"),
+                ("query", "string", "Symbol name for workspace_symbol"),
+                ("waitMs", "integer", "How long to wait for diagnostics (default 2000)"),
+            ],
+            vec!["action"],
+        )
+    }
+
+    fn is_mutating(&self) -> bool {
+        // ast_replace with write touches the tree; the LSP actions are read-only.
+        true
+    }
+
+    fn needs_approval(&self, args: &Json) -> bool {
+        matches!(args.get("action").and_then(Json::as_str), Some("ast_replace"))
+            && args.get("write").and_then(Json::as_bool).unwrap_or(false)
+    }
+
+    fn execute(&self, ctx: &ToolCtx, args: &Json) -> Result<ToolResult> {
+        let action = arg_str(args, "action")?;
+        if action == "ast_search" || action == "ast_replace" {
+            // The structural backend speaks 'search'/'replace'; translate.
+            let mut forwarded = args.clone();
+            forwarded.set(
+                "action",
+                argent_core::json::Json::string(
+                    if action == "ast_search" { "search" } else { "replace" },
+                ),
+            );
+            return argent_ast::AstTool.execute(ctx, &forwarded);
+        }
+        LspTool.execute(ctx, args)
+    }
+}
+
 /// Ask a language server about the codebase.
 pub struct LspTool;
 

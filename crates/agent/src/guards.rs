@@ -16,7 +16,7 @@ use argent_core::Json;
 /// Deliberately narrow: `bash` can mutate through commands the registry cannot
 /// see, `web_fetch` can observe a changed page, and `current_time` is different
 /// every time. Re-reading a file is the runaway that actually happens.
-pub const REPEAT_GUARD_TOOLS: &[&str] = &["read", "grep", "find", "ls", "lsp", "skill"];
+pub const REPEAT_GUARD_TOOLS: &[&str] = &["read", "grep", "find", "lsp", "skill"];
 
 /// How many assistant turns back an identical call is remembered.
 pub const REPEAT_GUARD_WINDOW: usize = 12;

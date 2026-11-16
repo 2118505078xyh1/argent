@@ -59,11 +59,9 @@ pub const PARALLEL_SAFE_TOOLS: &[&str] = &[
     "read",
     "grep",
     "find",
-    "ls",
     "lsp",
     "skill",
     "web_search",
-    "current_time",
 ];
 
 /// How many read-only calls run at once.

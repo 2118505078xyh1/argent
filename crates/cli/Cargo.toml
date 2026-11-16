@@ -39,5 +39,4 @@ argent-plugin = { path = "../plugin" }
 argent-device = { path = "../device" }
 argent-lsp = { path = "../lsp" }
 argent-jobs = { path = "../jobs" }
-argent-ast = { path = "../ast" }
 argent-pty = { path = "../pty" }

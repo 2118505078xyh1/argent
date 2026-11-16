@@ -734,8 +734,7 @@ fn build_agent(
     for tool in argent_plugin::loader::load_all(cwd) {
         registry.register(tool);
     }
-    registry.register_plugin_tool(argent_tools::plugin::CODEINTEL, Box::new(argent_lsp::LspTool));
-    registry.register_plugin_tool(argent_tools::plugin::CODEINTEL, Box::new(argent_ast::AstTool));
+    registry.register_plugin_tool(argent_tools::plugin::CODEINTEL, Box::new(argent_lsp::CodeIntelTool));
     registry.register_plugin_tool(argent_tools::plugin::JOBS, Box::new(argent_jobs::JobsTool));
     // 先占位：装配完门禁后换成带工厂的真实现（见下方 replace_delegate）。
     registry.register_plugin_tool(
