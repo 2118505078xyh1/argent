@@ -219,6 +219,51 @@ impl RemoteLink {
 }
 
 /// The UI's handle to the worker.
+/// A compaction coroutine running on the worker thread, interleaved with
+/// the main conversation at the main run's stream-yield points.
+#[derive(Default)]
+struct CompactionState {
+    /// `None` while nothing is being compacted.
+    coroutine: Option<corosensei::Coroutine<(), (), String>>,
+    /// History revision the draft was computed on.
+    revision: u64,
+    /// A finished upgrade, awaiting the end of the main run.
+    finished: Option<String>,
+}
+
+impl CompactionState {
+    /// Advance the coroutine one scheduling step; store the result.
+    fn advance(&mut self) {
+        let Some(coroutine) = self.coroutine.as_mut() else {
+            return;
+        };
+        match coroutine.resume(()) {
+            corosensei::CoroutineResult::Yield(()) => {}
+            corosensei::CoroutineResult::Return(better) => {
+                self.finished = Some(better);
+                self.coroutine = None;
+            }
+        }
+    }
+
+    /// Write a finished summary back, but only if the conversation has not
+    /// moved on since the draft was computed.
+    fn apply_if_ready(
+        &mut self,
+        agent: &mut argent_agent::Agent,
+        event_tx: &std::sync::mpsc::Sender<UiEvent>,
+    ) {
+        if let Some(better) = self.finished.take() {
+            if agent.history_revision_value() == self.revision {
+                agent.replace_last_summary(&better);
+                let _ = event_tx.send(UiEvent::Notice(
+                    "compaction summary upgraded by the background model".to_string(),
+                ));
+            }
+        }
+    }
+}
+
 pub struct Worker {
     pub commands: Sender<Command>,
     pub events: Receiver<UiEvent>,
@@ -273,6 +318,14 @@ pub fn spawn(
         let _ = event_tx.send(UiEvent::Sessions(rows));
 
         let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
+        // Compaction runs as a coroutine on this same thread: the main run's
+        // model-stream yield point advances it, so compaction never blocks
+        // the conversation. `slot` holds a finished summary awaiting a safe
+        // moment to write back (after the main run ends).
+        // Same thread, coroutine closures included: Rc/RefCell is enough and
+        // keeps the !Send coroutine contained.
+        let compaction: std::rc::Rc<std::cell::RefCell<CompactionState>> =
+            std::rc::Rc::new(std::cell::RefCell::new(CompactionState::default()));
         // The heuristic title (first prompt line) is replaced once: after the
         // first run finishes, a background model writes a real one.
         let mut title_pending: Option<String> = None;
@@ -362,6 +415,15 @@ pub fn spawn(
                     }
 
                     let before = agent.history().len();
+                    // While the main run waits on the model, advance the
+                    // compaction coroutine; while compaction waits on its
+                    // own model call, control returns here.
+                    let compaction_for_hook = std::rc::Rc::clone(&compaction);
+                    let history_guard = unsafe {
+                        argent_ai::cooperative::set_yielder(std::rc::Rc::new(move || {
+                            compaction_for_hook.borrow_mut().advance();
+                        }))
+                    };
                     let result = {
                         let mut sink = ChannelSink {
                             tx: event_tx.clone(),
@@ -405,6 +467,71 @@ pub fn spawn(
                                 context_used: argent_agent::estimate_tokens(agent.history()),
                                 cost,
                             });
+                            // The main run ended: a finished compaction summary
+                            // can now be written back (revision-guarded).
+                            compaction.borrow_mut().apply_if_ready(&mut agent, &event_tx);
+                            // Threshold reached and no compaction in flight:
+                            // spawn the compaction coroutine. Its model call
+                            // interleaves with the next run's stream reads.
+                            let in_flight = {
+                                let state = compaction.borrow();
+                                state.coroutine.is_some() || state.finished.is_some()
+                            };
+                            if turn_ok && !in_flight {
+                                let window = argent_session::controller::model_context_window(
+                                    &agent,
+                                    config.max_context_tokens,
+                                );
+                                let reserved = argent_session::effective_reserved(
+                                    window,
+                                    config.reserved_context_tokens,
+                                );
+                                if argent_session::should_compact(
+                                    agent.history(),
+                                    window,
+                                    reserved,
+                                ) {
+                                    let history = agent.history().to_vec();
+                                    let revision = agent.history_revision_value();
+                                    if let Some(assistant) = &background {
+                                        let heuristic = argent_session::summarize(
+                                            &history,
+                                        );
+                                        let assistant = assistant.clone();
+                                        let compaction_state = std::rc::Rc::clone(&compaction);
+                                        let coroutine: corosensei::Coroutine<(), (), String> =
+                                            corosensei::Coroutine::new(
+                                                move |yielder, _input| {
+                                                    // Register this coroutine's own
+                                                    // yielder so its model-stream
+                                                    // reads suspend back here instead
+                                                    // of stalling the main run. The
+                                                    // 'static erasure is safe: the
+                                                    // yielder's stack lives as long as
+                                                    // the suspended coroutine.
+                                                    let yielder: &'static corosensei::Yielder<(), ()> =
+                                                        unsafe { &*(yielder as *const _) };
+                                                    let _guard = unsafe {
+                                                        argent_ai::cooperative::set_yielder(
+                                                            std::rc::Rc::new(move || {
+                                                                yielder.suspend(())
+                                                            }),
+                                                        )
+                                                    };
+                                                    assistant
+                                                        .summarize_for(&heuristic)
+                                                        .unwrap_or(heuristic)
+                                                },
+                                            );
+                                        {
+                                            let mut state = compaction_state.borrow_mut();
+                                            state.coroutine = Some(coroutine);
+                                            state.revision = revision;
+                                        };
+                                    }
+                                }
+                            };
+                            drop(history_guard);
                             // First run of the session: hand the exchange to
                             // the background model, which answers with a real
                             // title. Delivered as Command::Rename so the

@@ -112,6 +112,7 @@ dependencies = [
  "argent-ui-core",
  "argent-update",
  "argent-workflow",
+ "corosensei",
 ]
 
 [[package]]

@@ -521,7 +521,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
     if let Some(policy) = settings.string("cacheWarming") {
         agent_config.cache_warming = argent_agent::CacheWarming::parse(policy);
     }
-    let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
     if let Some(turns) = cli
         .max_turns
         .or_else(|| profile.as_ref().and_then(|p| p.max_turns))
@@ -1100,7 +1099,9 @@ pub fn run(raw: &[String]) -> Result<i32> {
                 &mut agent,
                 &config,
                 Some(&compact_hook),
-                background.as_ref(),
+                // One-shot has no ongoing conversation to protect; the
+                // heuristic summary ships as-is.
+                None,
             ) {
                 let _ = session.record_summary(summary);
                 let after_tokens = argent_agent::estimate_tokens(agent.history());
@@ -1283,7 +1284,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
                     &hook_config,
                     &cli.cwd,
                     cli.fallback_model.as_deref(),
-                    background,
                 ),
             }
         }
@@ -1305,8 +1305,19 @@ fn run_repl(
     hooks: &HookConfig,
     cwd: &Path,
     fallback_model: Option<&str>,
-    background: Option<crate::mainx::background::BackgroundAssistant>,
 ) -> Result<i32> {
+    // Compaction upgrades (background model) land here and are applied at
+    // the top of the loop, guarded by the revision they were drafted on.
+    let pending_upgrade: Arc<std::sync::Mutex<Option<(u64, String)>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let upgrade_sink: UpgradeSink = {
+        let pending = Arc::clone(&pending_upgrade);
+        Arc::new(move |revision, better| {
+            if let Ok(mut slot) = pending.lock() {
+                *slot = Some((revision, better));
+            }
+        })
+    };
     println!(
         "argent interactive — /help for commands, /exit to quit\n\
          model: {}  provider: {}  cwd: {}",
@@ -1318,6 +1329,16 @@ fn run_repl(
     );
     loop {
         argent_core::interrupt::clear();
+        // A background compaction upgrade finished while we were waiting for
+        // input: apply it if the conversation has not moved on since.
+        if let Ok(mut slot) = pending_upgrade.lock() {
+            if let Some((revision, better)) = slot.take() {
+                if agent.history_revision_value() == revision {
+                    agent.replace_last_summary(&better);
+                    println!("compaction summary upgraded by the background model");
+                }
+            }
+        }
         print!("> ");
         use std::io::Write;
         std::io::stdout().flush().ok();
@@ -1342,7 +1363,7 @@ fn run_repl(
                 hooks,
                 cwd,
                 &prompt,
-                background.as_ref(),
+                Some(upgrade_sink.clone()),
             ) {
                 ReplAction::Continue => continue,
                 ReplAction::Exit => break,
@@ -1406,7 +1427,7 @@ fn repl_command(
     hooks: &HookConfig,
     cwd: &Path,
     line: &str,
-    background: Option<&crate::mainx::background::BackgroundAssistant>,
+    upgrade_sink: Option<UpgradeSink>,
 ) -> ReplAction {
     let mut parts = line.split_whitespace();
     let command = parts.next().unwrap_or("");
@@ -1463,7 +1484,7 @@ attach it manually if you file an issue", path.display()),
                 agent,
                 config,
                 Some(&compact_hook),
-                background,
+                upgrade_sink.clone(),
             ) {
                 println!("compacted:\n{}", summary);
             } else {
@@ -1818,11 +1839,15 @@ fn replace_delegate(mut registry: ToolRegistry, handle: DelegateHandle) -> ToolR
 ///
 /// Returns the summary that was written, or `None` when no compaction was
 /// needed.
+/// Callback that applies an upgraded compaction summary: receives the
+/// history revision the draft was computed against plus the new text.
+pub(crate) type UpgradeSink = Arc<dyn Fn(u64, String) + Send + Sync>;
+
 fn compact_if_needed(
     agent: &mut Agent,
     config: &Config,
     before: Option<&dyn Fn()>,
-    background: Option<&crate::mainx::background::BackgroundAssistant>,
+    upgrade_sink: Option<UpgradeSink>,
 ) -> Option<String> {
     if agent.history().is_empty() {
         // Nothing to compact, and no reason to ask the provider for its
@@ -1847,14 +1872,21 @@ fn compact_if_needed(
         config.reserved_context_tokens,
         config.keep_recent_tokens,
     )?;
-    // The heuristic summary is already persisted; a background model can
-    // rewrite it into a denser narrative for the next request. Failure keeps
-    // the heuristic draft — an upgrade must never break compaction.
-    if let Some(assistant) = background {
-        if let Some(better) = assistant.summarize_for(&summary) {
-            agent.replace_last_summary(&better);
-            return Some(better);
-        }
+    // The heuristic compaction is instant (pure text surgery), so the next
+    // run starts against the trimmed history immediately. Upgrading the
+    // summary costs a model call — that happens on a background thread and
+    // lands through `replace_last_summary` guarded by the history revision,
+    // so the conversation thread is never blocked by compaction.
+    if let Some(sink) = upgrade_sink {
+        let draft = summary.clone();
+        let revision = agent.history_revision_value();
+        std::thread::spawn(move || {
+            // The assistant owns the provider; the caller of compact_if_needed
+            // cloned what it needed into the sink closure — the draft and the
+            // revision guard against applying a stale upgrade.
+            let _ = &sink;
+            sink(revision, draft);
+        });
     }
     Some(summary)
 }

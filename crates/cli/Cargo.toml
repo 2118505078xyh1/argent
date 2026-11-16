@@ -19,6 +19,7 @@ name = "argent"
 path = "src/main.rs"
 
 [dependencies]
+corosensei = "0.2"
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }
 argent-config = { path = "../config" }

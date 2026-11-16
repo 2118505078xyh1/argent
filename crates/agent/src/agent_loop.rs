@@ -612,6 +612,12 @@ impl Agent {
     ///
     /// A no-op when the history does not start with a compaction summary or
     /// when the replacement is empty.
+    /// The current history revision, for callers that stash a compaction
+    /// draft on a background thread and must not apply a stale upgrade.
+    pub fn history_revision_value(&self) -> u64 {
+        self.history_revision
+    }
+
     pub fn replace_last_summary(&mut self, upgraded: &str) {
         let upgraded = upgraded.trim();
         if upgraded.is_empty() {
