@@ -100,6 +100,8 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::Zh, "tui.help.tree") => "浏览分支树；f 从选中节点分叉",
         (Locale::En, "tui.help.all_commands") => "type / to filter every command",
         (Locale::Zh, "tui.help.all_commands") => "输入 / 可过滤所有命令",
+        (Locale::En, "tui.help.queue") => "Alt+Enter queues a follow-up; Alt+Up takes it back",
+        (Locale::Zh, "tui.help.queue") => "Alt+Enter 排队后续消息；Alt+Up 取回编辑",
         (Locale::En, "tui.fork_usage") => "usage: /fork <message number> (a plain /fork clones the session)",
         (Locale::Zh, "tui.fork_usage") => "用法：/fork <消息序号>（不带参数的 /fork 复制整个会话）",
         (Locale::En, "tui.import_usage") => "usage: /import <path to a .jsonl session>",

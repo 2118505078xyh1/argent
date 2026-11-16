@@ -218,6 +218,8 @@ pub fn key_name(key: &Key) -> String {
         Key::CtrlP => "ctrl+p".to_string(),
         Key::CtrlN => "ctrl+n".to_string(),
         Key::CtrlR => "ctrl+r".to_string(),
+        Key::AltEnter => "alt+enter".to_string(),
+        Key::AltUp => "alt+up".to_string(),
         #[cfg(any(not(windows), test))]
         Key::PasteStart => "paste-start".to_string(),
         #[cfg(any(not(windows), test))]

@@ -1361,6 +1361,8 @@ struct App {
     /// Plan mode: ask the model for a plan before it edits anything.
     plan: bool,
     queued: usize,
+    /// Prompts queued with Alt+Enter; sent one after another when a run ends.
+    follow_ups: std::collections::VecDeque<String>,
     status: Option<(String, Instant)>,
     quit: bool,
     tick: u64,
@@ -1411,6 +1413,7 @@ impl App {
             working: false,
             plan: false,
             queued: 0,
+            follow_ups: std::collections::VecDeque::new(),
             status: None,
             quit: false,
             tick: 0,
@@ -1473,6 +1476,9 @@ impl App {
                 self.working = false;
                 self.queued = self.queued.saturating_sub(1);
                 self.metrics.finish_turn(usage, requests);
+                // An Alt+Enter follow-up starts immediately after the run
+                // that just finished; a later UiEvent pass sends it (the
+                // worker is not reachable inside this match arm).
                 self.metrics.cost = cost;
                 self.metrics.context_used = context_used;
                 if let FinishReason::Error(message) = reason {
@@ -1839,6 +1845,29 @@ impl App {
                 }
             }
             Key::Enter => self.submit(worker),
+            // Alt+Enter: park the line as a follow-up; it starts when the
+            // current run ends. Alt+Up: take the last one back to edit.
+            Key::AltEnter => {
+                let text: String = self.input.iter().collect();
+                if !text.trim().is_empty() {
+                    self.follow_ups.push_back(text.clone());
+                    self.transcript.push_user(text);
+                    self.scroll = 0;
+                    self.set_status(format!(
+                        "{} queued (alt+up to edit)",
+                        self.follow_ups.len()
+                    ));
+                    self.input.clear();
+                    self.cursor = 0;
+                }
+            }
+            Key::AltUp => {
+                if let Some(text) = self.follow_ups.pop_back() {
+                    self.transcript.pop_user();
+                    self.input = text.chars().collect();
+                    self.cursor = self.input.len();
+                }
+            }
             Key::Backspace => self.backspace(),
             Key::Delete => {
                 if self.cursor < self.input.len() {
@@ -2787,6 +2816,10 @@ impl App {
                         "/cost /plan",
                         argent_i18n::t(self.locale, "tui.help.sessions"),
                     ),
+                    (
+                        "Alt+Enter / Alt+Up",
+                        argent_i18n::t(self.locale, "tui.help.queue"),
+                    ),
                     ("", ""),
                     (
                         "/",
@@ -3365,6 +3398,18 @@ pub fn run(
         }
         while let Ok(request) = approvals.try_recv() {
             app.handle_approval(request);
+            changed = true;
+        }
+        // An Alt+Enter follow-up starts as soon as the previous run ends.
+        while !app.working {
+            let Some(next) = app.follow_ups.pop_front() else {
+                break;
+            };
+            app.transcript.push_user(next.clone());
+            app.working = true;
+            app.queued = app.queued.saturating_add(1);
+            app.scroll = 0;
+            let _ = worker.commands.send(Command::Prompt(next));
             changed = true;
         }
         // 子代理在 worker 线程上跑；进度从独立通道进来，追加成一条提示。

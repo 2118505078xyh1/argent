@@ -35,6 +35,10 @@ pub enum Key {
     CtrlP,
     CtrlN,
     CtrlR,
+    /// Alt+Enter: queue the input as a follow-up instead of sending it.
+    AltEnter,
+    /// Alt+Up: take the last queued follow-up back into the editor.
+    AltUp,
     /// Bracketed-paste start/end (ESC[200~ / ESC[201~); byte-stream path.
     #[cfg(any(not(windows), test))]
     PasteStart,
@@ -411,7 +415,9 @@ fn spawn_input_windows(tx: Sender<Key>) {
 pub(crate) fn key_from_console_record(ch: Option<char>, vk: u16, control: bool, alt: bool) -> Option<Key> {
     let key = match (ch, vk, control, alt) {
         // Enter 的 unicode_char 是 '\r'，归一到 Enter。
+        (Some('\r'), _, _, true) => Some(Key::AltEnter),
         (Some('\r'), _, _, _) => Some(Key::Enter),
+        (Some('\u{0}'), 0x26, _, true) => Some(Key::AltUp),
         // 扩展键区：方向键/Home/End/PgUp/PgDn 只有虚拟键码。
         (Some('\u{0}'), 0x26, _, _) => Some(Key::Up),
         (Some('\u{0}'), 0x28, _, _) => Some(Key::Down),

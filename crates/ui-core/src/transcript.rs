@@ -192,6 +192,21 @@ impl Transcript {
         self.version += 1;
     }
 
+    /// Remove the trailing user row, if any; `Alt+Up` uses this to take a
+    /// queued follow-up back into the editor. Returns the text.
+    pub fn pop_user(&mut self) -> Option<String> {
+        if matches!(self.entries.last(), Some(Entry::User(_))) {
+            let removed = self.entries.pop();
+            self.version += 1;
+            removed.map(|entry| match entry {
+                Entry::User(text) => text,
+                _ => String::new(),
+            })
+        } else {
+            None
+        }
+    }
+
     /// Append one prepared row, for a frontend installing a replayed
     /// conversation.
     pub fn push_entry(&mut self, entry: Entry) {
