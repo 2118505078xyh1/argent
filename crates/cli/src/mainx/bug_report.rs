@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 /// Build the report and write it to storage; returns the file path.
 pub fn write_report(config: &Config, cwd: &Path) -> Result<PathBuf, Error> {
     let report = collect(config, cwd);
-    let paths = argent_config::Paths::new(cwd);
     let stamp = argent_session::timestamp_slug();
     let dir = expand_home(Path::new("~/.argent/bug-reports"));
     std::fs::create_dir_all(&dir)
@@ -127,9 +126,13 @@ mod tests {
 
     #[test]
     fn collect_never_carries_a_key() {
-        let mut config = Config::default();
-        config.api_key = Some("sk-real-secret".to_string());
-        let report = collect(&config, Path::new("."));
+                let report = collect(
+            &Config {
+                api_key: Some("sk-real-secret".to_string()),
+                ..Config::default()
+            },
+            Path::new("."),
+        );
         let dumped = report.dump();
         assert!(!dumped.contains("sk-real-secret"));
         assert!(dumped.contains("apiKeySet"));

@@ -1353,17 +1353,98 @@ fn replay(args: &[String]) -> Result<i32> {
     let path = args
         .iter()
         .find(|arg| !arg.starts_with('-'))
-        .ok_or_else(|| Error::config("usage: argent replay <session|events.jsonl>"))?;
+        .ok_or_else(|| {
+            Error::config("usage: argent replay <session|events.jsonl> [--to-eval <name>]")
+        })?;
     let text = std::fs::read_to_string(path)
         .map_err(|e| Error::io(format!("read {} failed: {}", path, e)))?;
+    if let Some(name) = args.iter().position(|arg| arg == "--to-eval").and_then(|i| args.get(i + 1)) {
+        let scenario = session_to_eval(&text, name)?;
+        let path = format!("{}.eval.json", name);
+        std::fs::write(&path, scenario.dump_pretty())
+            .map_err(|e| Error::io(format!("write {} failed: {}", path, e)))?;
+        println!("eval scenario written to {} (run it with argent eval)", path);
+        return Ok(0);
+    }
     for line in replay_lines(&text)? {
         println!("{}", line);
     }
     Ok(0)
 }
 
+/// Turn a recorded session into an eval scenario (P2.1: discovery ->
+/// reproduction -> regression in one command).
+///
+/// The first user message becomes the scenario prompt; every assistant tool
+/// call becomes a scripted turn, in order; the final answer seeds
+/// `text_contains` and the tool sequence seeds `expect.tools`. Files the
+/// session created via `write` become the scenario's initial files, so the
+/// scripted run replays against the same starting point.
+fn session_to_eval(text: &str, name: &str) -> Result<Json> {
+    let transcript = replay_transcript(text)?;
+    let entries = transcript.entries();
+    let mut prompt = String::new();
+    let mut script: Vec<Json> = Vec::new();
+    let mut tools: Vec<Json> = Vec::new();
+    let mut files: Vec<(String, String)> = Vec::new();
+    let mut final_answer = String::new();
+    for entry in entries {
+        match entry {
+            argent_ui_core::Entry::User(text) => {
+                if prompt.is_empty() {
+                    prompt = text.clone();
+                }
+            }
+            argent_ui_core::Entry::Tool(run) => {
+                tools.push(Json::string(run.name.clone()));
+            }
+            argent_ui_core::Entry::Assistant(text) => {
+                final_answer = text.clone();
+            }
+            _ => {}
+        }
+    }
+    // Rebuild the scripted turns from the tool runs: name + the arguments the
+    // run recorded. Write calls double as initial files.
+    for entry in entries {
+        if let argent_ui_core::Entry::Tool(run) = entry {
+            let args = Json::parse(&run.arguments).unwrap_or_else(|_| Json::obj());
+            let mut turn = Json::obj();
+            turn.set("tool", Json::string(run.name.clone()));
+            turn.set("arguments", args.clone());
+            script.push(turn);
+            if run.name == "write" {
+                if let Some(path_arg) = args.get("path").and_then(Json::as_str) {
+                    if let Some(content) = args.get("content").and_then(Json::as_str) {
+                        files.push((path_arg.to_string(), content.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    let mut expect = Json::obj();
+    expect.set("tools", Json::Arr(tools));
+    let key = final_answer.lines().next().unwrap_or("").trim().to_string();
+    if !key.is_empty() {
+        expect.set("text_contains", Json::Arr(vec![Json::string(key)]));
+    }
+    let mut scenario = Json::obj();
+    scenario.set("name", Json::string(name.to_string()));
+    scenario.set("prompt", Json::string(prompt));
+    scenario.set("script", Json::Arr(script));
+    scenario.set("expect", expect);
+    if !files.is_empty() {
+        let mut files_obj = Json::obj();
+        for (path, content) in files {
+            files_obj.set(&path, Json::string(content));
+        }
+        scenario.set("files", files_obj);
+    }
+    Ok(scenario)
+}
+
 /// 重放的纯文本结果；输入无法识别时返回错误，而不是静默输出空内容。
-fn replay_lines(text: &str) -> Result<Vec<String>> {
+fn replay_transcript(text: &str) -> Result<argent_ui_core::Transcript> {
     let mut values = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -1418,6 +1499,12 @@ fn replay_lines(text: &str) -> Result<Vec<String>> {
         }
         transcript
     };
+    Ok(transcript)
+}
+
+/// The plain-text rendering of a recorded session.
+fn replay_lines(text: &str) -> Result<Vec<String>> {
+    let transcript = replay_transcript(text)?;
     Ok(crate::tui::transcript_plain(&transcript))
 }
 

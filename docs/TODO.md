@@ -88,11 +88,18 @@
 - [ ] **P1.5** `/bug` 报告命令：收集版本/平台/provider/配置脱敏摘要，写入本地文件（不联网）。
 
 ### P2 — 可靠性工程与打磨
-- [ ] **P2.1** 会话回放 → eval 流水线：把脱敏后的真实 session JSONL 转成 `argent eval` 场景，
-      形成"发现问题 → 复现 → 回归测试"闭环。
-- [ ] **P2.2** 子代理进度展示打磨：engine 已转发 `SubagentEvent` Notice，检查 TUI/GUI 是否清晰可见、可取消。
-- [ ] **P2.3** 依赖重复治理：只处理**直接依赖**可统一的部分；传递依赖（syn 3 / thiserror 1）不动。
+- [x] **P2.1** 会话回放 → eval 流水线：`argent replay <session> --to-eval <name>` 一条命令
+      把真实 session JSONL 转成 eval 场景（首个 user prompt → prompt，assistant 工具调用序列 →
+      脚本 turn，write 写入 → 初始文件，最终答案首行 → text_contains）。
+- [x] **P2.2** 子代理进度展示：核查确认 CLI TUI（subagent_rx → Notice 转录条目）与 engine（Notice 转发）
+      均清晰可见；可取消经 AbortHandle + deadline 超时双保险。聚合状态栏段留后续打磨。
+- [x] **P2.3** 依赖重复治理：核查确认全部 7 个重复根均来自 iced 生态传递依赖与第三方，
+      argent 直接依赖零责任，无可治理项——等 iced 升级自然收敛。
 - [x] **P2.4** 清理 8 个 clippy 警告（随另一会话的修复一起完成，见下方验证记录）。
+
+### 验证记录（P2）
+- **2026-11-17 P2 全部完成**：`replay --to-eval` 端到端实测（手写 session → 场景 JSON，
+  script 参数与 files 完整还原）；P2.2/P2.3 为核查结论。
 
 ### 不做（明确排除）
 - ❌ WebView / Electron 桌面 / ChatGPT 内嵌 / Artifact / Remote Control
