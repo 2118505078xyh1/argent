@@ -635,6 +635,12 @@ pub fn run(raw: &[String]) -> Result<i32> {
                         tool: tool.to_string(),
                         // 对话框显示人能读的摘要，不是转义后的 JSON。
                         args: argent_tools::approval_summary(tool, args),
+                        // bash 才有「此命令前缀」选项可给。
+                        command: if tool == "bash" {
+                            Some(args.get("command").and_then(Json::as_str).unwrap_or("").to_string())
+                        } else {
+                            None
+                        },
                         reply: reply_tx,
                     })
                     .is_err()
@@ -676,7 +682,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
                         };
                         matches!(
                             guard.decide(tool, args),
-                            Decision::Approve | Decision::ApproveAll
+                            Decision::Approve | Decision::ApprovePrefix | Decision::ApproveAll
                         )
                     }));
                 }
@@ -699,7 +705,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
                         };
                         matches!(
                             guard.decide(tool, args),
-                            Decision::Approve | Decision::ApproveAll
+                            Decision::Approve | Decision::ApprovePrefix | Decision::ApproveAll
                         )
                     }));
                 }

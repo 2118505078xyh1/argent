@@ -63,9 +63,31 @@ pub struct SessionRow {
 }
 
 /// A request from the agent thread for a tool decision.
+/// The bash command prefix an approval applies to: two words for
+/// subcommand-driven programs, one word otherwise.
+fn command_prefix_of(command: &str) -> String {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    if words.is_empty() {
+        return String::new();
+    }
+    let program = words[0].trim_matches('"');
+    let multi = matches!(
+        program,
+        "git" | "cargo" | "npm" | "pnpm" | "yarn" | "pip" | "docker" | "kubectl" | "make"
+    );
+    if words.len() >= 2 && multi {
+        format!("{} {}", words[0], words[1])
+    } else {
+        words[0].to_string()
+    }
+}
+
 pub struct ApprovalRequest {
     pub tool: String,
     pub args: String,
+    /// For bash: the raw command, so the dialog can offer a
+    /// "this command prefix" choice. `None` for every other tool.
+    pub command: Option<String>,
     pub reply: Sender<bool>,
 }
 
@@ -1332,6 +1354,9 @@ struct App {
     overlay: Option<Overlay>,
     pending: Option<ApprovalRequest>,
     approve_all: bool,
+    /// bash command prefixes the operator allowed this session ("p" at the
+    /// approval dialog); later calls with the same prefix skip the dialog.
+    approved_prefixes: std::collections::BTreeSet<String>,
     working: bool,
     /// Plan mode: ask the model for a plan before it edits anything.
     plan: bool,
@@ -1382,6 +1407,7 @@ impl App {
             overlay: None,
             pending: None,
             approve_all: false,
+            approved_prefixes: std::collections::BTreeSet::new(),
             working: false,
             plan: false,
             queued: 0,
@@ -1497,6 +1523,14 @@ impl App {
             let _ = request.reply.send(true);
             return;
         }
+        if let Some(command) = &request.command {
+            let prefix = command_prefix_of(command);
+            if self.approved_prefixes.contains(&prefix) {
+                let _ = request.reply.send(true);
+                self.set_status(format!("[allowed: {}]", prefix));
+                return;
+            }
+        }
         self.overlay = Some(Overlay::Approval {
             tool: request.tool.clone(),
             args: request.args.clone(),
@@ -1519,6 +1553,16 @@ impl App {
                     let _ = pending.reply.send(true);
                     self.overlay = None;
                     self.set_status(argent_i18n::t(self.locale, "tui.approve_all"));
+                }
+                Key::Char('p') | Key::Char('P') => {
+                    // "This command prefix": the approver remembers the
+                    // prefix; the reply itself is the same boolean.
+                    if let Some(prefix) = pending.command.as_deref().map(command_prefix_of) {
+                        self.approved_prefixes.insert(prefix);
+                    }
+                    let _ = pending.reply.send(true);
+                    self.overlay = None;
+                    self.set_status(argent_i18n::t(self.locale, "tui.approve_prefix"));
                 }
                 Key::Char('n') | Key::Char('N') | Key::Esc => {
                     let _ = pending.reply.send(false);

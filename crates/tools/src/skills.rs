@@ -373,7 +373,7 @@ impl Tool for SkillScriptTool {
         let command = self.command.replace("$ARGS", &payload);
         let spec = match ShellFlavor::detect() {
             ShellFlavor::Posix => {
-                let program = crate::bash::locate_posix_shell().unwrap_or_else(|| "sh".to_string());
+                let program = locate_posix_shell().unwrap_or_else(|| "sh".to_string());
                 CommandSpec::new(program).arg("-lc").arg(&command)
             }
             ShellFlavor::WindowsCmd => CommandSpec::new("cmd").arg("/C").arg(&command),
