@@ -2080,6 +2080,18 @@ pub(crate) fn doctor() -> Result<i32> {
                 .map(|trust| trust.entries().len())
                 .unwrap_or(0);
             println!("hook grants        : {}", trust);
+            let bg_on = settings.get("backgroundIntelligence").is_some_and(|v| {
+                v.as_str().map(|s| s == "true" || s == "on").unwrap_or(false)
+            });
+            let bg_model = settings
+                .string("backgroundModel")
+                .unwrap_or("main model")
+                .to_string();
+            println!(
+                "background model   : {} ({})",
+                if bg_on { "on" } else { "off" },
+                bg_model
+            );
             println!(
                 "sandbox            : {}",
                 if argent_core::sandbox::enabled_from_env() {
