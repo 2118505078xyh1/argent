@@ -2387,27 +2387,28 @@ impl App {
     fn palette_items(&self) -> Vec<PaletteItem> {
         let text: String = self.input.iter().collect();
         let query = text.trim_start_matches('/').to_ascii_lowercase();
+        // 高频的排前面：日常就这八个，其余输入时过滤可见。
         let builtins = [
-            ("help", "show keys and commands"),
-            ("new", "start a new session"),
-            ("fork", "fork the current session; /fork <n> branches at message n"),
-            ("tree", "browse the session branch tree"),
-            ("import", "import a session .jsonl file"),
-            ("rename", "rename the current session"),
-            ("resume", "open a stored session"),
-            ("sessions", "manage stored sessions (ctrl+r rename, ctrl+d delete)"),
             ("model", "switch model"),
             ("thinking", "set reasoning effort"),
             ("compact", "compact the conversation now"),
             ("rewind", "undo the last run's file changes"),
+            ("resume", "open a stored session"),
+            ("new", "start a new session"),
+            ("cost", "show usage, cost and context for this session"),
+            ("plan", "toggle plan mode"),
+            ("help", "show keys and commands"),
+            ("fork", "fork the current session; /fork <n> branches at message n"),
+            ("tree", "browse the session branch tree"),
+            ("import", "import a session .jsonl file"),
+            ("rename", "rename the current session"),
+            ("sessions", "manage stored sessions (ctrl+r rename, ctrl+d delete)"),
             ("clear", "clear history"),
             ("copy", "copy the last reply to the clipboard"),
-            ("cost", "show usage, cost and context for this session"),
             ("tools", "list tool schemas"),
             ("provider", "show provider and model"),
             ("expand", "toggle tool output"),
             ("init", "create AGENTS.md for this project"),
-            ("plan", "toggle plan mode"),
             ("exit", "quit"),
         ];
         let mut items: Vec<PaletteItem> = builtins
@@ -3284,30 +3285,28 @@ impl App {
                         argent_i18n::t(self.locale, "tui.help.scroll"),
                     ),
                     ("Ctrl+E", argent_i18n::t(self.locale, "tui.help.ctrl_e")),
-                    (
-                        "Ctrl+P / Ctrl+N",
-                        argent_i18n::t(self.locale, "tui.help.history"),
-                    ),
                     ("Ctrl+L", argent_i18n::t(self.locale, "tui.help.ctrl_l")),
+                    ("", ""),
                     (
                         "/model /thinking",
                         argent_i18n::t(self.locale, "tui.help.models"),
                     ),
                     (
-                        "/new /fork /rename /import",
-                        argent_i18n::t(self.locale, "tui.help.sessions"),
-                    ),
-                    (
-                        "/resume /sessions",
-                        argent_i18n::t(self.locale, "tui.help.resume"),
-                    ),
-                    (
-                        "/compact /clear /copy /tools /rewind",
+                        "/compact /rewind",
                         argent_i18n::t(self.locale, "tui.help.utils"),
                     ),
                     (
-                        "/tree",
-                        argent_i18n::t(self.locale, "tui.help.tree"),
+                        "/resume /new",
+                        argent_i18n::t(self.locale, "tui.help.resume"),
+                    ),
+                    (
+                        "/cost /plan",
+                        argent_i18n::t(self.locale, "tui.help.sessions"),
+                    ),
+                    ("", ""),
+                    (
+                        "/",
+                        argent_i18n::t(self.locale, "tui.help.all_commands"),
                     ),
                 ]
                 .into_iter()
