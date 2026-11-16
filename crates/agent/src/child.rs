@@ -8,9 +8,8 @@
 //! aborts a straggler through its [`AbortHandle`] and the child stops at its
 //! next step boundary instead of being torn down mid-write.
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use argent_ai::{
@@ -71,137 +70,48 @@ pub struct ChildFactory {
 
 impl ChildFactory {
     /// Run one batch and return one outcome per task, in submission order.
+    ///
+    /// Sequential by design: the caller's thread runs each child in turn, so
+    /// a conversation has exactly one execution thread no matter how many
+    /// subagents it spawns. The batch deadline still applies — once it passes,
+    /// every task that has not started yet is marked timed out instead of
+    /// running.
     pub fn run_batch(&self, batch: DelegateBatch) -> Vec<TaskOutcome> {
-        let count = batch.tasks.len();
-        // `None` marks a slot that has not been filled yet.
-        let slots: Arc<Mutex<Vec<Option<TaskOutcome>>>> = Arc::new(Mutex::new(vec![None; count]));
-        let queue: Arc<Mutex<VecDeque<(usize, DelegateRequest)>>> = Arc::new(Mutex::new(
-            batch.tasks.iter().cloned().enumerate().collect(),
-        ));
-        let done = Arc::new(AtomicBool::new(false));
-        let signal = Arc::new(Condvar::new());
-
-        let workers = batch.max_concurrency.clamp(1, count.max(1));
-        let mut handles = Vec::with_capacity(workers);
-
-        for _ in 0..workers {
-            let queue = Arc::clone(&queue);
-            let slots = Arc::clone(&slots);
-            let done_flag = Arc::clone(&done);
-            let signal = Arc::clone(&signal);
-            let factory = self.snapshot();
-            handles.push(std::thread::spawn(move || loop {
-                let next = {
-                    let mut guard = match queue.lock() {
-                        Ok(guard) => guard,
-                        Err(_) => return,
-                    };
-                    guard.pop_front()
-                };
-                let (index, request) = match next {
-                    Some(item) => item,
-                    None => return,
-                };
-                if done_flag.load(Ordering::Relaxed) {
-                    let outcome = TaskOutcome {
+        let deadline = Instant::now() + batch.timeout;
+        let mut out = Vec::with_capacity(batch.tasks.len());
+        for (index, request) in batch.tasks.iter().enumerate() {
+            if Instant::now() >= deadline {
+                out.push(TaskOutcome {
+                    role: request.role.clone(),
+                    task: request.task.clone(),
+                    output: "the batch deadline passed before this task started".to_string(),
+                    is_error: true,
+                    timed_out: true,
+                    elapsed: Duration::ZERO,
+                });
+                continue;
+            }
+            let outcome = self.run_one(request.clone(), Instant::now());
+            // A task that blew past the deadline ends the budget for the rest:
+            // running the remaining ones would push the batch far past what
+            // the operator asked for.
+            if outcome.elapsed >= batch.timeout && index + 1 < batch.tasks.len() {
+                out.push(outcome);
+                for request in batch.tasks.iter().skip(index + 1) {
+                    out.push(TaskOutcome {
                         role: request.role.clone(),
                         task: request.task.clone(),
                         output: "the batch deadline passed before this task started".to_string(),
                         is_error: true,
                         timed_out: true,
                         elapsed: Duration::ZERO,
-                    };
-                    if let Ok(mut guard) = slots.lock() {
-                        guard[index] = Some(outcome);
-                    }
-                    signal.notify_all();
-                    continue;
-                }
-
-                let started = Instant::now();
-                let outcome = factory.run_one(request.clone(), started);
-                if let Ok(mut guard) = slots.lock() {
-                    guard[index] = Some(outcome);
-                }
-                signal.notify_all();
-            }));
-        }
-
-        // Wait for the workers, honouring the batch deadline.
-        let deadline = Instant::now() + batch.timeout;
-        let mut finished = false;
-        while Instant::now() < deadline {
-            let filled = slots
-                .lock()
-                .map(|guard| guard.iter().filter(|slot| slot.is_some()).count())
-                .unwrap_or(0);
-            if filled == count {
-                finished = true;
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        if !finished {
-            // Tell any child still running to stop at its next step.
-            done.store(true, Ordering::Relaxed);
-            for handle in &handles {
-                let _ = handle;
-            }
-        }
-
-        for handle in handles {
-            // The workers exit on their own once the queue is empty or the flag
-            // is set; joining keeps the caller's view deterministic.
-            let _ = handle.join();
-        }
-
-        let mut guard = match slots.lock() {
-            Ok(guard) => guard,
-            Err(_) => return Vec::new(),
-        };
-        let mut out = Vec::with_capacity(count);
-        for (index, slot) in guard.iter_mut().enumerate() {
-            match slot.take() {
-                Some(outcome) => out.push(outcome),
-                None => {
-                    let task = &batch.tasks[index];
-                    out.push(TaskOutcome {
-                        role: task.role.clone(),
-                        task: task.task.clone(),
-                        output: "the task did not finish before the batch deadline".to_string(),
-                        is_error: true,
-                        timed_out: true,
-                        elapsed: Duration::ZERO,
                     });
                 }
+                return out;
             }
+            out.push(outcome);
         }
         out
-    }
-
-    /// Clone the parts a worker thread needs.
-    fn snapshot(&self) -> ChildFactory {
-        ChildFactory {
-            base_url: self.base_url.clone(),
-            api_key: self.api_key.clone(),
-            protocol: self.protocol.clone(),
-            model: self.model.clone(),
-            thinking: self.thinking.clone(),
-            models: self.models.clone(),
-            roles: Arc::clone(&self.roles),
-            parent_registry: self.parent_registry.subset(&self.parent_registry.names()),
-            cwd: self.cwd.clone(),
-            policy: self.policy.clone(),
-            audit: self.audit.clone(),
-            pre_tool: self.pre_tool.clone(),
-            post_tool: self.post_tool.clone(),
-            approve: self.approve.clone(),
-            approval_scope: self.approval_scope,
-            progress: self.progress.clone(),
-            checkpoints: self.checkpoints.clone(),
-            promotions: self.promotions.clone(),
-        }
     }
 
     /// Run one task in a fresh child and time it.
