@@ -51,6 +51,7 @@ pub fn dispatch(raw: &[String]) -> Result<Option<i32>> {
         "completion" => Ok(Some(completion(&raw[1..])?)),
         "agents" | "background" => Ok(Some(agents(&raw[1..])?)),
         "worktree" | "worktrees" => Ok(Some(worktree(&raw[1..])?)),
+        "replay" => Ok(Some(replay(&raw[1..])?)),
         "attach" => Ok(Some(attach_session(&raw[1..])?)),
         "logs" => Ok(Some(background_logs(&raw[1..], false)?)),
         "follow" => Ok(Some(background_logs(&raw[1..], true)?)),
@@ -1140,6 +1141,7 @@ const COMMANDS: &[&str] = &[
     "completion",
     "agents",
     "worktree",
+    "replay",
     "attach",
     "logs",
     "follow",
@@ -1334,6 +1336,87 @@ fn agents(args: &[String]) -> Result<i32> {
         );
     }
     Ok(0)
+}
+
+/// `argent replay <file>`：离线把一份会话或事件日志渲染成 transcript。
+///
+/// 两种输入：
+/// - 会话 JSONL（`{"kind":"message"|"header"|...}` 行）→ 消息 → transcript
+/// - `--mode json` / RPC 捕获的事件流（`{"type":"event","data":{...}}` 行），
+///   或裸事件 JSON（`{"type":"assistant_text",...}`）→ 逐个 apply
+///
+/// 输出与 TUI 退出时的回显一致（无颜色），既能当调试工具，也能在测试里
+/// 断言重放结果。
+fn replay(args: &[String]) -> Result<i32> {
+    let path = args
+        .iter()
+        .find(|arg| !arg.starts_with('-'))
+        .ok_or_else(|| Error::config("usage: argent replay <session|events.jsonl>"))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Error::io(format!("read {} failed: {}", path, e)))?;
+    for line in replay_lines(&text)? {
+        println!("{}", line);
+    }
+    Ok(0)
+}
+
+/// 重放的纯文本结果；输入无法识别时返回错误，而不是静默输出空内容。
+fn replay_lines(text: &str) -> Result<Vec<String>> {
+    let mut values = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value = Json::parse(line)
+            .map_err(|e| Error::config(format!("line {} is not JSON: {}", index + 1, e)))?;
+        values.push(value);
+    }
+    let first = values
+        .first()
+        .ok_or_else(|| Error::config("the input is empty"))?;
+    let transcript = if first.get("kind").is_some() {
+        let mut entries = Vec::new();
+        for value in &values {
+            let entry = argent_session::Entry::from_json(value).ok_or_else(|| {
+                Error::config("a session line is missing its kind/message payload")
+            })?;
+            entries.push(entry);
+        }
+        let messages = argent_session::entries_to_messages(&entries);
+        argent_ui_core::Transcript::from_messages(&messages)
+    } else {
+        let mut transcript = argent_ui_core::Transcript::new();
+        for value in &values {
+            match value.str_or("type", "").as_str() {
+                // `--mode json` 的会话头与最终结果行不是对话内容。
+                "session" | "result" => continue,
+                "error" => {
+                    transcript.push_notice(
+                        argent_ui_core::NoticeKind::Error,
+                        value.str_or("error", ""),
+                    );
+                    continue;
+                }
+                "event" => {
+                    let payload = value.get("data").cloned().unwrap_or_else(|| value.clone());
+                    let event = argent_agent::event_from_json(&payload).ok_or_else(|| {
+                        Error::config("an event line is not a known agent event")
+                    })?;
+                    transcript.apply(&event);
+                }
+                // 裸事件 JSON（手写日志或别的前端）。
+                _ => {
+                    let event = argent_agent::event_from_json(value).ok_or_else(|| {
+                        Error::config("an event line is not a known agent event")
+                    })?;
+                    transcript.apply(&event);
+                }
+            }
+        }
+        transcript
+    };
+    Ok(crate::tui::transcript_plain(&transcript))
 }
 
 /// `argent worktree`：`--worktree` 建出的工作树，列出来、删掉、清失效条目，
@@ -2794,6 +2877,39 @@ mod tests {
         assert!(!branch_is_ancestor(&dir, "argent/unmerged", "main"));
         assert!(last_commit_time(&dir).unwrap_or(0) > 0);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_renders_event_logs_and_session_files() {
+        // 事件日志：与 `--mode json` 捕获的包装格式一致；会话头与结果行跳过。
+        let events = concat!(
+            r#"{"type":"session","data":{"session":"s.jsonl","model":"m","cwd":"/w"}}"#,
+            "\n",
+            r#"{"id":1,"type":"event","event":"text","data":{"type":"assistant_text","text":"hello from events"}}"#,
+            "\n",
+            r#"{"type":"result","data":{"reason":"complete"}}"#,
+            "\n"
+        );
+        let lines = replay_lines(events).expect("event log");
+        assert!(lines.join("\n").contains("hello from events"), "{:?}", lines);
+
+        // 会话文件：kind 行，经过消息 → transcript。
+        let dir = std::env::temp_dir().join(format!("argent-replay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let entries = vec![
+            argent_session::Entry::Message(argent_ai::Message::user("hello from session")),
+            argent_session::Entry::Message(argent_ai::Message::assistant("the answer")),
+        ];
+        let text: String = entries
+            .iter()
+            .map(|entry| entry.to_json().dump() + "\n")
+            .collect();
+        let lines = replay_lines(&text).expect("session");
+        let joined = lines.join("\n");
+        assert!(joined.contains("hello from session"), "{}", joined);
+        assert!(joined.contains("the answer"), "{}", joined);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

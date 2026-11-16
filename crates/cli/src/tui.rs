@@ -3929,7 +3929,7 @@ pub fn run(
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
     if app.transcript.entries().iter().any(|entry| !entry.text().is_empty()) {
         println!();
-        for line in transcript_plain(&app) {
+        for line in transcript_plain(&app.transcript) {
             println!("{}", line);
         }
     }
@@ -3939,9 +3939,9 @@ pub fn run(
 }
 
 /// 退出时回显用的纯文本版本（无颜色、无边框）。
-fn transcript_plain(app: &App) -> Vec<String> {
+pub fn transcript_plain(transcript: &Transcript) -> Vec<String> {
     let mut out = Vec::new();
-    for entry in app.transcript.entries() {
+    for entry in transcript.entries() {
         match entry {
             argent_ui_core::Entry::User(text) => {
                 for line in text.lines() {
@@ -4647,6 +4647,33 @@ mod cursor_tests {
             Vec::new(),
             crate::keybindings::Bindings::default(),
         )
+    }
+
+    #[test]
+    fn a_long_transcript_keeps_the_warm_frame_cheap() {
+        // 500 messages: the first frame lays the transcript out once; every
+        // later frame must be O(screen), not O(conversation), or the body
+        // cache has been defeated.
+        let mut app = app();
+        for index in 0..500 {
+            app.transcript.push_user(format!("question {index}"));
+            app.transcript.push_entry(Entry::Assistant(format!(
+                "answer {index} with enough text to wrap on a normal terminal width"
+            )));
+        }
+        let _ = app.frame(100, 40);
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            let _ = app.frame(100, 40);
+        }
+        let per_frame = started.elapsed() / 20;
+        // Debug builds carry no optimisation; the release budget is 2ms.
+        let budget = if cfg!(debug_assertions) {
+            Duration::from_millis(20)
+        } else {
+            Duration::from_millis(2)
+        };
+        assert!(per_frame < budget, "warm frame took {:?}", per_frame);
     }
 
     #[test]

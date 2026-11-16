@@ -402,6 +402,7 @@ argent hooks trust status|review|grant|revoke
 argent --workflow <file>        依赖感知的子代理工作流
 argent workflow validate <file>
 argent sessions list|export --sqlite <path>|prune [--dry-run]
+argent replay <session|events.jsonl>    离线渲染会话或捕获的事件流
 argent telemetry status|enable [--endpoint <url> --consent]|disable
 argent update keygen|sign|check|download|apply|rollback
 argent plugins sign --key <file> <plugin-dir>

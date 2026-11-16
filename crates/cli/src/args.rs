@@ -223,6 +223,7 @@ COMMANDS:
     completion [shell]              print a bash/zsh/fish/powershell completion script
     agents [--json]                 background sessions and whether they are running
     logs <id> [--follow]            print a background session's event stream
+    replay <session|events.jsonl>   render a stored session or a captured event log
     attach <id> [--plain]          take over a background session (--plain: stream only)
     stop <id>                       stop a background session
     rm <id>                         stop and delete a background session
@@ -341,6 +342,7 @@ pub const HELP_ZH: &str = r#"argent — Rust 编写的 coding agent
     completion [shell]             输出 bash/zsh/fish/powershell 补全脚本
     agents [--json]                后台会话列表及运行状态
     logs <id> [--follow]           打印后台会话的事件流
+    replay <会话|事件日志>          离线渲染会话或捕获的事件流
     attach <id> [--plain]         接管后台会话（--plain 只打印事件流）
     stop <id>                      停止后台会话
     rm <id>                        停止并删除后台会话
