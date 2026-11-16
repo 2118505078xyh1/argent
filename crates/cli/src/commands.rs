@@ -2465,7 +2465,13 @@ fn eval(args: &[String]) -> Result<i32> {
     let text = argent_core::read_text_file(std::path::Path::new(&path))?;
     let value =
         Json::parse(&text).map_err(|e| Error::config(format!("invalid suite {}: {}", path, e)))?;
-    let scenarios = argent_eval::Scenario::suite_from_json(&value)?;
+    // Accept both shapes: a suite object with a `scenarios` array, and the
+    // single-scenario shape that `replay --to-eval` produces.
+    let scenarios = if value.get("scenarios").and_then(Json::as_array).is_some() {
+        argent_eval::Scenario::suite_from_json(&value)?
+    } else {
+        vec![argent_eval::Scenario::from_json(&value)?]
+    };
     if scenarios.is_empty() {
         println!("the suite has no scenarios");
         return Ok(0);
