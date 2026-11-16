@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "argent MCP client: JSON-RPC over stdio"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }

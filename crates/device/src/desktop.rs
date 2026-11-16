@@ -347,6 +347,9 @@ pub fn encode_bmp(image: &Screenshot) -> Vec<u8> {
     out.extend_from_slice(&0u32.to_le_bytes());
 
     // Rows go bottom-up, and BMP stores BGR.
+    // （内层 padding push 的 same_item_push 是误报：out 主体是逐像素 BGR，
+    // 不是同一值反复压栈，所以这里显式豁免。）
+    #[allow(clippy::same_item_push)]
     for y in (0..image.height).rev() {
         for x in 0..image.width {
             let index = ((y * image.width + x) * 3) as usize;

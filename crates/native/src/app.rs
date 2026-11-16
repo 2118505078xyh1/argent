@@ -7,7 +7,7 @@
 //! renderer.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -899,7 +899,7 @@ fn clip(text: &str, limit: usize) -> String {
     out
 }
 
-fn start_worker(config: &Config, cwd: &PathBuf) -> Worker {
+fn start_worker(config: &Config, cwd: &Path) -> Worker {
     let Engine {
         commands,
         events,
@@ -908,7 +908,7 @@ fn start_worker(config: &Config, cwd: &PathBuf) -> Worker {
         steering,
     } = argent_engine::start_session(
         config.clone(),
-        cwd.clone(),
+        cwd.to_path_buf(),
         None,
         Arc::new(AtomicU64::new(1)),
     );

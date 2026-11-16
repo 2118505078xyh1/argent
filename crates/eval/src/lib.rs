@@ -29,7 +29,7 @@
 //! script then plays in a loop, so the model never stops on its own and the
 //! turn limit is what ends the run.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use argent_agent::{Agent, AgentConfig, AgentEvent, EventSink, FinishReason};
@@ -356,7 +356,7 @@ impl EventSink for Recorder {
 
 /// 回滚后的工作区必须和场景开始时一模一样：原有内容恢复，新建文件消失。
 fn workspace_matches(
-    scratch: &PathBuf,
+    scratch: &Path,
     files: &[(String, String)],
 ) -> std::result::Result<(), String> {
     for (path, content) in files {
@@ -398,7 +398,7 @@ fn workspace_matches(
 ///
 /// The directory is removed afterwards: an eval leaves no trace on the
 /// machine it ran on.
-pub fn run(scenario: &Scenario, scratch: &PathBuf) -> Outcome {
+pub fn run(scenario: &Scenario, scratch: &Path) -> Outcome {
     let _ = std::fs::remove_dir_all(scratch);
     if std::fs::create_dir_all(scratch).is_err() {
         return Outcome {
@@ -428,7 +428,7 @@ pub fn run(scenario: &Scenario, scratch: &PathBuf) -> Outcome {
     let checkpoint_dir = scratch.with_extension("checkpoints");
     let _ = std::fs::remove_dir_all(&checkpoint_dir);
     let checkpoints = CheckpointStore::open(checkpoint_dir.clone());
-    let mut ctx = ToolCtx::new(scratch.clone());
+    let mut ctx = ToolCtx::new(scratch.to_path_buf());
     ctx.vars
         .insert("cwd".to_string(), scratch.display().to_string());
     ctx.checkpoints = Some(checkpoints.clone());
@@ -458,7 +458,7 @@ pub fn run(scenario: &Scenario, scratch: &PathBuf) -> Outcome {
         // The scenario denies one path; the gate is the same shape the
         // operator's settings file produces.
         let denied = denied.clone();
-        let cwd = scratch.clone();
+        let cwd = scratch.to_path_buf();
         config.policy = Some(Arc::new(move |name, args| {
             let path = args.get("path").and_then(Json::as_str).unwrap_or("");
             if path.is_empty() {
@@ -568,10 +568,10 @@ pub fn run(scenario: &Scenario, scratch: &PathBuf) -> Outcome {
 }
 
 /// Run a whole suite, returning the outcomes.
-pub fn run_suite(scenarios: &[Scenario], scratch: &PathBuf) -> Vec<Outcome> {
+pub fn run_suite(scenarios: &[Scenario], scratch: &Path) -> Vec<Outcome> {
     let mut outcomes = Vec::new();
     for (index, scenario) in scenarios.iter().enumerate() {
-        let mut directory = scratch.clone();
+        let mut directory = scratch.to_path_buf();
         directory.push(format!("case-{}", index));
         outcomes.push(run(scenario, &directory));
     }

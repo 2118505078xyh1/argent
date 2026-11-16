@@ -6,4 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 description = "Locale selection and the UI string catalog"
 
+[lints]
+workspace = true
+
 [dependencies]

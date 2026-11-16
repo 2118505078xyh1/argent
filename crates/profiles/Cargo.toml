@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "Named agent profiles: prompt, model, tool policy and budgets"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-config = { path = "../config" }

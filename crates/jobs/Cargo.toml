@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "argent background jobs: long-running commands that outlive a turn"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-tools = { path = "../tools" }

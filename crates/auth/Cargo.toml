@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "Credential storage for provider login"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-config = { path = "../config" }

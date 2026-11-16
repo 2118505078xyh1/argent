@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "Signed release manifests, version checks and verified downloads"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-config = { path = "../config" }
 argent-core = { path = "../core" }

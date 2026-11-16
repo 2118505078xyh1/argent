@@ -2452,8 +2452,8 @@ fn model_info(config: &Config) -> argent_ai::ModelInfo {
 }
 
 /// Build the tool execution context.
-fn build_ctx(config: &Config, cwd: &PathBuf) -> ToolCtx {
-    let mut ctx = ToolCtx::new(cwd.clone());
+fn build_ctx(config: &Config, cwd: &Path) -> ToolCtx {
+    let mut ctx = ToolCtx::new(cwd.to_path_buf());
     ctx.timeout_secs = config.tool_timeout_secs;
     ctx.confirm_delete = config.confirm_delete;
     ctx.auto_approve_bash = config.auto_approve_bash;
@@ -2465,7 +2465,7 @@ fn build_ctx(config: &Config, cwd: &PathBuf) -> ToolCtx {
         .and_then(Json::as_str)
         .unwrap_or("danger-full-access");
     if mode == "workspace-write" {
-        let mut roots = vec![cwd.clone()];
+        let mut roots = vec![cwd.to_path_buf()];
         if let Some(Json::Arr(dirs)) = config.extra.get("addDirs") {
             roots.extend(
                 dirs.iter()

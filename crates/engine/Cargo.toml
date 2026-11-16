@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "The agent worker behind every UI: sessions, commands, events and approvals"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }

@@ -69,20 +69,22 @@ impl Default for OAuthConfig {
 impl OAuthConfig {
     /// 解析 `mcpServers.<name>.oauth`；缺省字段保留默认值。
     pub fn from_json(value: &Json) -> OAuthConfig {
-        let mut config = OAuthConfig::default();
-        config.client_id = text(value.get("clientId"));
-        config.client_secret = text(value.get("clientSecret"));
-        config.scopes = scopes_of(value);
-        config.authorization_url = text(value.get("authorizationUrl"));
-        config.token_url = text(value.get("tokenUrl"));
-        config.auth_server_metadata_url = text(value.get("authServerMetadataUrl"));
-        config.callback_port = value
-            .get("callbackPort")
-            .and_then(Json::as_i64)
-            .filter(|port| *port > 0 && *port <= u16::MAX as i64)
-            .map(|port| port as u16);
-        config.callback_url = text(value.get("callbackUrl"));
-        config.client_name = text(value.get("clientName"));
+        let mut config = OAuthConfig {
+            client_id: text(value.get("clientId")),
+            client_secret: text(value.get("clientSecret")),
+            scopes: scopes_of(value),
+            authorization_url: text(value.get("authorizationUrl")),
+            token_url: text(value.get("tokenUrl")),
+            auth_server_metadata_url: text(value.get("authServerMetadataUrl")),
+            callback_port: value
+                .get("callbackPort")
+                .and_then(Json::as_i64)
+                .filter(|port| *port > 0 && *port <= u16::MAX as i64)
+                .map(|port| port as u16),
+            callback_url: text(value.get("callbackUrl")),
+            client_name: text(value.get("clientName")),
+            ..OAuthConfig::default()
+        };
         if let Some(flag) = value.get("dynamicRegistration").and_then(Json::as_bool) {
             config.dynamic_registration = flag;
         }

@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "argent plugin ABI: a stable C contract for external tools"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }

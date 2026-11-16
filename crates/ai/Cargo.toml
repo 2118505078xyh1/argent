@@ -6,5 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 description = "argent provider abstraction and message model"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }

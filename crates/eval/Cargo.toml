@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "Reproducible evaluation harness: scripted models against real tools"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }

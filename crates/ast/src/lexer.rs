@@ -339,14 +339,14 @@ pub fn tokenize(source: &str, profile: &LanguageProfile) -> Vec<Token> {
 }
 
 fn starts_with(chars: &[char], index: usize, pattern: &str) -> bool {
-    let mut cursor = index;
-    for expected in pattern.chars() {
-        if cursor >= chars.len() || chars[cursor] != expected {
-            return false;
-        }
-        cursor += 1;
+    let remaining = chars.len().saturating_sub(index);
+    if remaining < pattern.chars().count() {
+        return false;
     }
-    true
+    pattern
+        .chars()
+        .zip(&chars[index..])
+        .all(|(expected, actual)| expected == *actual)
 }
 
 fn is_open(ch: char) -> bool {

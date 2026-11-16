@@ -468,7 +468,7 @@ mod platform {
                 attribute_list,
                 0,
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                console as *mut c_void,
+                console,
                 std::mem::size_of::<Hpcon>(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),

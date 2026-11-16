@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "argent provider-agnostic agent loop"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }

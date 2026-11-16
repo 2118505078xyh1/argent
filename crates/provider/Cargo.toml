@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "Provider and model catalog, protocol selection and client factory"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }

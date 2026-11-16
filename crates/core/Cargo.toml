@@ -6,4 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 description = "Zero-dependency foundation: JSON, HTTP, SSE, process, terminal, config"
 
+[lints]
+workspace = true
+
 [dependencies]

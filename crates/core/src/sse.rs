@@ -69,10 +69,7 @@ impl SseDecoder {
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<SseEvent> {
         self.decode(bytes);
         let mut events = Vec::new();
-        loop {
-            let Some(split) = self.find_line_end() else {
-                break;
-            };
+        while let Some(split) = self.find_line_end() {
             let line = self.buffer[..split.0].to_string();
             let consumed = split.1;
             self.buffer.drain(..consumed);

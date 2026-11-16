@@ -5,6 +5,9 @@ edition = "2021"
 license = "MIT"
 description = "A demo argent plugin: two tools behind the stable C ABI"
 
+[lints]
+workspace = true
+
 [lib]
 name = "argent_plugin_demo"
 crate-type = ["cdylib"]

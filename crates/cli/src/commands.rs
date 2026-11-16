@@ -1830,15 +1830,12 @@ fn usage(args: &[String]) -> Result<i32> {
     } else {
         format!("since {}", argent_session::local_stamp(since))
     };
-    let hit = if summary.prompt_tokens == 0 {
-        0
-    } else {
-        summary
-            .cached_tokens
-            .min(summary.prompt_tokens)
-            * 100
-            / summary.prompt_tokens
-    };
+    let hit = summary
+        .cached_tokens
+        .min(summary.prompt_tokens)
+        .checked_mul(100)
+        .and_then(|v| v.checked_div(summary.prompt_tokens))
+        .unwrap_or(0);
     println!(
         "usage: {} turn(s), {} request(s), {}",
         summary.turns, summary.requests, since_label

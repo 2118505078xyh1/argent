@@ -6,5 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 description = "Layered argent configuration and extension discovery"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }

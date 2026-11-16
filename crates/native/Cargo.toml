@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "argent native desktop frontend (iced, no WebView)"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "argent-native"
 path = "src/main.rs"

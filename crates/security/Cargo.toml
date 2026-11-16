@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "Permission policy, path and command guards, and the audit log"
 
+[lints]
+workspace = true
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-config = { path = "../config" }

@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "argent command-line entry point"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "argent"
 path = "src/main.rs"
