@@ -7,7 +7,6 @@ use argent_core::error::Result;
 use crate::message::{Message, ModelInfo, ToolSchema};
 
 /// A request for one chat completion.
-#[derive(Debug, Clone)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,

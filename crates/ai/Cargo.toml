@@ -10,4 +10,5 @@ description = "argent provider abstraction and message model"
 workspace = true
 
 [dependencies]
+corosensei = "0.2"
 argent-core = { path = "../core" }

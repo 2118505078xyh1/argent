@@ -503,10 +503,104 @@ pub struct StreamingChild {
     _job: Option<crate::sandbox::JobGuard>,
 }
 
+#[cfg(unix)]
+fn set_nonblocking(fd: i32) -> std::io::Result<()> {
+    unsafe {
+        extern "C" {
+            fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
+        }
+        let flags = fcntl(fd, 3 /* F_GETFL */, 0);
+        if fcntl(fd, 4 /* F_SETFL */, flags | 0o4000 /* O_NONBLOCK */) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restore_blocking(fd: i32) -> std::io::Result<()> {
+    unsafe {
+        extern "C" {
+            fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
+        }
+        let flags = fcntl(fd, 3, 0);
+        if fcntl(fd, 4, flags & !0o4000) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 impl StreamingChild {
     /// The child's stdout pipe, for line-by-line reading.
     pub fn stdout(&mut self) -> Option<&mut std::process::ChildStdout> {
         self.stdout.as_mut()
+    }
+
+    /// Non-blocking probe: `Some(bytes)` when data arrived, `None` when the
+    /// pipe has nothing yet. Used by the coroutine scheduler so several
+    /// children can advance on one thread.
+    ///
+    /// Windows uses `PeekNamedPipe`; Unix puts the descriptor in non-blocking
+    /// mode and treats `EAGAIN` as empty.
+    pub fn try_read(&mut self, buf: &mut [u8]) -> std::io::Result<Option<usize>> {
+        let Some(pipe) = self.stdout.as_mut() else {
+            return Ok(Some(0));
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            #[repr(C)]
+            struct Available {
+                total: u32,
+                _left: u32,
+            }
+            extern "system" {
+                fn PeekNamedPipe(
+                    handle: *mut core::ffi::c_void,
+                    buffer: *mut u8,
+                    size: u32,
+                    read: *mut u32,
+                    available: *mut Available,
+                    left: *mut u32,
+                ) -> i32;
+            }
+            let mut available = Available { total: 0, _left: 0 };
+            let ok = unsafe {
+                PeekNamedPipe(
+                    pipe.as_raw_handle() as *mut core::ffi::c_void,
+                    core::ptr::null_mut(),
+                    0,
+                    core::ptr::null_mut(),
+                    &mut available,
+                    core::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                // Broken pipe means the child is done; surface EOF.
+                return Ok(Some(0));
+            }
+            if available.total == 0 {
+                return Ok(None);
+            }
+            match pipe.read(buf) {
+                Ok(n) => Ok(Some(n)),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            set_nonblocking(pipe.as_raw_fd())?;
+            let result = pipe.read(buf);
+            restore_blocking(pipe.as_raw_fd())?;
+            match result {
+                Ok(n) => Ok(Some(n)),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
     }
 
     /// Drain whatever the child has written to stderr so far.

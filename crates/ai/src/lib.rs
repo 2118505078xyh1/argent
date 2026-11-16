@@ -4,6 +4,7 @@ pub mod anthropic;
 pub mod cancel;
 pub mod capabilities;
 pub mod background;
+pub mod cooperative;
 pub mod message;
 pub mod openai;
 pub mod provider;

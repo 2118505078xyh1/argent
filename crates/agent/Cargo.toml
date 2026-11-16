@@ -10,6 +10,7 @@ description = "argent provider-agnostic agent loop"
 workspace = true
 
 [dependencies]
+corosensei = "0.2"
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }
 argent-tools = { path = "../tools" }

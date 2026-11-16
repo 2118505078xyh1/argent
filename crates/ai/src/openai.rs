@@ -475,7 +475,20 @@ impl Read for CurlStream {
                 "request aborted",
             ));
         }
+        // Inside a cooperative coroutine, an empty pipe yields to the
+        // scheduler instead of stalling every other child on the thread.
         // curl 以非零码退出时，EOF 代表连接失败或中断，不能当成正常结束。
+        if crate::cooperative::is_cooperative() {
+            loop {
+                match self.child.try_read(buf) {
+                    Ok(Some(n)) => return Ok(n),
+                    Ok(None) => crate::cooperative::yield_now(),
+                    Err(e) => {
+                        return Err(std::io::Error::new(e.kind(), format!("curl: {}", e)))
+                    }
+                }
+            }
+        }
         self.child
             .read_checked(buf)
             .map_err(|error| std::io::Error::new(error.kind(), format!("curl: {}", error)))

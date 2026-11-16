@@ -71,47 +71,110 @@ pub struct ChildFactory {
 impl ChildFactory {
     /// Run one batch and return one outcome per task, in submission order.
     ///
-    /// Sequential by design: the caller's thread runs each child in turn, so
-    /// a conversation has exactly one execution thread no matter how many
-    /// subagents it spawns. The batch deadline still applies — once it passes,
-    /// every task that has not started yet is marked timed out instead of
-    /// running.
+    /// Every child runs in its own coroutine **on this thread**: one
+    /// conversation has exactly one execution thread no matter how many
+    /// subagents it spawns. Coroutines interleave at the model-stream read —
+    /// when a child's pipe has nothing, the coroutine suspends and the
+    /// scheduler advances another one. Tool execution still blocks its
+    /// coroutine (a long bash command pauses the siblings until it returns).
+    ///
+    /// The batch deadline bounds the whole batch; tasks that never started
+    /// by then are marked timed out.
     pub fn run_batch(&self, batch: DelegateBatch) -> Vec<TaskOutcome> {
+        use corosensei::{Coroutine, CoroutineResult};
+
         let deadline = Instant::now() + batch.timeout;
+        let mut coroutines: Vec<Coroutine<(), (), TaskOutcome>> = Vec::new();
+        for request in &batch.tasks {
+            let factory = self.snapshot();
+            let task = request.clone();
+            coroutines.push(Coroutine::new(move |yielder, _input| {
+                // Register the yield hook for this coroutine's reads. The
+                // 'static closure borrows the yielder, whose stack stays
+                // alive while the coroutine is suspended — the guarantee the
+                // unsafe conversion relies on. The guard clears the hook
+                // before the coroutine's stack is dropped.
+                let yielder: &'static corosensei::Yielder<(), ()> =
+                    unsafe { &*(yielder as *const corosensei::Yielder<(), ()>) };
+                let guard = unsafe {
+                    argent_ai::cooperative::set_yielder(std::rc::Rc::new(move || {
+                        yielder.suspend(())
+                    }))
+                };
+                let outcome = factory.run_one(task, Instant::now());
+                drop(guard);
+                outcome
+            }));
+        }
+
+        // Round-robin the coroutines until all complete or the deadline passes.
+        let mut results: Vec<Option<TaskOutcome>> = vec![None; batch.tasks.len()];
+        while results.iter().any(Option::is_none) {
+            if Instant::now() >= deadline {
+                break;
+            }
+            let mut advanced = false;
+            for (index, coroutine) in coroutines.iter_mut().enumerate() {
+                if results[index].is_some() {
+                    continue;
+                }
+                match coroutine.resume(()) {
+                    CoroutineResult::Yield(()) => {
+                        advanced = true;
+                    }
+                    CoroutineResult::Return(outcome) => {
+                        results[index] = Some(outcome);
+                        advanced = true;
+                    }
+                }
+            }
+            if !advanced {
+                break;
+            }
+        }
+
+        // Anything the deadline cut off is marked, in submission order.
         let mut out = Vec::with_capacity(batch.tasks.len());
         for (index, request) in batch.tasks.iter().enumerate() {
-            if Instant::now() >= deadline {
-                out.push(TaskOutcome {
-                    role: request.role.clone(),
-                    task: request.task.clone(),
-                    output: "the batch deadline passed before this task started".to_string(),
-                    is_error: true,
-                    timed_out: true,
-                    elapsed: Duration::ZERO,
-                });
-                continue;
-            }
-            let outcome = self.run_one(request.clone(), Instant::now());
-            // A task that blew past the deadline ends the budget for the rest:
-            // running the remaining ones would push the batch far past what
-            // the operator asked for.
-            if outcome.elapsed >= batch.timeout && index + 1 < batch.tasks.len() {
-                out.push(outcome);
-                for request in batch.tasks.iter().skip(index + 1) {
+            match results[index].take() {
+                Some(outcome) => out.push(outcome),
+                None => {
                     out.push(TaskOutcome {
                         role: request.role.clone(),
                         task: request.task.clone(),
-                        output: "the batch deadline passed before this task started".to_string(),
+                        output: "the batch deadline passed before this task finished".to_string(),
                         is_error: true,
                         timed_out: true,
                         elapsed: Duration::ZERO,
                     });
                 }
-                return out;
             }
-            out.push(outcome);
         }
         out
+    }
+
+    /// Clone the parts a child needs so the coroutine owns them.
+    fn snapshot(&self) -> ChildFactory {
+        ChildFactory {
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            protocol: self.protocol.clone(),
+            model: self.model.clone(),
+            thinking: self.thinking.clone(),
+            models: self.models.clone(),
+            roles: Arc::clone(&self.roles),
+            parent_registry: self.parent_registry.subset(&self.parent_registry.names()),
+            cwd: self.cwd.clone(),
+            policy: self.policy.clone(),
+            audit: self.audit.clone(),
+            pre_tool: self.pre_tool.clone(),
+            post_tool: self.post_tool.clone(),
+            approve: self.approve.clone(),
+            approval_scope: self.approval_scope,
+            progress: self.progress.clone(),
+            checkpoints: self.checkpoints.clone(),
+            promotions: self.promotions.clone(),
+        }
     }
 
     /// Run one task in a fresh child and time it.
