@@ -1166,7 +1166,7 @@ const SUBCOMMANDS: &[(&str, &[&str])] = &[
     ),
     ("update", &["check", "apply", "rollback", "keygen", "sign"]),
     ("mcp", &["list", "add", "remove"]),
-    ("worktree", &["list", "remove", "prune"]),
+    ("worktree", &["list", "remove", "prune", "clean"]),
     ("agents", &["list", "stop", "rm"]),
     ("logs", &["follow"]),
     ("auth", &["login", "logout", "status"]),
@@ -1336,7 +1336,8 @@ fn agents(args: &[String]) -> Result<i32> {
     Ok(0)
 }
 
-/// `argent worktree`：`--worktree` 建出的工作树，列出来、删掉、清失效条目。
+/// `argent worktree`：`--worktree` 建出的工作树，列出来、删掉、清失效条目，
+/// 以及批量清理已合并/空闲的工作树。
 ///
 /// 路径约定与 `--worktree` 一致：`<storage>/worktrees/<repo>/<name>`，
 /// 分支名 `argent/<name>`。
@@ -1463,19 +1464,187 @@ fn worktree(args: &[String]) -> Result<i32> {
             println!("pruned worktree metadata for {} repositories", pruned);
             Ok(0)
         }
+        "clean" => {
+            // 批量清理：分支已合并进默认分支，或空闲超过 N 天的工作树。
+            // 默认只列候选（dry run），`--yes` 才真删；dirty 的要再给
+            // `--force`，避免把没提交的改动一起删掉。
+            let idle_days = args
+                .iter()
+                .find_map(|arg| arg.strip_prefix("--idle-days="))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(7);
+            let confirm = args.iter().any(|arg| arg == "--yes" || arg == "-y");
+            let force = args.iter().any(|arg| arg == "--force" || arg == "-f");
+            if entries.is_empty() {
+                println!("no worktrees under {}", root.display());
+                return Ok(0);
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs())
+                .unwrap_or(0);
+            let cutoff = now.saturating_sub(idle_days.saturating_mul(24 * 3600));
+
+            struct Candidate {
+                repo: String,
+                name: String,
+                path: std::path::PathBuf,
+                main_repo: std::path::PathBuf,
+                branch: String,
+                dirty: bool,
+                reason: &'static str,
+            }
+
+            let mut candidates: Vec<Candidate> = Vec::new();
+            for (repo, name, path) in &entries {
+                // 读不到状态就当作 dirty：宁可漏删，不可误删。
+                let dirty = git_ok(path, &["status", "--porcelain"])
+                    .map(|out| !out.trim().is_empty())
+                    .unwrap_or(true);
+                let Some(main_repo) = worktree_origin(path) else {
+                    continue;
+                };
+                let branch = format!("argent/{}", name);
+                let merged = default_branch(&main_repo)
+                    .map(|main| branch_is_ancestor(&main_repo, &branch, &main))
+                    .unwrap_or(false);
+                let last = last_commit_time(path).unwrap_or(0);
+                let idle = last > 0 && last < cutoff;
+                if !merged && !idle {
+                    continue;
+                }
+                candidates.push(Candidate {
+                    repo: repo.clone(),
+                    name: name.clone(),
+                    path: path.clone(),
+                    main_repo,
+                    branch,
+                    dirty,
+                    reason: if merged { "merged" } else { "idle" },
+                });
+            }
+
+            if candidates.is_empty() {
+                println!(
+                    "nothing to clean (no merged worktree, nothing idle for {} day(s))",
+                    idle_days
+                );
+                return Ok(0);
+            }
+
+            let mut removed = 0usize;
+            for candidate in &candidates {
+                let label = format!("{}/{}", candidate.repo, candidate.name);
+                if candidate.dirty && !force {
+                    println!(
+                        "skip     {} ({}, dirty — pass --force to remove)",
+                        label, candidate.reason
+                    );
+                    continue;
+                }
+                if !confirm {
+                    println!(
+                        "would rm {} ({}{})",
+                        label,
+                        candidate.reason,
+                        if candidate.dirty { ", dirty" } else { "" }
+                    );
+                    continue;
+                }
+                let mut command = std::process::Command::new("git");
+                command
+                    .arg("-C")
+                    .arg(&candidate.main_repo)
+                    .arg("worktree")
+                    .arg("remove");
+                if candidate.dirty {
+                    command.arg("--force");
+                }
+                command.arg(&candidate.path);
+                match command.status() {
+                    Ok(status) if status.success() => {}
+                    _ => {
+                        println!("failed   {} (git worktree remove)", label);
+                        continue;
+                    }
+                }
+                // 只有已合并的分支才删；`-d` 对未合并分支会拒绝，正好当保险。
+                if candidate.reason == "merged" {
+                    let _ = git_ok(
+                        &candidate.main_repo,
+                        &["branch", "-d", &candidate.branch],
+                    );
+                }
+                println!("removed  {} ({})", label, candidate.reason);
+                removed += 1;
+            }
+
+            if confirm {
+                println!("removed {} worktree(s)", removed);
+            } else {
+                let blocked = candidates.iter().filter(|c| c.dirty && !force).count();
+                println!(
+                    "dry run: {} removable, {} need --force; pass --yes to remove",
+                    candidates.len() - blocked,
+                    blocked
+                );
+            }
+            Ok(0)
+        }
         "help" => {
             println!(
                 "usage: argent worktree list
        argent worktree remove <repo/name|name> [--force]
-       argent worktree prune"
+       argent worktree prune
+       argent worktree clean [--idle-days=N] [--yes] [--force]"
             );
             Ok(0)
         }
         other => Err(Error::config(format!(
-            "unknown worktree command '{}'; expected list, remove or prune",
+            "unknown worktree command '{}'; expected list, remove, prune or clean",
             other
         ))),
     }
+}
+
+/// 主仓库的默认分支名：优先 `origin/HEAD`，其次本地 `main` / `master`。
+fn default_branch(repo: &std::path::Path) -> Option<String> {
+    if let Some(out) = git_ok(repo, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+        let name = out.trim().trim_start_matches("origin/").to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    for name in ["main", "master"] {
+        if git_ok(
+            repo,
+            &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}", name)],
+        )
+        .is_some()
+        {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+/// `branch` 的提交是否已全部包含在 `main` 里（可以安全删分支）。
+fn branch_is_ancestor(repo: &std::path::Path, branch: &str, main: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["merge-base", "--is-ancestor", branch, main])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// 工作树里最后一次提交的 Unix 时间；还没有提交时返回 None。
+fn last_commit_time(dir: &std::path::Path) -> Option<u64> {
+    git_ok(dir, &["log", "-1", "--format=%ct"])?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// 从 worktree 的 `.git` 文件反推主仓库根目录。
@@ -2574,5 +2743,57 @@ mod tests {
                 command
             );
         }
+    }
+
+    #[test]
+    fn worktree_clean_recognises_merged_branches() {
+        // 没有 git 就跳过：这个测试要真建仓库。
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "argent-worktree-clean-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create repo dir");
+
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("spawn git");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.invalid"]);
+        run(&["config", "user.name", "test"]);
+        std::fs::write(dir.join("a.txt"), "a").expect("write a");
+        run(&["add", "."]);
+        run(&["commit", "-m", "init"]);
+        // 已合并分支：指向 main 的提交。
+        run(&["branch", "argent/merged"]);
+        // 未合并分支：多一个提交。
+        run(&["checkout", "-b", "argent/unmerged"]);
+        std::fs::write(dir.join("b.txt"), "b").expect("write b");
+        run(&["add", "."]);
+        run(&["commit", "-m", "work"]);
+        run(&["checkout", "main"]);
+
+        assert_eq!(default_branch(&dir).as_deref(), Some("main"));
+        assert!(branch_is_ancestor(&dir, "argent/merged", "main"));
+        assert!(!branch_is_ancestor(&dir, "argent/unmerged", "main"));
+        assert!(last_commit_time(&dir).unwrap_or(0) > 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
