@@ -76,7 +76,7 @@ argent --max-tokens 50000 --max-cost 0.5 --max-seconds 600 "做一件事"
 在 `argent.json` 里给模型配好价格，`--max-cost` 就能直接生效：
 
 ```json
-{"prices":{"glm-5.3":{"input":0.6,"output":2.2}}}
+{"prices":{"<model-id>":{"input":0.6,"output":2.2}}}
 ```
 
 检查点在每个工具批次之后、每次新请求之前，所以最坏情况是「最后一个批次
@@ -389,7 +389,7 @@ DPAPI 密钥加密，拷到别的账户/机器上也读不出来。把设置里�
       "protocol": "anthropic-messages",
       "baseUrl": "https://gateway.example.com/anthropic",
       "apiKeyEnv": "PRIVATE_GATEWAY_KEY",
-      "defaultModel": "glm-5.3",
+      "defaultModel": "<model-id>",
       "oauth": {
         "authorizeUrl": "https://gateway.example.com/oauth/authorize",
         "tokenUrl": "https://gateway.example.com/oauth/token",
