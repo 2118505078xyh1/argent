@@ -204,6 +204,8 @@ pub fn key_name(key: &Key) -> String {
         Key::Down => "down".to_string(),
         Key::Left => "left".to_string(),
         Key::Right => "right".to_string(),
+        Key::ScrollUp => "wheelup".to_string(),
+        Key::ScrollDown => "wheeldown".to_string(),
         Key::Home => "home".to_string(),
         Key::End => "end".to_string(),
         Key::PageUp => "pgup".to_string(),

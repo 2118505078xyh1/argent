@@ -2,8 +2,7 @@
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 #
-# The Tauri window needs the WebView2 runtime; it is present on current Windows
-# 10/11 installs. The CLI/TUI needs nothing else.
+# The CLI/TUI and the native iced window need nothing but Windows itself.
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -14,7 +13,7 @@ $version = (Select-String -Path "Cargo.toml" -Pattern '^version = ' |
 if (-not $version) { $version = "0.1.0" }
 
 Write-Host "building argent $version"
-cargo build --release -p argent-cli -p argent-desktop
+cargo build --release -p argent-cli -p argent-native
 
 $name = "argent-$version-windows-x64"
 $dist = Join-Path $root "dist\$name"
@@ -22,7 +21,7 @@ if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
 Copy-Item "target\release\argent.exe" $dist
-Copy-Item "target\release\argent-gui.exe" $dist
+Copy-Item "target\release\argent-native.exe" $dist
 Copy-Item "README.md" $dist
 Copy-Item "LICENSE" $dist
 Copy-Item "docs" $dist -Recurse

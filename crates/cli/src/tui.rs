@@ -1237,6 +1237,10 @@ pub enum Key {
     Down,
     Left,
     Right,
+    /// 鼠标滚轮。Windows 上滚轮以 VT 序列（`ESC [ A`）到达，而真方向键
+    /// 走虚拟键码记录——两者能区分：方向键翻输入历史，滚轮滚动会话。
+    ScrollUp,
+    ScrollDown,
     Home,
     End,
     PageUp,
@@ -1415,8 +1419,10 @@ fn handle_paste_key(
                     return Some(true);
                 }
                 let key = match c {
-                    'A' => Some(Key::Up),
-                    'B' => Some(Key::Down),
+                    // 这里的 `ESC [ A` / `ESC [ B` 是滚轮：真方向键以带虚拟
+                    // 键码的 key record 到达，不会走到这个分支。
+                    'A' => Some(Key::ScrollUp),
+                    'B' => Some(Key::ScrollDown),
                     'C' => Some(Key::Right),
                     'D' => Some(Key::Left),
                     'H' => Some(Key::Home),
@@ -1834,10 +1840,22 @@ struct PaletteItem {
     description: String,
 }
 
+/// The cached, laid-out transcript body.
+struct BodyCache {
+    width: usize,
+    expand: bool,
+    version: u64,
+    lines: Vec<Line>,
+}
+
 struct App {
     locale: argent_i18n::Locale,
     /// Set when the UI drives a background session instead of a local agent.
     remote: Option<RemoteLink>,
+    /// Laid-out transcript body, keyed on width / fold state / transcript
+    /// version. Re-wrapping a long transcript every frame is what made the
+    /// whole UI feel laggy.
+    body_cache: Option<BodyCache>,
     transcript: Transcript,
     metrics: Metrics,
     ready: Option<ReadyInfo>,
@@ -1891,6 +1909,7 @@ impl App {
     ) -> App {
         App {
             remote: None,
+            body_cache: None,
             locale,
             statusline,
             bindings,
@@ -2338,6 +2357,8 @@ impl App {
             Key::Up | Key::Down => {}
             Key::PageUp => self.scroll = self.scroll.saturating_add(10),
             Key::PageDown => self.scroll = self.scroll.saturating_sub(10),
+            Key::ScrollUp => self.scroll = self.scroll.saturating_add(3),
+            Key::ScrollDown => self.scroll = self.scroll.saturating_sub(3),
             Key::Tab => self.insert_text("  "),
             Key::Char(ch) => self.insert_text(&ch.to_string()),
             // 动作键已在上面处理；粘贴块与未知序列不在这里。
@@ -3088,21 +3109,66 @@ impl App {
         Line::plain(text).with_style(style)
     }
 
-    fn transcript_lines(&self, width: usize) -> Vec<Line> {
-        let mut lines = Vec::new();
+    fn transcript_lines(&mut self, width: usize) -> Vec<Line> {
+        let version = self.transcript.version();
+        let expand = self.expand;
+        if let Some(cache) = &self.body_cache {
+            if cache.width == width && cache.expand == expand && cache.version == version {
+                return cache.lines.clone();
+            }
+        }
+        let lines = self.transcript_lines_uncached(width);
+        self.body_cache = Some(BodyCache {
+            width,
+            expand,
+            version,
+            lines: lines.clone(),
+        });
+        lines
+    }
+
+    fn transcript_lines_uncached(&self, width: usize) -> Vec<Line> {
+        // 流式 delta 是交错到达的（思考→回答→补充思考→继续回答），不合并
+        // 的话每个碎片都另起一段，读起来是碎的。相邻同类条目先合成一篇
+        // 连续文本再渲染。
+        #[derive(Clone)]
+        enum Group {
+            User(String),
+            Assistant(Vec<String>),
+            Thinking(Vec<String>),
+            Other(Entry),
+        }
+        let mut groups: Vec<Group> = Vec::new();
         for entry in self.transcript.entries() {
             match entry {
-                Entry::User(text) => {
-                    lines.extend(wrapped(text, width, USER_MARK, "  ", Style::bold(crate::theme::current().accent)));
+                Entry::User(text) => groups.push(Group::User(text.clone())),
+                Entry::Assistant(text) => match groups.last_mut() {
+                    Some(Group::Assistant(parts)) => parts.push(text.clone()),
+                    _ => groups.push(Group::Assistant(vec![text.clone()])),
+                },
+                Entry::Thinking(text) => match groups.last_mut() {
+                    Some(Group::Thinking(parts)) => parts.push(text.clone()),
+                    _ => groups.push(Group::Thinking(vec![text.clone()])),
+                },
+                other => groups.push(Group::Other(other.clone())),
+            }
+        }
+        let mut lines = Vec::new();
+        for group in groups {
+            match group {
+                Group::User(text) => {
+                    lines.extend(wrapped(&text, width, USER_MARK, "  ", Style::bold(crate::theme::current().accent)));
                 }
-                Entry::Assistant(text) => {
+                Group::Assistant(parts) => {
+                    let text = parts.join("");
                     // ◆ 是回答行的锚点：正文不带边框，靠前缀与颜色分角色。
                     // markdown 只做四件事：代码块、行内代码、粗体、标题。
-                    lines.extend(markdown_lines(text, width, ASSISTANT_MARK, "  "));
+                    lines.extend(markdown_lines(&text, width, ASSISTANT_MARK, "  "));
                 }
-                Entry::Thinking(text) => {
+                Group::Thinking(parts) => {
+                    let text = parts.join("");
                     let mut rendered = wrapped(
-                        text,
+                        &text,
                         width,
                         "✻ ",
                         "  ",
@@ -3117,6 +3183,7 @@ impl App {
                     }
                     lines.extend(rendered);
                 }
+                Group::Other(entry) => match entry {
                 Entry::Tool(run) => {
                     // 第一行是"做了什么"：名字 + 主参数（path/command…），
                     // 不把整段 JSON 甩在对话里。
@@ -3171,16 +3238,15 @@ impl App {
                         NoticeKind::Warning => Style::fg(crate::theme::current().warning),
                         NoticeKind::Error => Style::fg(crate::theme::current().error),
                     };
-                    lines.extend(wrapped(text, width, "! ", "  ", style));
+                    lines.extend(wrapped(&text, width, "! ", "  ", style));
+                }
+                _ => {}
                 }
             }
             lines.push(Line::plain(""));
         }
         if lines.is_empty() {
-            lines.push(Line::new().push(Span::new(
-                argent_i18n::t(self.locale, "tui.empty"),
-                Style::dim(crate::theme::current().dim),
-            )));
+            // 空会话不写引导文字：输入框就是入口，占一行空白即可。
             lines.push(Line::plain(""));
         }
         lines
@@ -3542,8 +3608,8 @@ fn separator(width: usize) -> Line {
 
 fn input_top(width: usize) -> Line {
     // 只有一条细线：输入区不需要标签，占位符已经说明了它是什么。
-    Line::plain("─".repeat(width.saturating_sub(2)))
-        .with_style(Style::dim(crate::theme::current().dim))
+    // 与下方分隔线同宽——差两格看起来像两条没对齐的线。
+    Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
 }
 
 fn fill_between(mut left: Line, right: String, width: usize, style: Style) -> Line {
@@ -3655,6 +3721,7 @@ pub fn run_remote(
     );
     // The stand-in worker is the same for every key: its commands go nowhere.
     let worker = remote_worker();
+    let mut last_size = initial_size;
 
     while !app.quit {
         let mut changed = false;
@@ -3698,6 +3765,21 @@ pub fn run_remote(
                     size.rows as usize,
                 )),
             );
+            last_size = size;
+        } else {
+            // 同 run()：空闲时的 resize 只能靠轮询尺寸发现。
+            let size = terminal::size();
+            if size != last_size {
+                last_size = size;
+                let lines = app.frame(size.cols as usize, size.rows as usize);
+                draw_at(
+                    &lines,
+                    Some(app.cursor_screen_position(
+                        size.cols as usize,
+                        size.rows as usize,
+                    )),
+                );
+            }
         }
         std::thread::sleep(Duration::from_millis(33));
     }
@@ -3761,6 +3843,7 @@ pub fn run(
         )),
     );
     let mut last_sweep = Instant::now();
+    let mut last_size = initial_size;
 
     while !app.quit {
         let mut changed = false;
@@ -3805,6 +3888,22 @@ pub fn run(
                     size.rows as usize,
                 )),
             );
+            last_size = size;
+        } else {
+            // 空闲时没有事件触发重画：最大化/还原只能靠尺寸变化来发现，
+            // 否则要等到下一次按键才重排。
+            let size = terminal::size();
+            if size != last_size {
+                last_size = size;
+                let lines = app.frame(size.cols as usize, size.rows as usize);
+                draw_at(
+                    &lines,
+                    Some(app.cursor_screen_position(
+                        size.cols as usize,
+                        size.rows as usize,
+                    )),
+                );
+            }
         }
         if last_sweep.elapsed() >= Duration::from_secs(5) {
             last_sweep = Instant::now();
@@ -4206,8 +4305,11 @@ mod tests {
             "
 ",
         );
-        assert!(joined.contains("argent"), "{}", joined);
         assert!(joined.contains("Enter 发送"), "{}", joined);
+        // 空会话不再渲染引导文字，也不能再重复键位提示。
+        assert!(!joined.contains("问点什么"), "{}", joined);
+        let second = app.frame(80, 24).join("\n");
+        assert!(!second.contains("Enter 发送"), "{}", second);
     }
 
     #[test]
@@ -4474,11 +4576,11 @@ mod paste_tests {
     }
 
     #[test]
-    fn wheel_arrows_translate_into_direction_keys() {
-        // The wheel sends ESC [ A / ESC [ B: without this they would pile
-        // up in the input box as literal `[A[B[...`.
-        assert_eq!(feed("\u{1b}[A"), vec![Key::Up]);
-        assert_eq!(feed("\u{1b}[B"), vec![Key::Down]);
+    fn wheel_arrows_translate_into_scroll_keys() {
+        // The wheel sends ESC [ A / ESC [ B; real arrow keys arrive as key
+        // records, so these must scroll instead of paging through history.
+        assert_eq!(feed("\u{1b}[A"), vec![Key::ScrollUp]);
+        assert_eq!(feed("\u{1b}[B"), vec![Key::ScrollDown]);
         assert_eq!(feed("\u{1b}[C"), vec![Key::Right]);
         assert_eq!(feed("\u{1b}[D"), vec![Key::Left]);
     }
@@ -4505,7 +4607,11 @@ mod paste_tests {
         );
         assert_eq!(
             keys,
-            vec![Key::Up, Key::Down, Key::Paste("text".to_string())]
+            vec![
+                Key::ScrollUp,
+                Key::ScrollDown,
+                Key::Paste("text".to_string())
+            ]
         );
     }
 

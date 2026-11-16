@@ -145,17 +145,25 @@ impl Entry {
 #[derive(Debug, Clone, Default)]
 pub struct Transcript {
     entries: Vec<Entry>,
+    /// Bumped on every mutation: the TUI keys its layout cache on this, so a
+    /// long transcript is only re-wrapped when something actually changed.
+    version: u64,
 }
 
 impl Transcript {
     pub fn new() -> Transcript {
         Transcript {
             entries: Vec::new(),
+            version: 0,
         }
     }
 
     pub fn entries(&self) -> &[Entry] {
         &self.entries
+    }
+
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     pub fn len(&self) -> usize {
@@ -168,20 +176,24 @@ impl Transcript {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.version += 1;
     }
 
     /// Add what the operator typed, before the model has answered.
     pub fn push_user(&mut self, text: impl Into<String>) {
         self.entries.push(Entry::User(text.into()));
+        self.version += 1;
     }
 
     /// Append one prepared row, for a frontend installing a replayed
     /// conversation.
     pub fn push_entry(&mut self, entry: Entry) {
+        self.version += 1;
         self.entries.push(entry);
     }
 
     pub fn push_notice(&mut self, kind: NoticeKind, text: impl Into<String>) {
+        self.version += 1;
         self.entries.push(Entry::Notice(kind, text.into()));
     }
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`argent` is a clean-room Rust reimplementation whose goal is to provide the functionality of Codex CLI, Claude Code, and pi, with a much smaller runtime. Its interface compatibility targets are Codex CLI and Claude Code (provider templates, plugin manifests, skills, commands, hooks, MCP). The primary entry point is the CLI/full-screen TUI (`argent`); a native iced frontend (`argent-native`) is replacing the transitional Tauri window (`argent-gui`).
+`argent` is a clean-room Rust reimplementation whose goal is to provide the functionality of Codex CLI, Claude Code, and pi, with a much smaller runtime. Its interface compatibility targets are Codex CLI and Claude Code (provider templates, plugin manifests, skills, commands, hooks, MCP). The primary entry point is the CLI/full-screen TUI (`argent`); an optional native iced frontend ships as `argent-native`.
 
 Rust 2021 workspace (see `Cargo.toml` for members), `rust-version = "1.85"`. Project docs, README and code comments are in Chinese; identifiers are English.
 
@@ -13,11 +13,10 @@ Rust 2021 workspace (see `Cargo.toml` for members), `rust-version = "1.85"`. Pro
 ```powershell
 cargo build -p argent-cli                          # fast dev build -> target\debug\argent.exe
 cargo build --release -p argent-cli                # release binary -> target\release\argent.exe
-cargo build --release -p argent-desktop            # transitional Tauri GUI -> argent-gui.exe
 cargo build --release -p argent-native             # iced GUI -> argent-native.exe
 ```
 
-Release profile uses LTO + `panic = "abort"`, so it is slow; iterate with debug builds. `argent --gui` looks for `argent-gui.exe` next to `argent.exe`.
+Release profile uses LTO + `panic = "abort"`, so it is slow; iterate with debug builds. `argent --gui` looks for `argent-native.exe` next to `argent.exe`.
 
 Release bundle (binaries + docs + SHA256SUMS + zip + optional signed update manifest):
 
