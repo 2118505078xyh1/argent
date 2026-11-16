@@ -772,6 +772,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
         progress: subagent_progress.clone(),
         // 子代理的写入记在父运行名下，`/rewind` 一次撤掉整轮。
         checkpoints: Some(checkpoints.clone()),
+        promotions: Some(Arc::clone(&promotions)),
     };
     let delegate_handle = DelegateHandle::new(Arc::new(move |batch: DelegateBatch| {
         factory.run_batch(batch)
@@ -798,6 +799,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
         // 工作流有自己的执行器；进度不接到 TUI 上，避免无消费者的队列。
         progress: None,
         checkpoints: Some(checkpoints.clone()),
+        promotions: Some(Arc::clone(&promotions)),
     };
 
     // Replace the placeholder delegate with the wired one.

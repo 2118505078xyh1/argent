@@ -27,6 +27,7 @@ fn main() {
         approval_scope: ApprovalScope::DestructiveOnly,
         progress: None,
         checkpoints: None,
+        promotions: None,
     };
 
     let batch = DelegateBatch {

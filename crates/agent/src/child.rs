@@ -64,6 +64,9 @@ pub struct ChildFactory {
     pub progress: Option<SubagentProgress>,
     /// 父会话的检查点仓库；子代理的写入与父运行共用一个运行号。
     pub checkpoints: Option<CheckpointStore>,
+    /// The parent's `tool_search` promotion set, shared so a tool unlocked
+    /// mid-run is callable here too.
+    pub promotions: Option<argent_tools::Promotions>,
 }
 
 impl ChildFactory {
@@ -197,6 +200,7 @@ impl ChildFactory {
             approval_scope: self.approval_scope,
             progress: self.progress.clone(),
             checkpoints: self.checkpoints.clone(),
+            promotions: self.promotions.clone(),
         }
     }
 
@@ -335,6 +339,10 @@ impl ChildFactory {
         agent_config.approval_scope = self.approval_scope;
         // Children never recurse and must finish inside the batch window.
         agent_config.max_turns = agent_config.max_turns.min(24);
+        // Share the parent's promotion set: a tool the parent unlocked stays
+        // unlocked for the child, so a scout granted `grep` can use it even
+        // though its registry came from a subset where `explore` was off.
+        agent_config.promoted = self.promotions.clone();
 
         let mut ctx = ToolCtx::new(self.cwd.clone());
         ctx.vars
@@ -506,6 +514,7 @@ mod tests {
             approval_scope: ApprovalScope::DestructiveOnly,
             progress: None,
             checkpoints: None,
+            promotions: None,
         }
     }
 
