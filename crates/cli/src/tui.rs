@@ -1,0 +1,4407 @@
+//! Full-screen terminal UI.
+//!
+//! The TUI owns the terminal, keys and pixels; the agent runs on a worker
+//! thread. The two talk through channels so a long model turn never blocks the
+//! redraw and Ctrl+C can abort at a step boundary.
+//!
+//! The view model (`argent_ui_core::Transcript`) is the same one the desktop uses,
+//! so a new renderer does not have to re-learn how tool calls fold.
+
+use std::collections::VecDeque;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use argent_agent::{AbortHandle, Agent, AgentEvent, EventSink, FinishReason};
+use argent_ai::Usage;
+use argent_core::screen::{clip_to_width, text_width, wrap_text, Color, Line, Span, Style, SPINNER};
+use argent_core::terminal::{self, RawModeGuard};
+use argent_hooks::{HookConfig, HookContext, HookEvent};
+use argent_session::SessionIndex;
+use argent_ui_core::{format_tokens, Entry, Metrics, NoticeKind, Transcript};
+
+use crate::session_ctx::SessionContext;
+
+/// One session row in the picker.
+#[derive(Debug, Clone)]
+/// One line of the session-tree overlay.
+pub struct TreeRow {
+    pub id: String,
+    /// Indentation depth: distance from the root.
+    pub depth: usize,
+    /// One-line summary of the payload.
+    pub label: String,
+    /// Whether the node sits on the currently active path.
+    pub on_path: bool,
+    /// Whether the node is the active leaf.
+    pub leaf: bool,
+    /// Whether the node has more than one child.
+    pub branch: bool,
+}
+
+pub struct SessionRow {
+    pub path: PathBuf,
+    pub title: String,
+    pub updated: String,
+}
+
+/// A request from the agent thread for a tool decision.
+pub struct ApprovalRequest {
+    pub tool: String,
+    pub args: String,
+    pub reply: Sender<bool>,
+}
+
+/// What the UI asks the worker to do.
+pub enum Command {
+    Prompt(String),
+    Shell(String),
+    SetModel(String),
+    SetThinking(String),
+    NewSession,
+    Fork,
+    Rename(String),
+    OpenSession(PathBuf),
+    ListSessions,
+    ListModels,
+    ListTools,
+    Compact,
+    /// 把最后一条助手回答放进系统剪贴板。
+    CopyLast,
+    /// 报告本会话的花费与上下文占用。
+    Cost,
+    /// 打开会话树导航。
+    Tree,
+    /// 把活跃分支切到某个节点。
+    CheckoutNode(String),
+    /// 从某个节点开新分支（分叉点的路径成为历史）。
+    ForkNode(String),
+    /// 沿当前活跃路径数到第 n 条消息（1 基）分叉。
+    ForkAtMessage(usize),
+    /// 导入外部 JSONL 会话（保留 id/cwd）。
+    Import(String),
+    /// 删除一个会话文件。
+    DeleteSession(std::path::PathBuf),
+    /// 重命名一个会话。
+    RenameSession(std::path::PathBuf, String),
+    /// 回滚最近 N 次运行的 write/edit 改动。
+    Rewind {
+        steps: u64,
+    },
+    ClearHistory,
+    Shutdown,
+}
+
+/// What the worker tells the UI.
+pub enum UiEvent {
+    Ready {
+        model: String,
+        thinking: String,
+        provider: String,
+        protocol: String,
+        cwd: String,
+        session: String,
+        session_path: String,
+    },
+    Loaded(Vec<Entry>),
+    Agent(AgentEvent),
+    TurnDone {
+        reason: FinishReason,
+        usage: Usage,
+        requests: u64,
+        context_used: usize,
+        cost: Option<f64>,
+    },
+    Sessions(Vec<SessionRow>),
+    TreeRows(Vec<TreeRow>),
+    SessionOpened {
+        title: String,
+        path: String,
+        entries: Vec<Entry>,
+    },
+    Models(Vec<String>),
+    Tools(Vec<(String, String)>),
+    Notice(String),
+    Error(String),
+}
+
+/// A live link to a background session served over HTTP.
+///
+/// The TUI can drive a session it does not own: the same input box, the same
+/// transcript rendering, the same keys -- only the transport differs.
+#[derive(Clone)]
+pub struct RemoteLink {
+    pub base: String,
+    pub auth: String,
+    /// Whether the remote session is running a turn right now.
+    pub running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RemoteLink {
+    pub fn new(base: impl Into<String>, auth: impl Into<String>) -> RemoteLink {
+        RemoteLink {
+            base: base.into(),
+            auth: auth.into(),
+            running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Send a line: into the running turn, or as a new request.
+    fn send_text(&self, text: &str) -> Result<(), String> {
+        let running = self
+            .running
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let path = if running { "/v1/steer" } else { "/v1/prompt" };
+        let mut body = argent_core::json::Json::obj();
+        body.set("text", argent_core::json::Json::string(text.to_string()));
+        self.post(path, &body.dump())
+    }
+
+    /// Stop the turn in progress.
+    fn abort_run(&self) -> Result<(), String> {
+        self.post("/v1/abort", "{}")
+    }
+
+    fn post(&self, path: &str, body: &str) -> Result<(), String> {
+        let request = argent_core::http::Request::post_json(&format!("{}{}", self.base, path), body)
+            .header("authorization", &self.auth);
+        let response = argent_core::http::send(&request)
+            .map_err(|error| format!("{} failed: {}", path, error))?;
+        if !response.is_success() {
+            return Err(format!("{} returned HTTP {}", path, response.status));
+        }
+        Ok(())
+    }
+}
+
+/// The UI's handle to the worker.
+pub struct Worker {
+    pub commands: Sender<Command>,
+    pub events: Receiver<UiEvent>,
+    pub abort: AbortHandle,
+    pub steering: Arc<Mutex<VecDeque<String>>>,
+}
+
+/// Start the agent worker. The agent and session are moved into it.
+pub fn spawn(
+    mut agent: Agent,
+    mut session: SessionContext,
+    checkpoints: argent_tools::CheckpointStore,
+    config: argent_core::config::Config,
+    index: SessionIndex,
+    cwd: PathBuf,
+    hooks: HookConfig,
+    locale: argent_i18n::Locale,
+) -> Worker {
+    let (command_tx, command_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let abort = agent.abort_handle();
+    let steering = agent.steering_handle();
+    let title = session.title();
+    let path = session.path.display().to_string();
+
+    let ready = UiEvent::Ready {
+        model: agent.model().to_string(),
+        thinking: agent.thinking().unwrap_or("default").to_string(),
+        provider: config.provider.clone(),
+        protocol: config.protocol.clone(),
+        cwd: cwd.display().to_string(),
+        session: title.clone(),
+        session_path: path.clone(),
+    };
+    let initial = Transcript::from_messages(agent.history())
+        .entries()
+        .to_vec();
+    let _ = argent_session::sweep_empty_sessions(
+        &index,
+        &[session.path.clone()],
+        Duration::from_secs(60),
+    );
+    let rows = session_rows(&index);
+
+    std::thread::spawn(move || {
+        let _ = event_tx.send(ready);
+        if !initial.is_empty() {
+            let _ = event_tx.send(UiEvent::Loaded(initial));
+        }
+        let _ = event_tx.send(UiEvent::Sessions(rows));
+
+        let session_ctx = HookContext {
+            cwd: cwd.clone(),
+            ..HookContext::default()
+        };
+        let (_messages, blocked) = run_hook_event(&hooks, HookEvent::SessionStart, &session_ctx);
+        if let Some(reason) = blocked {
+            let _ = event_tx.send(UiEvent::Notice(format!("SessionStart hook: {}", reason)));
+        }
+
+        while let Ok(command) = command_rx.recv() {
+            match command {
+                Command::Shell(command) => {
+                    let call_id = format!(
+                        "shell-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|elapsed| elapsed.as_millis())
+                            .unwrap_or(0)
+                    );
+                    let mut args = argent_core::Json::obj();
+                    args.set("command", argent_core::Json::string(command.clone()));
+                    let call = argent_ai::ToolCall::new(&call_id, "bash", args.dump());
+                    let _ = event_tx.send(UiEvent::Agent(AgentEvent::ToolRequested(call)));
+                    let started = std::time::Instant::now();
+                    let (content, ok) = run_shell(&cwd, &command);
+                    let _ = event_tx.send(UiEvent::Agent(AgentEvent::ToolFinished {
+                        call_id,
+                        name: "bash".to_string(),
+                        content,
+                        is_error: !ok,
+                        duration_ms: started.elapsed().as_millis() as u64,
+                    }));
+                }
+                Command::Prompt(text) => {
+                    let submit_ctx = HookContext {
+                        cwd: cwd.clone(),
+                        prompt: Some(text.clone()),
+                        ..HookContext::default()
+                    };
+                    let (messages, blocked) =
+                        run_hook_event(&hooks, HookEvent::UserPromptSubmit, &submit_ctx);
+                    for message in messages {
+                        let _ = event_tx.send(UiEvent::Notice(message));
+                    }
+                    if let Some(reason) = blocked {
+                        let _ = event_tx.send(UiEvent::Notice(format!(
+                            "UserPromptSubmit hook blocked the prompt: {}",
+                            reason
+                        )));
+                        let _ = event_tx.send(UiEvent::TurnDone {
+                            reason: FinishReason::Aborted,
+                            usage: agent.usage(),
+                            requests: agent.requests(),
+                            context_used: argent_agent::estimate_tokens(agent.history()),
+                            cost: None,
+                        });
+                        continue;
+                    }
+
+                    // The first message names the task. Rename before the run so the
+                    // title is right while the model is still thinking.
+                    if agent.history().is_empty() {
+                        let title = title_from_prompt(&text);
+                        let path = session.path.clone();
+                        if index.rename(&path, &title).is_ok() {
+                            session.close();
+                            match SessionContext::open(path.clone()) {
+                                Ok(opened) => {
+                                    session = opened;
+                                    let _ = event_tx.send(UiEvent::SessionOpened {
+                                        title: session.title(),
+                                        path: path.display().to_string(),
+                                        entries: Vec::new(),
+                                    });
+                                    let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                                }
+                                Err(error) => {
+                                    let _ =
+                                        event_tx.send(UiEvent::Error(error.to_string()));
+                                }
+                            }
+                        }
+                    }
+
+                    let before = agent.history().len();
+                    let result = {
+                        let mut sink = ChannelSink {
+                            tx: event_tx.clone(),
+                        };
+                        agent.run(&text, &mut sink)
+                    };
+                    match result {
+                        Ok(reason) => {
+                            let _ = session.record_new(agent.history(), before);
+                            let stop_ctx = HookContext {
+                                cwd: cwd.clone(),
+                                prompt: Some(text.clone()),
+                                ..HookContext::default()
+                            };
+                            let (messages, _) = run_hook_event(&hooks, HookEvent::Stop, &stop_ctx);
+                            for message in messages {
+                                let _ = event_tx.send(UiEvent::Notice(message));
+                            }
+                            let usage = agent.usage();
+                            let requests = agent.requests();
+                            let cost = agent.usage_cost();
+                            let _ = argent_session::usage::record(
+                                &session.path,
+                                agent.model(),
+                                &usage,
+                                requests,
+                                cost,
+                            );
+                            let _ = event_tx.send(UiEvent::TurnDone {
+                                reason,
+                                usage,
+                                requests,
+                                context_used: argent_agent::estimate_tokens(agent.history()),
+                                cost,
+                            });
+                        }
+                        Err(error) => {
+                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                        }
+                    }
+                }
+                Command::SetModel(model) => {
+                    agent.set_model(model.clone());
+                    let _ = event_tx.send(UiEvent::Notice(format!(
+                        "{}: {}",
+                        argent_i18n::t(locale, "tui.model"),
+                        model
+                    )));
+                }
+                Command::SetThinking(level) => {
+                    agent.set_thinking(level.clone());
+                    let _ = event_tx.send(UiEvent::Notice(format!(
+                        "{}: {}",
+                        argent_i18n::t(locale, "tui.thinking"),
+                        level
+                    )));
+                }
+                Command::Fork => {
+                    let title = format!("{} (fork)", session.title());
+                    match index.create(&cwd, &title) {
+                        Ok(path) => match SessionContext::open(path.clone()) {
+                            Ok(mut forked) => {
+                                for message in agent.history() {
+                                    let _ = forked.record(message.clone());
+                                }
+                                session.close();
+                                session = forked;
+                                // 新会话有自己的检查点目录。
+                                checkpoints.retarget(&path);
+                                let entries = Transcript::from_messages(agent.history())
+                                    .entries()
+                                    .to_vec();
+                                let _ = event_tx.send(UiEvent::SessionOpened {
+                                    title: session.title(),
+                                    path: path.display().to_string(),
+                                    entries,
+                                });
+                                let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                            }
+                            Err(error) => {
+                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                        }
+                    }
+                }
+                Command::Rename(title) => match index.rename(&session.path, &title) {
+                    Ok(()) => {
+                        session.close();
+                        match SessionContext::open(session.path.clone()) {
+                            Ok(opened) => {
+                                session = opened;
+                                let entries = Transcript::from_messages(agent.history())
+                                    .entries()
+                                    .to_vec();
+                                let _ = event_tx.send(UiEvent::SessionOpened {
+                                    title: session.title(),
+                                    path: session.path.display().to_string(),
+                                    entries,
+                                });
+                                let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                            }
+                            Err(error) => {
+                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                    }
+                },
+                Command::DeleteSession(path) => {
+                    if path == session.path {
+                        let _ = event_tx.send(UiEvent::Error(
+                            "cannot delete the session that is open; switch away first"
+                                .to_string(),
+                        ));
+                    } else {
+                        match index.delete(&path) {
+                            Ok(()) => {
+                                let _ = event_tx.send(UiEvent::Notice(format!(
+                                    "deleted {}",
+                                    path.file_name()
+                                        .and_then(|name| name.to_str())
+                                        .unwrap_or("session")
+                                )));
+                                let _ =
+                                    event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                            }
+                            Err(error) => {
+                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                            }
+                        }
+                    }
+                }
+                Command::RenameSession(path, name) => {
+                    let current = path == session.path;
+                    match index.rename(&path, &name) {
+                        Ok(()) => {
+                            if current {
+                                session.close();
+                                match SessionContext::open(session.path.clone()) {
+                                    Ok(opened) => {
+                                        session = opened;
+                                        let entries = Transcript::from_messages(agent.history())
+                                            .entries()
+                                            .to_vec();
+                                        let _ = event_tx.send(UiEvent::SessionOpened {
+                                            title: session.title(),
+                                            path: session.path.display().to_string(),
+                                            entries,
+                                        });
+                                    }
+                                    Err(error) => {
+                                        let _ = event_tx
+                                            .send(UiEvent::Error(error.to_string()));
+                                    }
+                                }
+                            }
+                            let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                        }
+                        Err(error) => {
+                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                        }
+                    }
+                }
+                Command::NewSession => {
+                    let previous = session.path.clone();
+                    let previous_empty = argent_session::is_empty_transcript(&previous);
+                    match index.create(&cwd, argent_i18n::t(locale, "tui.new_session")) {
+                        Ok(path) => match SessionContext::open(path.clone()) {
+                            Ok(opened) => {
+                                session.close();
+                                session = opened;
+                                checkpoints.retarget(&path);
+                                argent_session::controller::clear(&mut agent);
+                                if previous_empty {
+                                    let _ = std::fs::remove_file(&previous);
+                                }
+                                let _ = argent_session::sweep_empty_sessions(
+                                    &index,
+                                    &[path.clone()],
+                                    Duration::from_secs(60),
+                                );
+                                let _ = event_tx.send(UiEvent::SessionOpened {
+                                    title: session.title(),
+                                    path: path.display().to_string(),
+                                    entries: Vec::new(),
+                                });
+                                let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                            }
+                            Err(error) => {
+                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                            }
+                        },
+                        Err(error) => {
+                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                        }
+                    }
+                }
+                Command::OpenSession(path) => match SessionContext::open(path.clone()) {
+                    Ok(opened) => {
+                        session.close();
+                        session = opened;
+                        checkpoints.retarget(&path);
+                        let messages = session.messages();
+                        argent_session::controller::open(&mut agent, messages.clone());
+                        let entries = Transcript::from_messages(&messages).entries().to_vec();
+                        let _ = event_tx.send(UiEvent::SessionOpened {
+                            title: session.title(),
+                            path: path.display().to_string(),
+                            entries,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                    }
+                },
+                Command::Tree => {
+                    let _ = event_tx.send(UiEvent::TreeRows(tree_rows(&session)));
+                }
+                Command::CheckoutNode(id) => match session.checkout(&id) {
+                    Ok(messages) => {
+                        argent_session::controller::open(&mut agent, messages.clone());
+                        let entries =
+                            Transcript::from_messages(&messages).entries().to_vec();
+                        let _ = event_tx.send(UiEvent::SessionOpened {
+                            title: session.title(),
+                            path: session.path.display().to_string(),
+                            entries,
+                        });
+                        let _ = event_tx.send(UiEvent::Notice(format!(
+                            "branch switched to {}",
+                            id
+                        )));
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                    }
+                },
+                Command::ForkNode(id) => match session.fork_at(&id) {
+                    Ok(messages) => {
+                        argent_session::controller::open(&mut agent, messages.clone());
+                        let entries =
+                            Transcript::from_messages(&messages).entries().to_vec();
+                        let _ = event_tx.send(UiEvent::SessionOpened {
+                            title: session.title(),
+                            path: session.path.display().to_string(),
+                            entries,
+                        });
+                        let _ = event_tx.send(UiEvent::Notice(format!(
+                            "forked from {}; the next reply starts a new branch",
+                            id
+                        )));
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                    }
+                },
+                Command::ForkAtMessage(n) => {
+                    // 1-based count along the active path, messages only.
+                    let mut seen = 0usize;
+                    let mut target: Option<String> = None;
+                    for node in session.tree.active_path() {
+                        if let argent_session::Entry::Message(_) = &node.payload {
+                            seen += 1;
+                            if seen == n {
+                                target = Some(node.id.clone());
+                                break;
+                            }
+                        }
+                    }
+                    match target {
+                        Some(id) => match session.fork_at(&id) {
+                            Ok(messages) => {
+                                argent_session::controller::open(&mut agent, messages.clone());
+                                let entries = Transcript::from_messages(&messages)
+                                    .entries()
+                                    .to_vec();
+                                let _ = event_tx.send(UiEvent::SessionOpened {
+                                    title: session.title(),
+                                    path: session.path.display().to_string(),
+                                    entries,
+                                });
+                                let _ = event_tx.send(UiEvent::Notice(format!(
+                                    "forked at message {}; the next reply starts a new branch",
+                                    n
+                                )));
+                            }
+                            Err(error) => {
+                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                            }
+                        },
+                        None => {
+                            let _ = event_tx.send(UiEvent::Error(format!(
+                                "no message #{} on the active path ({} messages)",
+                                n, seen
+                            )));
+                        }
+                    }
+                }
+                Command::Import(source) => match import_session(&index, &source) {
+                    Ok(path) => match SessionContext::open(path.clone()) {
+                        Ok(opened) => {
+                            session.close();
+                            session = opened;
+                            checkpoints.retarget(&path);
+                            let messages = session.messages();
+                            argent_session::controller::open(&mut agent, messages.clone());
+                            let entries =
+                                Transcript::from_messages(&messages).entries().to_vec();
+                            let _ = event_tx.send(UiEvent::SessionOpened {
+                                title: session.title(),
+                                path: path.display().to_string(),
+                                entries,
+                            });
+                            let _ =
+                                event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                        }
+                        Err(error) => {
+                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                        }
+                    },
+                    Err(error) => {
+                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                    }
+                },
+                Command::ListSessions => {
+                    let _ = argent_session::sweep_empty_sessions(
+                        &index,
+                        &[session.path.clone()],
+                        Duration::from_secs(60),
+                    );
+                    let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                }
+                Command::ListModels => match agent.models() {
+                    Ok(models) => {
+                        let _ = event_tx.send(UiEvent::Models(
+                            models.into_iter().map(|model| model.id).collect(),
+                        ));
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(UiEvent::Notice(format!(
+                            "model catalog unavailable: {}",
+                            error
+                        )));
+                    }
+                },
+                Command::ListTools => {
+                    let _ = event_tx.send(UiEvent::Tools(agent.tool_index()));
+                }
+                Command::Compact => {
+                    let window = argent_session::controller::model_context_window(
+                        &agent,
+                        config.max_context_tokens,
+                    );
+                    let reserved = argent_session::effective_reserved(
+                        window,
+                        config.reserved_context_tokens,
+                    );
+                    if argent_session::should_compact(agent.history(), window, reserved) {
+                        let ctx = HookContext {
+                            cwd: cwd.clone(),
+                            ..HookContext::default()
+                        };
+                        let _ = run_hook_event(&hooks, HookEvent::PreCompact, &ctx);
+                    }
+                    let before_tokens = argent_agent::estimate_tokens(agent.history());
+                    if let Some(summary) = argent_session::controller::compact(
+                        &mut agent,
+                        window,
+                        config.reserved_context_tokens,
+                        config.keep_recent_tokens,
+                    ) {
+                        let after_tokens = argent_agent::estimate_tokens(agent.history());
+                        let _ = session.record_summary(summary.clone());
+                        let entries = Transcript::from_messages(agent.history())
+                            .entries()
+                            .to_vec();
+                        let _ = event_tx.send(UiEvent::Loaded(entries));
+                        let _ = event_tx.send(UiEvent::Notice(format!(
+                            "context compacted: {} -> {} tokens",
+                            before_tokens, after_tokens
+                        )));
+                    } else {
+                        let _ = event_tx.send(UiEvent::Notice(
+                            argent_i18n::t(locale, "tui.nothing_compact").to_string(),
+                        ));
+                    }
+                }
+                Command::Rewind { steps } => {
+                    let (restored, errors) = checkpoints.rewind(steps);
+                    if !errors.is_empty() {
+                        let _ = event_tx.send(UiEvent::Error(format!(
+                            "rewind failed: {}",
+                            errors.join("; ")
+                        )));
+                    } else if restored.is_empty() {
+                        let _ = event_tx.send(UiEvent::Notice("nothing to rewind".to_string()));
+                    } else {
+                        let mut listing = restored
+                            .iter()
+                            .take(20)
+                            .map(|path| format!("- {}", path.display()))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if restored.len() > 20 {
+                            listing.push_str(&format!("\n- … ({} more)", restored.len() - 20));
+                        }
+                        let _ = event_tx.send(UiEvent::Notice(format!(
+                            "rewound {} run(s), restored {} file(s):\n{}",
+                            steps,
+                            restored.len(),
+                            listing
+                        )));
+                    }
+                }
+                Command::Cost => {
+                    let _ = event_tx.send(UiEvent::Notice(crate::cost_report(
+                        &agent,
+                        config.max_context_tokens,
+                    )));
+                }
+                Command::CopyLast => {
+                    let text = agent
+                        .history()
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == argent_ai::Role::Assistant)
+                        .map(|m| m.text())
+                        .filter(|t| !t.is_empty());
+                    match text {
+                        Some(text) => match argent_core::clipboard::copy_text(&text) {
+                            Ok(()) => {
+                                let _ = event_tx.send(UiEvent::Notice(format!(
+                                    "copied {} characters",
+                                    text.chars().count()
+                                )));
+                            }
+                            Err(error) => {
+                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                            }
+                        },
+                        None => {
+                            let _ = event_tx.send(UiEvent::Error(
+                                "nothing to copy: no assistant reply yet".to_string(),
+                            ));
+                        }
+                    }
+                }
+                Command::ClearHistory => {
+                    argent_session::controller::clear(&mut agent);
+                    let _ = event_tx.send(UiEvent::Notice("history cleared".to_string()));
+                }
+                Command::Shutdown => break,
+            }
+        }
+        session.close();
+    });
+
+    Worker {
+        commands: command_tx,
+        events: event_rx,
+        abort,
+        steering,
+    }
+}
+
+/// Run one hook event and return its notices plus a blocking reason.
+pub(crate) fn run_hook_event(
+    config: &HookConfig,
+    event: HookEvent,
+    ctx: &HookContext,
+) -> (Vec<String>, Option<String>) {
+    let mut notices = Vec::new();
+    let mut block = None;
+    for hook in config.for_event(event, ctx.tool_name.as_deref()) {
+        let outcome = argent_hooks::run_command(event, hook, ctx);
+        let text = if outcome.stderr.trim().is_empty() {
+            outcome.stdout.trim()
+        } else {
+            outcome.stderr.trim()
+        };
+        if !outcome.success {
+            if !text.is_empty() {
+                notices.push(format!("{} hook: {}", event.name(), clip_hook_text(text)));
+            }
+            if hook.blocks_on_failure() && block.is_none() {
+                block = Some(if text.is_empty() {
+                    format!("{} hook failed", event.name())
+                } else {
+                    clip_hook_text(text)
+                });
+            }
+        } else if !text.is_empty() {
+            notices.push(clip_hook_text(text));
+        }
+    }
+    (notices, block)
+}
+
+fn clip_hook_text(text: &str) -> String {
+    let mut out: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.chars().count() > 240 {
+        out = out.chars().take(240).collect();
+        out.push_str("...");
+    }
+    out
+}
+
+/// Run a `!command` entered by the operator. The output is shown as a tool
+/// row and never sent to the model, so the command does not cost tokens.
+fn run_shell(cwd: &Path, command: &str) -> (String, bool) {
+    let mut spec = if argent_core::process::find_program("bash", &[]).is_some() {
+        let mut spec = argent_core::process::CommandSpec::new("bash");
+        spec.args.push("-lc".to_string());
+        spec.args.push(command.to_string());
+        spec
+    } else if cfg!(windows) {
+        let mut spec = argent_core::process::CommandSpec::new("cmd");
+        spec.args.push("/C".to_string());
+        spec.args.push(command.to_string());
+        spec
+    } else {
+        let mut spec = argent_core::process::CommandSpec::new("sh");
+        spec.args.push("-lc".to_string());
+        spec.args.push(command.to_string());
+        spec
+    };
+    spec.cwd = Some(cwd.display().to_string());
+    spec.timeout = Duration::from_secs(120);
+    match argent_core::process::run(&spec) {
+        Ok(output) => {
+            let mut text = output.stdout.trim_end().to_string();
+            if !output.stderr.trim().is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str("[stderr]\n");
+                text.push_str(output.stderr.trim_end());
+            }
+            if text.is_empty() {
+                text = "(no output)".to_string();
+            }
+            text.push_str(&format!(
+                "\n[exit {} in {:.1}s]",
+                output.status,
+                output.duration.as_secs_f32()
+            ));
+            (text, output.success())
+        }
+        Err(error) => (format!("shell failed: {}", error), false),
+    }
+}
+
+/// A small, factual AGENTS.md template. It describes the repository, not the
+/// model's guesses; the operator can edit it afterwards.
+fn project_init_text(cwd: &Path) -> String {
+    let mut out = String::new();
+    out.push_str("# Project instructions
+
+");
+    out.push_str(&format!("Working directory: `{}`
+
+", cwd.display()));
+    out.push_str("## Layout
+");
+    let mut top: Vec<String> = std::fs::read_dir(cwd)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.')
+                || matches!(name.as_str(), "target" | "node_modules" | "dist" | "build")
+            {
+                return None;
+            }
+            let suffix = if entry.path().is_dir() { "/" } else { "" };
+            Some(format!("{}{}", name, suffix))
+        })
+        .collect();
+    top.sort();
+    top.truncate(24);
+    for item in &top {
+        out.push_str(&format!("- `{}`
+", item));
+    }
+    out.push_str("
+## Languages
+");
+    let mut counts: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
+    for entry in argent_core::path::walk(cwd, 4).into_iter().take(3_000) {
+        let extension = entry
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let language = match extension.as_str() {
+            "rs" => "Rust",
+            "ts" | "tsx" => "TypeScript",
+            "js" | "jsx" | "mjs" | "cjs" => "JavaScript",
+            "py" => "Python",
+            "go" => "Go",
+            "java" => "Java",
+            "kt" | "kts" => "Kotlin",
+            "cs" => "C#",
+            "c" | "h" | "cc" | "cpp" | "hpp" => "C/C++",
+            "md" | "markdown" => "Markdown",
+            _ => continue,
+        };
+        *counts.entry(language).or_default() += 1;
+    }
+    let mut languages: Vec<_> = counts.into_iter().collect();
+    languages.sort_by(|a, b| b.1.cmp(&a.1));
+    for (language, count) in languages.iter().take(6) {
+        out.push_str(&format!("- {}: {} files
+", language, count));
+    }
+    out.push_str("
+## Build and test
+");
+    let mut commands = Vec::new();
+    if cwd.join("Cargo.toml").is_file() {
+        commands.push("cargo build");
+        commands.push("cargo test");
+        commands.push("cargo fmt --check");
+        commands.push("cargo clippy --all-targets");
+    }
+    if cwd.join("package.json").is_file() {
+        commands.push("npm install");
+        commands.push("npm test");
+        commands.push("npm run build");
+    }
+    if cwd.join("pyproject.toml").is_file() || cwd.join("requirements.txt").is_file() {
+        commands.push("pytest");
+    }
+    if cwd.join("Makefile").is_file() {
+        commands.push("make");
+    }
+    if commands.is_empty() {
+        out.push_str("- (add the real build and test commands here)
+");
+    } else {
+        for command in commands {
+            out.push_str(&format!("- `{}`
+", command));
+        }
+    }
+    out.push_str("
+## Conventions
+");
+    out.push_str("- Read a file before editing it.
+");
+    out.push_str("- Run the build/tests before reporting success.
+");
+    out.push_str("- Keep changes focused; do not refactor unrelated code.
+");
+    out
+}
+
+/// The title a new task takes from its first prompt.
+fn title_from_prompt(prompt: &str) -> String {
+    let line = prompt.lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        "新任务".to_string()
+    } else {
+        line.chars().take(60).collect()
+    }
+}
+
+/// Assemble the tree overlay rows for one session.
+fn tree_rows(session: &SessionContext) -> Vec<TreeRow> {
+    let active: Vec<String> = session
+        .tree
+        .active_path()
+        .iter()
+        .map(|node| node.id.clone())
+        .collect();
+    let leaf = session.tree.active().unwrap_or("").to_string();
+    let mut rows = Vec::new();
+    for id in session.tree.ids() {
+        let Some(node) = session.tree.get(id) else {
+            continue;
+        };
+        let depth = session.tree.path_to(id).map(|p| p.len()).unwrap_or(1) - 1;
+        let label = match &node.payload {
+            argent_session::Entry::Message(message) => {
+                let role = match message.role {
+                    argent_ai::Role::User => "user",
+                    argent_ai::Role::Assistant => "assistant",
+                    argent_ai::Role::Tool => "tool",
+                    argent_ai::Role::System => "system",
+                };
+                let text = message.text().replace('\n', " ");
+                let text = clip_to_width(text.trim(), 52);
+                format!("{}: {}", role, text)
+            }
+            argent_session::Entry::Summary(text) => {
+                format!("summary: {}", clip_to_width(text.replace('\n', " ").trim(), 44))
+            }
+            argent_session::Entry::Header(data) => {
+                format!("header: {}", data.str_or("title", "(untitled)"))
+            }
+            argent_session::Entry::Event(_) => "event".to_string(),
+        };
+        rows.push(TreeRow {
+            id: id.clone(),
+            depth,
+            label,
+            on_path: active.iter().any(|node| node == id),
+            leaf: leaf == *id,
+            branch: session.tree.children(id).len() > 1,
+        });
+    }
+    rows
+}
+
+/// Copy an external session file into the sessions directory, keeping every
+/// id, parent link and the original header (cwd included).
+fn import_session(
+    index: &SessionIndex,
+    source: &str,
+) -> argent_core::error::Result<std::path::PathBuf> {
+    let source_path = std::path::PathBuf::from(source);
+    if !source_path.is_file() {
+        return Err(argent_core::error::Error::io(format!(
+            "no such file: {}",
+            source
+        )));
+    }
+    // Structural validation: every line must be JSON; the tree rebuild also
+    // verifies parent links resolve.
+    let lines = argent_session::SessionStore::read_raw(&source_path)?;
+    argent_session::SessionTree::from_raw(&lines)?;
+    let stamp = argent_session::timestamp_slug();
+    let stem = source_path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "imported".to_string());
+    let name = argent_session::sanitize(&format!("import-{}-{}", stamp, stem));
+    let destination = index.dir().join(format!("{}.jsonl", name));
+    std::fs::create_dir_all(index.dir()).map_err(|e| {
+        argent_core::error::Error::io(format!(
+            "create {} failed: {}",
+            index.dir().display(),
+            e
+        ))
+    })?;
+    std::fs::copy(&source_path, &destination).map_err(|e| {
+        argent_core::error::Error::io(format!(
+            "copy {} failed: {}",
+            source, e
+        ))
+    })?;
+    Ok(destination)
+}
+
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use argent_ai::Message;
+    use argent_session::Entry;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "argent-tree-ui-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create");
+        dir
+    }
+
+    fn seeded_session(dir: &std::path::Path) -> SessionContext {
+        let path = dir.join("tree.jsonl");
+        let mut ctx = SessionContext::open(path).expect("open");
+        ctx.record(Message::user("first question")).expect("record");
+        ctx.record(Message::assistant("first answer")).expect("record");
+        ctx
+    }
+
+    #[test]
+    fn tree_rows_label_roles_and_mark_the_active_leaf() {
+        let dir = temp_dir("rows");
+        let ctx = seeded_session(&dir);
+        let rows = tree_rows(&ctx);
+        // header? none in this file; three nodes: user, assistant — plus none.
+        assert!(rows.iter().any(|row| row.label.starts_with("user:")
+            && row.label.contains("first question")));
+        assert!(rows.iter().any(|row| row.label.starts_with("assistant:")
+            && row.label.contains("first answer")));
+        let leaf_rows: Vec<_> = rows.iter().filter(|row| row.leaf).collect();
+        assert_eq!(leaf_rows.len(), 1, "exactly one leaf");
+        assert!(leaf_rows[0].label.contains("first answer"));
+        assert!(rows.iter().all(|row| row.on_path), "a linear file is all on-path");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_fork_shows_a_branch_marker_and_two_leaves_over_time() {
+        let dir = temp_dir("branch");
+        let mut ctx = seeded_session(&dir);
+        let one = ctx
+            .tree
+            .ids()
+            .iter()
+            .find(|id| {
+                matches!(&ctx.tree.get(id).expect("node").payload, Entry::Message(m)
+                    if m.text() == "first question")
+            })
+            .cloned()
+            .expect("node");
+        ctx.fork_at(&one).expect("fork");
+        ctx.record(Message::assistant("alternative")).expect("record");
+
+        let rows = tree_rows(&ctx);
+        let branch_rows: Vec<_> = rows.iter().filter(|row| row.branch).collect();
+        assert_eq!(branch_rows.len(), 1, "the fork point");
+        assert!(branch_rows[0].label.contains("first question"));
+        let on_path: Vec<_> = rows.iter().filter(|row| row.on_path).collect();
+        assert_eq!(on_path.len(), 2, "fork point + the new leaf");
+        assert!(on_path.iter().all(|row| {
+            row.label.contains("first question") || row.label.contains("alternative")
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_copies_a_session_and_rejects_garbage() {
+        let dir = temp_dir("import");
+        let index = SessionIndex::new(dir.join("sessions"));
+        // 合法会话文件
+        let source = dir.join("outer.jsonl");
+        let mut ctx = SessionContext::open(source.clone()).expect("open");
+        ctx.record(Message::user("traveller")).expect("record");
+        ctx.close();
+        let destination = import_session(&index, source.to_str().expect("utf8"))
+            .expect("import");
+        assert!(destination.is_file());
+        assert_eq!(
+            destination.parent().expect("parent"),
+            index.dir(),
+            "lands in the sessions directory"
+        );
+        let entries =
+            argent_session::SessionStore::read_all(&destination).expect("read");
+        assert!(entries.iter().any(|entry| matches!(
+            entry,
+            Entry::Message(m) if m.text() == "traveller"
+        )));
+        // 坏 JSON 被拒绝
+        let bad = dir.join("bad.jsonl");
+        std::fs::write(&bad, "not json at all").expect("write");
+        assert!(import_session(&index, bad.to_str().expect("utf8")).is_err());
+        // 不存在的文件被拒绝
+        assert!(import_session(&index, dir.join("nope.jsonl").to_str().expect("utf8")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_tree_overlay_only_offers_rows_that_exist() {
+        let dir = temp_dir("overlay");
+        let ctx = seeded_session(&dir);
+        let rows = tree_rows(&ctx);
+        for row in &rows {
+            assert!(ctx.tree.contains(&row.id), "row id {} must exist", row.id);
+            assert!(ctx.tree.path_to(&row.id).is_ok());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+fn session_rows(index: &SessionIndex) -> Vec<SessionRow> {
+    index
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(path, info)| SessionRow {
+            path,
+            title: info.str_or("title", "(untitled)"),
+            updated: argent_session::local_stamp(info.num_or("modified", 0.0) as u64),
+        })
+        .collect()
+}
+
+struct ChannelSink {
+    tx: Sender<UiEvent>,
+}
+
+impl EventSink for ChannelSink {
+    fn emit(&mut self, event: AgentEvent) {
+        let _ = self.tx.send(UiEvent::Agent(event));
+    }
+}
+
+// ---------------------------------------------------------------- keys
+
+/// 对话角色前缀。助手用空心菱形、工具用实心圆，避免 `⏺` 在
+/// 中文字体里缩成一个难辨认的墨点。
+const ASSISTANT_MARK: &str = "◆ ";
+const TOOL_MARK: &str = "● ";
+const USER_MARK: &str = "› ";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Key {
+    Char(char),
+    Enter,
+    Backspace,
+    Delete,
+    Tab,
+    BackTab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Esc,
+    CtrlC,
+    CtrlD,
+    CtrlL,
+    CtrlE,
+    CtrlP,
+    CtrlN,
+    CtrlR,
+    /// Bracketed-paste start/end (ESC[200~ / ESC[201~); byte-stream path.
+    #[cfg(any(not(windows), test))]
+    PasteStart,
+    #[cfg(any(not(windows), test))]
+    PasteEnd,
+    /// A whole pasted block, delivered in one piece.
+    Paste(String),
+    /// A sequence with no meaning here (unknown CSI, focus reports).
+    #[cfg(any(not(windows), test))]
+    Ignore,
+}
+
+fn spawn_input(tx: Sender<Key>) {
+    #[cfg(windows)]
+    {
+        spawn_input_windows(tx);
+    }
+    #[cfg(not(windows))]
+    {
+        std::thread::spawn(move || {
+            let stdin = std::io::stdin();
+            let mut handle = stdin.lock();
+            let mut pending: VecDeque<u8> = VecDeque::new();
+            let mut buffer = [0u8; 256];
+            // 粘贴状态必须跨读取保持：一个粘贴块可能跨越多次 read。
+            let mut pasting = false;
+            let mut paste_text = String::new();
+            loop {
+                if pending.is_empty() {
+                    match handle.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(n) => pending.extend(&buffer[..n]),
+                        Err(_) => break,
+                    }
+                }
+                match next_key(&mut pending) {
+                    Some(Key::PasteStart) => pasting = true,
+                    Some(Key::PasteEnd) => {
+                        if pasting {
+                            pasting = false;
+                            let text = std::mem::take(&mut paste_text);
+                            if tx.send(Key::Paste(text)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Key::Char(ch)) if pasting => paste_text.push(ch),
+                    Some(Key::Enter) if pasting => paste_text.push('\n'),
+                    Some(Key::Tab) if pasting => paste_text.push_str("  "),
+                    // 粘贴块里的其它控制键没有意义，丢掉而不是执行。
+                    Some(_) if pasting => {}
+                    Some(key) => {
+                        if tx.send(key).is_err() {
+                            break;
+                        }
+                    }
+                    None => {
+                        // An incomplete UTF-8 scalar or escape sequence: read more.
+                        match handle.read(&mut buffer) {
+                            Ok(0) => break,
+                            Ok(n) => pending.extend(&buffer[..n]),
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// The bracketed paste markers, as the characters that follow `ESC [`.
+const PASTE_START: &str = "200~";
+const PASTE_END: &str = "201~";
+
+/// Windows 原生输入下的粘贴状态机。
+///
+/// 终端把 bracketed paste 送成按键序列（`ESC [ 2 0 0 ~` … `ESC [ 2 0 1 ~`），
+/// 不接住它，一次粘贴就会触发一次 Esc（= 中止当前运行），多行文本还会
+/// 逐行提交。
+#[derive(Debug)]
+enum PasteMode {
+    /// 正常按键。
+    Normal,
+    /// 刚按下 Esc，等下一个键判断是不是序列。
+    Esc,
+    /// 已经收到 `ESC [`，正在收序列剩下的部分。
+    Seq(Vec<char>),
+    /// 正在粘贴：累积的文本 + 可能是结束标记的候选序列。
+    Pasting {
+        text: String,
+        candidate: Vec<char>,
+        /// 刚收过一个 `\r`：Windows 粘贴的换行是 CRLF，两个字符算一行。
+        after_cr: bool,
+    },
+}
+
+/// 把待定的 Esc 变成真的 Esc。
+///
+/// 输入线程在超时（没有后续按键）时调用：单独按下的 Esc 必须立刻生效，
+/// 否则用户要再按一个键才能中止当前运行。
+fn flush_pending(mode: &mut PasteMode, tx: &Sender<Key>) {
+    if matches!(mode, PasteMode::Esc) {
+        *mode = PasteMode::Normal;
+        let _ = tx.send(Key::Esc);
+    }
+}
+
+/// 处理一个按键。
+///
+/// 返回 `Some(true)` 表示这个键被粘贴逻辑吃掉了；`Some(false)` 表示输出
+/// 通道已经关闭（该退出）；`None` 表示与粘贴无关，按普通键处理。
+fn handle_paste_key(
+    mode: &mut PasteMode,
+    ch: Option<char>,
+    tx: &Sender<Key>,
+) -> Option<bool> {
+    match mode {
+        PasteMode::Normal => {
+            if ch == Some('\u{1b}') {
+                *mode = PasteMode::Esc;
+                return Some(true);
+            }
+            None
+        }
+        PasteMode::Esc => match ch {
+            Some('[') => {
+                *mode = PasteMode::Seq(Vec::new());
+                Some(true)
+            }
+            _ => {
+                // 不是序列：Esc 就是单独按的。
+                *mode = PasteMode::Normal;
+                let _ = tx.send(Key::Esc);
+                None
+            }
+        },
+        PasteMode::Seq(seq) => {
+            let Some(c) = ch else {
+                *mode = PasteMode::Normal;
+                return Some(true);
+            };
+            let mut collected: Vec<char> = seq.clone();
+            collected.push(c);
+            let text: String = collected.iter().collect();
+            if PASTE_START.starts_with(&text) {
+                if text == PASTE_START {
+                    *mode = PasteMode::Pasting {
+                        text: String::new(),
+                        candidate: Vec::new(),
+                        after_cr: false,
+                    };
+                } else {
+                    *seq = collected;
+                }
+                return Some(true);
+            }
+            // 不可能是粘贴开始标记：Esc 已经按下，后面这些是普通字符。
+            *mode = PasteMode::Normal;
+            let _ = tx.send(Key::Esc);
+            let _ = tx.send(Key::Char('['));
+            for c in collected.iter() {
+                let _ = tx.send(Key::Char(*c));
+            }
+            Some(true)
+        }
+        PasteMode::Pasting {
+            text,
+            candidate,
+            after_cr,
+        } => {
+            if candidate.is_empty() {
+                match ch {
+                    Some('\u{1b}') => candidate.push('\u{1b}'),
+                    Some('\r') => {
+                        text.push('\n');
+                        *after_cr = true;
+                    }
+                    Some('\n') => {
+                        // CRLF 的第二半：换行已经记过了。
+                        if !*after_cr {
+                            text.push('\n');
+                        }
+                        *after_cr = false;
+                    }
+                    Some(c) if !c.is_control() => {
+                        *after_cr = false;
+                        text.push(c);
+                    }
+                    _ => {}
+                }
+                return Some(true);
+            }
+            // 候选序列：可能是结束标记 `ESC [ 2 0 1 ~`。
+            let Some(c) = ch else {
+                candidate.clear();
+                return Some(true);
+            };
+            candidate.push(c);
+            // 去掉开头的 ESC 与 `[`，剩下的要能长成结束标记。
+            let rest: String = candidate.iter().skip(1).collect();
+            let marker = rest.strip_prefix('[').unwrap_or(&rest);
+            if PASTE_END.starts_with(marker) {
+                if marker == PASTE_END {
+                    let pasted = std::mem::take(text);
+                    *mode = PasteMode::Normal;
+                    let _ = tx.send(Key::Paste(pasted));
+                }
+                return Some(true);
+            }
+            // 不是结束标记：它就是粘贴内容的一部分。
+            text.push_str(&rest);
+            candidate.clear();
+            Some(true)
+        }
+    }
+}
+
+/// Windows 上的输入线程：直接读控制台输入记录。
+///
+/// 不走 `ReadFile`+VT 转义解析，原因是控制台在 raw 模式下不会把扩展键
+/// （方向键、Home/End 等）翻译成转义序列，只会原样递送按键记录；而
+/// `ReadConsoleInputW` 拿到的是带虚拟键码与 Unicode 字符的记录，IME
+/// 组合出的中文也能完整收到。之前"打不了字"的根因就是这里把 UTF-8
+/// 字节流按单字节控制键处理，组合中的字符被拆碎后丢弃。
+#[cfg(windows)]
+fn spawn_input_windows(tx: Sender<Key>) {
+    std::thread::spawn(move || {
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct ConsoleInputRecord {
+            event_type: u16,
+            // KEY_EVENT_RECORD：字符以 UTF-16 code unit 存放，且结构体内
+            // 每个字段都按 C ABI 对齐；不能把 union 当作这个结构体读取。
+            key_down: i32,
+            repeat_count: u16,
+            virtual_key_code: u16,
+            virtual_scan_code: u16,
+            unicode_char: u16,
+            control_key_state: u32,
+        }
+
+        extern "system" {
+            fn GetStdHandle(which: u32) -> *mut core::ffi::c_void;
+            fn ReadConsoleInputW(
+                handle: *mut core::ffi::c_void,
+                records: *mut ConsoleInputRecord,
+                length: u32,
+                read: *mut u32,
+            ) -> i32;
+            fn WaitForSingleObject(handle: *mut core::ffi::c_void, millis: u32) -> u32;
+        }
+
+        // (DWORD)-10：标准输入句柄。作为 u32 传参时是 0xFFFF_FFF6。
+        const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6;
+        const KEY_EVENT: u16 = 1;
+        const WAIT_OBJECT_0: u32 = 0;
+        const WAIT_TIMEOUT: u32 = 258;
+        // 没有新按键的等待上限：超过这个时间就把待定的 Esc 当成真的 Esc。
+        const IDLE_MS: u32 = 40;
+
+        unsafe {
+            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            if handle.is_null() {
+                return;
+            }
+            // INPUT_RECORD 是带 EventType 前缀的联合；按键事件的布局在
+            // 这里显式补齐，避免把其它类型的记录误读成按键。
+            let mut buffer: [ConsoleInputRecord; 32] = std::mem::zeroed();
+            let mut paste_mode = PasteMode::Normal;
+            loop {
+                // 先等一小段时间：单独按下的 Esc 要马上生效，而粘贴的
+                // 起始序列要等后面的字符跟上来才认得出。
+                let waited = WaitForSingleObject(handle, IDLE_MS);
+                if waited == WAIT_TIMEOUT {
+                    flush_pending(&mut paste_mode, &tx);
+                    continue;
+                }
+                if waited != WAIT_OBJECT_0 {
+                    break;
+                }
+                let mut read: u32 = 0;
+                if ReadConsoleInputW(
+                    handle,
+                    buffer.as_mut_ptr(),
+                    buffer.len() as u32,
+                    &mut read,
+                ) == 0
+                {
+                    break;
+                }
+                for record in buffer.iter().take(read as usize) {
+                    if record.event_type != KEY_EVENT {
+                        continue;
+                    }
+                    if record.key_down == 0 {
+                        continue;
+                    }
+                    let ch = char::from_u32(record.unicode_char as u32);
+                    // bracketed paste：先于普通按键处理。终端把粘贴送成
+                    // 按键序列（ESC [ 2 0 0 ~ … ESC [ 2 0 1 ~），不接住它，
+                    // 一次粘贴就会触发一次 Esc（= 中止），多行还会逐行提交。
+                    match handle_paste_key(&mut paste_mode, ch, &tx) {
+                        Some(true) => continue,
+                        Some(false) => return,
+                        None => {}
+                    }
+                    // LEFT_CTRL(0x8) 或 RIGHT_CTRL(0x80)。
+                    let control = record.control_key_state & 0x0000_0088 != 0;
+                    // LEFT_ALT(0x1) 或 RIGHT_ALT(0x2)。
+                    let alt = record.control_key_state & 0x0000_0003 != 0;
+                    if let Some(key) =
+                        key_from_console_record(ch, record.virtual_key_code, control, alt)
+                    {
+                        if tx.send(key).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// 把控制台按键记录翻译成 TUI 使用的逻辑键；单独抽出来便于边界测试。
+fn key_from_console_record(ch: Option<char>, vk: u16, control: bool, alt: bool) -> Option<Key> {
+    let key = match (ch, vk, control, alt) {
+        // Enter 的 unicode_char 是 '\r'，归一到 Enter。
+        (Some('\r'), _, _, _) => Some(Key::Enter),
+        // 扩展键区：方向键/Home/End/PgUp/PgDn 只有虚拟键码。
+        (Some('\u{0}'), 0x26, _, _) => Some(Key::Up),
+        (Some('\u{0}'), 0x28, _, _) => Some(Key::Down),
+        (Some('\u{0}'), 0x25, _, _) => Some(Key::Left),
+        (Some('\u{0}'), 0x27, _, _) => Some(Key::Right),
+        (Some('\u{0}'), 0x24, _, _) => Some(Key::Home),
+        (Some('\u{0}'), 0x23, _, _) => Some(Key::End),
+        (Some('\u{0}'), 0x21, _, _) => Some(Key::PageUp),
+        (Some('\u{0}'), 0x22, _, _) => Some(Key::PageDown),
+        (Some('\u{0}'), 0x2D, _, _) => Some(Key::Delete),
+        (Some('\u{0}'), 0x08, _, _) => Some(Key::Backspace),
+        // Windows Terminal 把 DEL 键也送成退格；两种编码都接受。
+        (Some('\u{8}'), _, _, _) | (Some('\u{7f}'), _, _, _) => Some(Key::Backspace),
+        (Some('\t'), _, _, _) | (Some('\u{0}'), 0x09, _, _) => Some(Key::Tab),
+        (Some('\u{0}'), 0x1B, _, _) => Some(Key::Esc),
+        // Ctrl+字母：虚拟键码是字母本身。
+        (Some('\u{0}'), 0x43, true, _) => Some(Key::CtrlC),
+        (Some('\u{0}'), 0x44, true, _) => Some(Key::CtrlD),
+        (Some('\u{0}'), 0x45, true, _) => Some(Key::CtrlE),
+        (Some('\u{0}'), 0x4C, true, _) => Some(Key::CtrlL),
+        (Some('\u{0}'), 0x4E, true, _) => Some(Key::CtrlN),
+        (Some('\u{0}'), 0x50, true, _) => Some(Key::CtrlP),
+        (Some('\u{0}'), 0x52, true, _) => Some(Key::CtrlR),
+        // 修饰键自己按下没有意义。
+        _ => None,
+    };
+    // 可打印字符（含 IME 组合结果）兜底；控制修饰键下产生的控制字符
+    // 不进输入框。
+    key.or_else(|| {
+        if control || alt {
+            None
+        } else {
+            ch.filter(|c| !c.is_control()).map(Key::Char)
+        }
+    })
+}
+
+#[cfg(any(not(windows), test))]
+fn next_key(bytes: &mut VecDeque<u8>) -> Option<Key> {
+    let first = *bytes.front()?;
+    if first == 0x1b {
+        if bytes.len() == 1 {
+            bytes.pop_front();
+            return Some(Key::Esc);
+        }
+        let second = bytes.get(1).copied()?;
+        if second == b'[' || second == b'O' {
+            // Collect the short sequence. A mouse report is longer and is
+            // ignored rather than misread as a key.
+            let mut sequence = Vec::new();
+            for index in 1..bytes.len().min(10) {
+                let byte = *bytes.get(index)?;
+                sequence.push(byte);
+                if byte.is_ascii_alphabetic() || byte == b'~' {
+                    for _ in 0..=index {
+                        bytes.pop_front();
+                    }
+                    return Some(parse_escape(&sequence));
+                }
+            }
+            // Incomplete: wait for the rest.
+            return None;
+        }
+        bytes.pop_front();
+        return Some(Key::Esc);
+    }
+    bytes.pop_front();
+    match first {
+        0x03 => Some(Key::CtrlC),
+        0x04 => Some(Key::CtrlD),
+        0x05 => Some(Key::CtrlE),
+        0x0c => Some(Key::CtrlL),
+        0x0e => Some(Key::CtrlN),
+        0x10 => Some(Key::CtrlP),
+        0x12 => Some(Key::CtrlR),
+        0x09 => Some(Key::Tab),
+        0x0d | 0x0a => Some(Key::Enter),
+        0x08 | 0x7f => Some(Key::Backspace),
+        0x1a => Some(Key::BackTab),
+        0x00..=0x1f => Some(Key::Char(first as char)),
+        _ => {
+            let length = utf8_length(first);
+            if length == 0 {
+                return Some(Key::Char('\u{fffd}'));
+            }
+            let mut scalar = vec![first];
+            for _ in 1..length {
+                scalar.push(bytes.pop_front()?);
+            }
+            std::str::from_utf8(&scalar)
+                .ok()
+                .and_then(|text| text.chars().next())
+                .map(Key::Char)
+        }
+    }
+}
+
+#[cfg(any(not(windows), test))]
+fn utf8_length(first: u8) -> usize {
+    match first {
+        0x00..=0x7f => 1,
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        0xf0..=0xf7 => 4,
+        _ => 0,
+    }
+}
+
+#[cfg(any(not(windows), test))]
+fn parse_escape(sequence: &[u8]) -> Key {
+    let body = if sequence.first() == Some(&b'O') {
+        &sequence[1..]
+    } else {
+        sequence.strip_prefix(b"[").unwrap_or(sequence)
+    };
+    if body == b"A" {
+        return Key::Up;
+    }
+    if body == b"B" {
+        return Key::Down;
+    }
+    if body == b"C" {
+        return Key::Right;
+    }
+    if body == b"D" {
+        return Key::Left;
+    }
+    if body == b"H" {
+        return Key::Home;
+    }
+    if body == b"F" {
+        return Key::End;
+    }
+    if body == b"Z" {
+        return Key::BackTab;
+    }
+    if body.starts_with(b"5~") {
+        return Key::PageUp;
+    }
+    if body.starts_with(b"6~") {
+        return Key::PageDown;
+    }
+    if body.starts_with(b"3~") {
+        return Key::Delete;
+    }
+    if body.starts_with(b"1~") || body.starts_with(b"7~") {
+        return Key::Home;
+    }
+    if body.starts_with(b"4~") || body.starts_with(b"8~") {
+        return Key::End;
+    }
+    if body.starts_with(b"200~") {
+        return Key::PasteStart;
+    }
+    if body.starts_with(b"201~") {
+        return Key::PasteEnd;
+    }
+    // SGR mouse reports, focus changes and modified keys: ignore them.
+    // Turning them into Esc made a paste or a mouse move look like "abort".
+    Key::Ignore
+}
+
+// ---------------------------------------------------------------- app
+
+#[derive(Debug, Clone, Default)]
+struct ReadyInfo {
+    model: String,
+    thinking: String,
+    provider: String,
+    protocol: String,
+    cwd: String,
+    session: String,
+    session_path: String,
+}
+
+enum Overlay {
+    Help,
+    Sessions {
+        index: usize,
+    },
+    Tree {
+        index: usize,
+    },
+    /// 会话改名输入。
+    RenameSession {
+        index: usize,
+        input: String,
+    },
+    Models {
+        index: usize,
+    },
+    Thinking {
+        index: usize,
+    },
+    Tools {
+        index: usize,
+    },
+    Approval {
+        tool: String,
+        args: String,
+        selected: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct PaletteItem {
+    name: String,
+    description: String,
+}
+
+struct App {
+    locale: argent_i18n::Locale,
+    /// Set when the UI drives a background session instead of a local agent.
+    remote: Option<RemoteLink>,
+    transcript: Transcript,
+    metrics: Metrics,
+    ready: Option<ReadyInfo>,
+    sessions: Vec<SessionRow>,
+    tree_rows: Vec<TreeRow>,
+    /// Status-bar segments in order; empty means the built-in set.
+    statusline: Vec<String>,
+    /// Rebindable key actions.
+    bindings: crate::keybindings::Bindings,
+    /// Ctrl+D pressed once on this session row; a second press deletes it.
+    session_delete_pending: Option<usize>,
+    models: Vec<String>,
+    tools: Vec<(String, String)>,
+    commands: Vec<argent_commands::CommandDoc>,
+    prompts: crate::prompts::PromptLibrary,
+    input: Vec<char>,
+    cursor: usize,
+    history: Vec<String>,
+    history_pos: Option<usize>,
+    scroll: usize,
+    expand: bool,
+    palette_index: usize,
+    overlay: Option<Overlay>,
+    pending: Option<ApprovalRequest>,
+    approve_all: bool,
+    working: bool,
+    /// Plan mode: ask the model for a plan before it edits anything.
+    plan: bool,
+    queued: usize,
+    /// 开场键位提示只显示一次；之后状态行留空或显示临时状态。
+    hint_shown: bool,
+    status: Option<(String, Instant)>,
+    quit: bool,
+    tick: u64,
+    dirty: bool,
+}
+
+impl App {
+    /// Drive a background session over HTTP.
+    fn with_remote(mut self, remote: RemoteLink) -> App {
+        self.remote = Some(remote);
+        self
+    }
+
+    fn new(
+        commands: Vec<argent_commands::CommandDoc>,
+        prompts: crate::prompts::PromptLibrary,
+        locale: argent_i18n::Locale,
+        statusline: Vec<String>,
+        bindings: crate::keybindings::Bindings,
+    ) -> App {
+        App {
+            remote: None,
+            locale,
+            statusline,
+            bindings,
+            session_delete_pending: None,
+            transcript: Transcript::new(),
+            metrics: Metrics::new("", "", ""),
+            ready: None,
+            sessions: Vec::new(),
+            tree_rows: Vec::new(),
+            models: Vec::new(),
+            tools: Vec::new(),
+            commands,
+            prompts,
+            input: Vec::new(),
+            cursor: 0,
+            history: Vec::new(),
+            history_pos: None,
+            scroll: 0,
+            expand: false,
+            palette_index: 0,
+            overlay: None,
+            pending: None,
+            approve_all: false,
+            working: false,
+            plan: false,
+            queued: 0,
+            hint_shown: false,
+            status: None,
+            quit: false,
+            tick: 0,
+            dirty: true,
+        }
+    }
+
+    fn set_status(&mut self, text: impl Into<String>) {
+        self.status = Some((text.into(), Instant::now()));
+        self.dirty = true;
+    }
+
+    fn handle_ui(&mut self, event: UiEvent) {
+        match event {
+            UiEvent::Ready {
+                model,
+                thinking,
+                provider,
+                protocol,
+                cwd,
+                session,
+                session_path,
+            } => {
+                self.metrics = Metrics::new(model.clone(), thinking.clone(), cwd.clone());
+                self.ready = Some(ReadyInfo {
+                    model,
+                    thinking,
+                    provider,
+                    protocol,
+                    cwd,
+                    session,
+                    session_path,
+                });
+            }
+            UiEvent::Loaded(entries) => {
+                self.transcript = Transcript::new();
+                for entry in entries {
+                    self.transcript.push_entry(entry);
+                }
+                self.scroll = 0;
+            }
+            UiEvent::Agent(event) => {
+                match &event {
+                    AgentEvent::TurnStart { .. } => {
+                        self.working = true;
+                        self.metrics.begin_turn();
+                    }
+                    AgentEvent::AssistantText(text) => self.metrics.note_text(text),
+                    _ => {}
+                }
+                self.transcript.apply(&event);
+            }
+            UiEvent::TurnDone {
+                reason,
+                usage,
+                requests,
+                context_used,
+                cost,
+            } => {
+                self.working = false;
+                self.queued = self.queued.saturating_sub(1);
+                self.metrics.finish_turn(usage, requests);
+                self.metrics.cost = cost;
+                self.metrics.context_used = context_used;
+                if let FinishReason::Error(message) = reason {
+                    self.transcript.push_notice(NoticeKind::Error, message);
+                }
+            }
+            UiEvent::Sessions(rows) => self.sessions = rows,
+            UiEvent::TreeRows(rows) => self.tree_rows = rows,
+            UiEvent::SessionOpened {
+                title,
+                path,
+                entries,
+            } => {
+                if let Some(ready) = &mut self.ready {
+                    ready.session = title;
+                    ready.session_path = path;
+                }
+                self.transcript = Transcript::new();
+                for entry in entries {
+                    self.transcript.push_entry(entry);
+                }
+                self.scroll = 0;
+            }
+            UiEvent::Models(models) => {
+                self.models = models;
+                self.overlay = Some(Overlay::Models { index: 0 });
+            }
+            UiEvent::Tools(tools) => {
+                self.tools = tools;
+                self.overlay = Some(Overlay::Tools { index: 0 });
+            }
+            UiEvent::Notice(text) => {
+                self.transcript.push_notice(NoticeKind::Info, text);
+            }
+            UiEvent::Error(text) => {
+                self.transcript.push_notice(NoticeKind::Error, text);
+            }
+        }
+        self.dirty = true;
+    }
+
+    fn handle_approval(&mut self, request: ApprovalRequest) {
+        if self.approve_all {
+            let _ = request.reply.send(true);
+            return;
+        }
+        self.overlay = Some(Overlay::Approval {
+            tool: request.tool.clone(),
+            args: request.args.clone(),
+            selected: 0,
+        });
+        self.pending = Some(request);
+        self.dirty = true;
+    }
+
+    fn handle_key(&mut self, worker: &Worker, key: Key) {
+        if let Some(pending) = self.pending.take() {
+            match key {
+                Key::Char('y') | Key::Char('Y') => {
+                    let _ = pending.reply.send(true);
+                    self.overlay = None;
+                    self.set_status(argent_i18n::t(self.locale, "tui.approved"));
+                }
+                Key::Char('a') | Key::Char('A') => {
+                    self.approve_all = true;
+                    let _ = pending.reply.send(true);
+                    self.overlay = None;
+                    self.set_status(argent_i18n::t(self.locale, "tui.approve_all"));
+                }
+                Key::Char('n') | Key::Char('N') | Key::Esc => {
+                    let _ = pending.reply.send(false);
+                    self.overlay = None;
+                    self.set_status(argent_i18n::t(self.locale, "tui.rejected"));
+                }
+                _ => {
+                    // Any other key keeps the prompt open.
+                    self.pending = Some(pending);
+                }
+            }
+            self.dirty = true;
+            return;
+        }
+
+        if let Some(overlay) = self.overlay.take() {
+            match overlay {
+                Overlay::Help => {
+                    if !matches!(key, Key::Esc | Key::Char('q')) {
+                        self.overlay = Some(Overlay::Help);
+                    }
+                }
+                Overlay::Sessions { mut index } => match key {
+                    Key::Up => {
+                        index = index.saturating_sub(1);
+                        self.session_delete_pending = None;
+                        self.overlay = Some(Overlay::Sessions { index });
+                    }
+                    Key::Down => {
+                        index = (index + 1).min(self.sessions.len().saturating_sub(1));
+                        self.session_delete_pending = None;
+                        self.overlay = Some(Overlay::Sessions { index });
+                    }
+                    Key::Enter => {
+                        if let Some(row) = self.sessions.get(index) {
+                            let _ = worker.commands.send(Command::OpenSession(row.path.clone()));
+                        }
+                    }
+                    Key::CtrlD => {
+                        // 两段式：第一下提示，第二下才删，避免误删。
+                        if self.session_delete_pending == Some(index) {
+                            if let Some(row) = self.sessions.get(index) {
+                                let _ = worker
+                                    .commands
+                                    .send(Command::DeleteSession(row.path.clone()));
+                            }
+                            self.session_delete_pending = None;
+                        } else {
+                            self.session_delete_pending = Some(index);
+                            if let Some(row) = self.sessions.get(index) {
+                                self.set_status(format!(
+                                    "press ctrl+d again to delete \"{}\"",
+                                    row.title
+                                ));
+                            }
+                        }
+                        self.overlay = Some(Overlay::Sessions { index });
+                    }
+                    Key::CtrlR => {
+                        if let Some(row) = self.sessions.get(index) {
+                            self.overlay = Some(Overlay::RenameSession {
+                                index,
+                                input: row.title.clone(),
+                            });
+                        }
+                    }
+                    Key::Esc => {}
+                    _ => self.overlay = Some(Overlay::Sessions { index }),
+                },
+                Overlay::RenameSession { index, mut input } => match key {
+                    Key::Enter => {
+                        let name = input.trim().to_string();
+                        if !name.is_empty() {
+                            if let Some(row) = self.sessions.get(index) {
+                                let _ = worker.commands.send(Command::RenameSession(
+                                    row.path.clone(),
+                                    name,
+                                ));
+                            }
+                        }
+                        self.overlay = None;
+                    }
+                    Key::Esc => {
+                        self.overlay = Some(Overlay::Sessions { index });
+                    }
+                    Key::Backspace => {
+                        input.pop();
+                        self.overlay = Some(Overlay::RenameSession { index, input });
+                    }
+                    Key::Char(ch) => {
+                        input.push(ch);
+                        self.overlay = Some(Overlay::RenameSession { index, input });
+                    }
+                    _ => self.overlay = Some(Overlay::RenameSession { index, input }),
+                },
+                Overlay::Tree { mut index } => match key {
+                    Key::Up => {
+                        index = index.saturating_sub(1);
+                        self.overlay = Some(Overlay::Tree { index });
+                    }
+                    Key::Down => {
+                        index = (index + 1).min(self.tree_rows.len().saturating_sub(1));
+                        self.overlay = Some(Overlay::Tree { index });
+                    }
+                    Key::Enter => {
+                        if let Some(row) = self.tree_rows.get(index) {
+                            let _ = worker
+                                .commands
+                                .send(Command::CheckoutNode(row.id.clone()));
+                        }
+                        self.overlay = None;
+                    }
+                    Key::Char('f') => {
+                        if let Some(row) = self.tree_rows.get(index) {
+                            let _ = worker
+                                .commands
+                                .send(Command::ForkNode(row.id.clone()));
+                        }
+                        self.overlay = None;
+                    }
+                    Key::Esc => {}
+                    _ => self.overlay = Some(Overlay::Tree { index }),
+                },
+                Overlay::Models { mut index } => match key {
+                    Key::Up => {
+                        index = index.saturating_sub(1);
+                        self.overlay = Some(Overlay::Models { index });
+                    }
+                    Key::Down => {
+                        index = (index + 1).min(self.models.len().saturating_sub(1));
+                        self.overlay = Some(Overlay::Models { index });
+                    }
+                    Key::Enter => {
+                        if let Some(model) = self.models.get(index) {
+                            if let Some(ready) = &mut self.ready {
+                                ready.model = model.clone();
+                            }
+                            let _ = worker.commands.send(Command::SetModel(model.clone()));
+                        }
+                    }
+                    Key::Esc => {}
+                    _ => self.overlay = Some(Overlay::Models { index }),
+                },
+                Overlay::Thinking { mut index } => {
+                    let levels = ["auto", "low", "medium", "high", "max"];
+                    match key {
+                        Key::Up => {
+                            index = index.saturating_sub(1);
+                            self.overlay = Some(Overlay::Thinking { index });
+                        }
+                        Key::Down => {
+                            index = (index + 1).min(levels.len() - 1);
+                            self.overlay = Some(Overlay::Thinking { index });
+                        }
+                        Key::Enter => {
+                            if let Some(level) = levels.get(index) {
+                                if let Some(ready) = &mut self.ready {
+                                    ready.thinking = level.to_string();
+                                }
+                                let _ = worker
+                                    .commands
+                                    .send(Command::SetThinking(level.to_string()));
+                            }
+                        }
+                        Key::Esc => {}
+                        _ => self.overlay = Some(Overlay::Thinking { index }),
+                    }
+                }
+                Overlay::Tools { index } => match key {
+                    Key::Esc | Key::Char('q') => {}
+                    _ => self.overlay = Some(Overlay::Tools { index }),
+                },
+                Overlay::Approval {
+                    tool,
+                    args,
+                    selected,
+                } => {
+                    self.overlay = Some(Overlay::Approval {
+                        tool,
+                        args,
+                        selected,
+                    });
+                }
+            }
+            self.dirty = true;
+            return;
+        }
+
+        if self.palette_visible() {
+            match key {
+                Key::Up => {
+                    self.palette_index = self.palette_index.saturating_sub(1);
+                    self.dirty = true;
+                    return;
+                }
+                Key::Down => {
+                    self.palette_index = self.palette_index.saturating_add(1);
+                    self.dirty = true;
+                    return;
+                }
+                Key::Tab => {
+                    self.accept_palette(worker, false);
+                    return;
+                }
+                Key::Enter => {
+                    self.accept_palette(worker, true);
+                    return;
+                }
+                Key::Esc => {
+                    self.input.clear();
+                    self.cursor = 0;
+                    self.dirty = true;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // 动作键先查绑定表：默认值与历史行为一致，用户可以在
+        // keybindings.json 里改。
+        if let Some(action) = self.bindings.action(&key) {
+            match action {
+                crate::keybindings::Action::Abort => {
+                    // Esc 只做一件事：打断正在跑的回合。退出走 /quit。
+                    if self.working {
+                        self.abort_run(worker);
+                        self.set_status(argent_i18n::t(self.locale, "tui.abort_requested"));
+                    }
+                }
+                crate::keybindings::Action::Quit => {
+                    if self.input.is_empty() {
+                        self.quit = true;
+                    } else {
+                        self.backspace();
+                    }
+                }
+                crate::keybindings::Action::Redraw => self.dirty = true,
+                crate::keybindings::Action::ExpandToggle => {
+                    self.expand = !self.expand;
+                    self.set_status(if self.expand {
+                        argent_i18n::t(self.locale, "tui.expanded")
+                    } else {
+                        argent_i18n::t(self.locale, "tui.folded")
+                    });
+                }
+                crate::keybindings::Action::HistoryPrevious => self.history_previous(),
+                crate::keybindings::Action::HistoryNext => self.history_next(),
+            }
+            self.dirty = true;
+            return;
+        }
+        if let Key::Paste(text) = key {
+            // 换行在单行输入框里不可见，按空格落进去；整块一次插入，
+            // 不逐字符触发补全或提交。
+            let flattened = text.replace('\n', " ");
+            self.insert_text(&flattened);
+            self.dirty = true;
+            return;
+        }
+        match key {
+            Key::BackTab => {
+                self.plan = !self.plan;
+                self.set_status(if self.plan {
+                    argent_i18n::t(self.locale, "tui.plan_on")
+                } else {
+                    argent_i18n::t(self.locale, "tui.plan_off")
+                });
+            }
+            Key::Esc => {
+                // 与 Abort 动作同一语义，供把 abort 改绑到别处时兜底。
+                if self.working {
+                    self.abort_run(worker);
+                    self.set_status(argent_i18n::t(self.locale, "tui.abort_requested"));
+                }
+            }
+            Key::Enter => self.submit(worker),
+            Key::Backspace => self.backspace(),
+            Key::Delete => {
+                if self.cursor < self.input.len() {
+                    self.input.remove(self.cursor);
+                }
+            }
+            Key::Left => self.cursor = self.cursor.saturating_sub(1),
+            Key::Right => self.cursor = (self.cursor + 1).min(self.input.len()),
+            Key::Home => self.cursor = 0,
+            Key::End => self.cursor = self.input.len(),
+            // ↑↓ 翻输入历史（见绑定表）；滚动只留给 PgUp/PgDn。
+            Key::Up | Key::Down => {}
+            Key::PageUp => self.scroll = self.scroll.saturating_add(10),
+            Key::PageDown => self.scroll = self.scroll.saturating_sub(10),
+            Key::Tab => self.insert_text("  "),
+            Key::Char(ch) => self.insert_text(&ch.to_string()),
+            // 动作键已在上面处理；粘贴块与未知序列不在这里。
+            _ => {}
+        }
+        self.dirty = true;
+    }
+
+    fn palette_visible(&self) -> bool {
+        let text: String = self.input.iter().collect();
+        text.starts_with('/') && !text.contains(' ') && !self.palette_items().is_empty()
+    }
+
+    fn palette_items(&self) -> Vec<PaletteItem> {
+        let text: String = self.input.iter().collect();
+        let query = text.trim_start_matches('/').to_ascii_lowercase();
+        let builtins = [
+            ("help", "show keys and commands"),
+            ("new", "start a new session"),
+            ("fork", "fork the current session; /fork <n> branches at message n"),
+            ("tree", "browse the session branch tree"),
+            ("import", "import a session .jsonl file"),
+            ("rename", "rename the current session"),
+            ("resume", "open a stored session"),
+            ("sessions", "manage stored sessions (ctrl+r rename, ctrl+d delete)"),
+            ("model", "switch model"),
+            ("thinking", "set reasoning effort"),
+            ("compact", "compact the conversation now"),
+            ("rewind", "undo the last run's file changes"),
+            ("clear", "clear history"),
+            ("copy", "copy the last reply to the clipboard"),
+            ("cost", "show usage, cost and context for this session"),
+            ("tools", "list tool schemas"),
+            ("provider", "show provider and model"),
+            ("expand", "toggle tool output"),
+            ("init", "create AGENTS.md for this project"),
+            ("plan", "toggle plan mode"),
+            ("exit", "quit"),
+        ];
+        let mut items: Vec<PaletteItem> = builtins
+            .iter()
+            .filter(|(name, _)| query.is_empty() || name.starts_with(&query))
+            .map(|(name, description)| PaletteItem {
+                name: name.to_string(),
+                description: description.to_string(),
+            })
+            .collect();
+        for command in &self.commands {
+            if query.is_empty() || command.name.to_ascii_lowercase().starts_with(&query) {
+                items.push(PaletteItem {
+                    name: command.name.clone(),
+                    description: command.description.clone(),
+                });
+            }
+        }
+        for template in self.prompts.templates() {
+            if query.is_empty() || template.name.to_ascii_lowercase().starts_with(&query) {
+                items.push(PaletteItem {
+                    name: template.name.clone(),
+                    description: template.description.clone(),
+                });
+            }
+        }
+        items
+    }
+
+    fn accept_palette(&mut self, worker: &Worker, execute: bool) {
+        let items = self.palette_items();
+        if items.is_empty() {
+            return;
+        }
+        let index = self.palette_index.min(items.len() - 1);
+        let item = &items[index];
+        let name = item.name.clone();
+        self.input = format!("/{} ", name).chars().collect();
+        self.cursor = self.input.len();
+        self.palette_index = 0;
+        if execute && !name.is_empty() {
+            self.submit(worker);
+        }
+        self.dirty = true;
+    }
+
+    fn insert_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            self.input.insert(self.cursor, ch);
+            self.cursor += 1;
+        }
+        self.dirty = true;
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            self.input.remove(self.cursor);
+            self.dirty = true;
+        }
+    }
+
+    fn history_previous(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        let pos = self
+            .history_pos
+            .unwrap_or(self.history.len())
+            .saturating_sub(1);
+        self.history_pos = Some(pos);
+        if let Some(item) = self.history.get(pos) {
+            self.input = item.chars().collect();
+            self.cursor = self.input.len();
+            self.dirty = true;
+        }
+    }
+
+    fn history_next(&mut self) {
+        let Some(pos) = self.history_pos else {
+            return;
+        };
+        if pos + 1 < self.history.len() {
+            self.history_pos = Some(pos + 1);
+            if let Some(item) = self.history.get(pos + 1) {
+                self.input = item.chars().collect();
+                self.cursor = self.input.len();
+            }
+        } else {
+            self.history_pos = None;
+            self.input.clear();
+            self.cursor = 0;
+        }
+        self.dirty = true;
+    }
+
+    fn submit(&mut self, worker: &Worker) {
+        let text: String = self.input.iter().collect();
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.history.push(text.clone());
+        self.history_pos = None;
+        self.input.clear();
+        self.cursor = 0;
+        self.palette_index = 0;
+
+        if text.starts_with('/') {
+            self.command(worker, &text);
+            return;
+        }
+        if let Some(command) = text.strip_prefix('!') {
+            let command = command.trim().to_string();
+            if command.is_empty() {
+                return;
+            }
+            if self.remote.is_some() {
+                self.set_status("a remote session cannot run shell commands");
+                return;
+            }
+            self.transcript.push_user(text);
+            let _ = worker.commands.send(Command::Shell(command));
+            self.scroll = 0;
+            self.dirty = true;
+            return;
+        }
+        let (prompt, attached) = self.expand_attachments(&text);
+        let prompt = if self.plan {
+            format!(
+                "[Plan mode] Analyze the request and produce a concrete plan first.                  Do not edit files or run mutating commands until the operator approves.
+
+{}",
+                prompt
+            )
+        } else {
+            prompt
+        };
+        if self.working {
+            // A prompt typed during a run is a correction: inject it between
+            // turns instead of waiting for the whole run to finish.
+            if let Some(remote) = &self.remote {
+                if let Err(error) = remote.send_text(&prompt) {
+                    self.set_status(error);
+                    return;
+                }
+            } else if let Ok(mut queue) = worker.steering.lock() {
+                queue.push_back(prompt);
+            }
+            self.transcript.push_user(text);
+            self.note_attachments(&attached);
+            self.scroll = 0;
+            self.dirty = true;
+            return;
+        }
+        if let Some(remote) = &self.remote {
+            if let Err(error) = remote.send_text(&prompt) {
+                self.set_status(error);
+                return;
+            }
+        } else {
+            let _ = worker.commands.send(Command::Prompt(prompt));
+        }
+        self.transcript.push_user(text);
+        self.note_attachments(&attached);
+        self.working = true;
+        self.queued = self.queued.saturating_add(1);
+        self.scroll = 0;
+        self.dirty = true;
+    }
+
+    /// Stop the turn in progress, locally or on the remote session.
+    fn abort_run(&mut self, worker: &Worker) {
+        if let Some(remote) = &self.remote {
+            if let Err(error) = remote.abort_run() {
+                self.set_status(error);
+            }
+            return;
+        }
+        worker.abort.abort();
+    }
+
+    /// Expand `@path` tokens into a context block appended to the prompt.
+    ///
+    /// Three files maximum, 40k characters each, so an accidental `@huge.log`
+    /// cannot eat the whole context window.
+    fn expand_attachments(&self, text: &str) -> (String, Vec<String>) {
+        let cwd = self
+            .ready
+            .as_ref()
+            .map(|ready| PathBuf::from(&ready.cwd))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let mut attached = Vec::new();
+        let mut context = String::new();
+        for token in text.split_whitespace() {
+            if attached.len() >= 3 {
+                break;
+            }
+            let Some(raw) = token.strip_prefix('@') else {
+                continue;
+            };
+            if raw.is_empty() {
+                continue;
+            }
+            let path = argent_core::path::resolve(
+                &cwd,
+                &argent_core::path::expand_home(Path::new(raw)),
+            );
+            if path.is_dir() {
+                let mut entries: Vec<String> = std::fs::read_dir(&path)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect();
+                entries.sort();
+                entries.truncate(80);
+                context.push_str(&format!(
+                    "
+
+[dir: {}]
+{}",
+                    path.display(),
+                    entries.join("
+")
+                ));
+                attached.push(format!("{}/", raw));
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if content.contains('\0') {
+                continue;
+            }
+            let capped = argent_core::text::truncate(&content, 40_000);
+            context.push_str(&format!("
+
+[file: {}]
+{}", path.display(), capped));
+            attached.push(raw.to_string());
+            if context.chars().count() > 80_000 {
+                break;
+            }
+        }
+        if attached.is_empty() {
+            (text.to_string(), attached)
+        } else {
+            (format!("{}
+{}", text, context), attached)
+        }
+    }
+
+    fn note_attachments(&mut self, attached: &[String]) {
+        if !attached.is_empty() {
+            self.transcript.push_notice(
+                NoticeKind::Info,
+                format!("attached: {}", attached.join(", ")),
+            );
+        }
+    }
+
+    fn command(&mut self, worker: &Worker, text: &str) {
+        let mut parts = text.splitn(2, char::is_whitespace);
+        let command = parts.next().unwrap_or("");
+        let argument = parts.next().unwrap_or("").trim();
+        match command {
+            "/exit" | "/quit" | "/q" => self.quit = true,
+            "/help" | "/?" => self.overlay = Some(Overlay::Help),
+            "/new" => {
+                let _ = worker.commands.send(Command::NewSession);
+                self.transcript.clear();
+                self.scroll = 0;
+            }
+            "/fork" => {
+                if argument.is_empty() {
+                    let _ = worker.commands.send(Command::Fork);
+                } else {
+                    match argument.parse::<usize>() {
+                        Ok(n) if n >= 1 => {
+                            let _ = worker.commands.send(Command::ForkAtMessage(n));
+                        }
+                        _ => {
+                            self.set_status(argent_i18n::t(self.locale, "tui.fork_usage"));
+                        }
+                    }
+                }
+            }
+            "/tree" => {
+                let _ = worker.commands.send(Command::Tree);
+                self.overlay = Some(Overlay::Tree { index: 0 });
+            }
+            "/import" => {
+                if argument.is_empty() {
+                    self.set_status(argent_i18n::t(self.locale, "tui.import_usage"));
+                } else {
+                    let _ = worker.commands.send(Command::Import(argument.to_string()));
+                }
+            }
+            "/copy" => {
+                let _ = worker.commands.send(Command::CopyLast);
+            }
+            "/cost" | "/usage" => {
+                let _ = worker.commands.send(Command::Cost);
+            }
+            "/rename" => {
+                if argument.is_empty() {
+                    self.set_status(argent_i18n::t(self.locale, "tui.rename_usage"));
+                } else {
+                    let _ = worker.commands.send(Command::Rename(argument.to_string()));
+                }
+            }
+            "/resume" | "/sessions" | "/session" => {
+                let _ = worker.commands.send(Command::ListSessions);
+                self.overlay = Some(Overlay::Sessions { index: 0 });
+            }
+            "/model" => {
+                if argument.is_empty() {
+                    let _ = worker.commands.send(Command::ListModels);
+                    self.overlay = Some(Overlay::Models { index: 0 });
+                } else {
+                    if let Some(ready) = &mut self.ready {
+                        ready.model = argument.to_string();
+                    }
+                    let _ = worker
+                        .commands
+                        .send(Command::SetModel(argument.to_string()));
+                }
+            }
+            "/thinking" => {
+                if argument.is_empty() {
+                    let current = self
+                        .ready
+                        .as_ref()
+                        .map(|ready| ready.thinking.as_str())
+                        .unwrap_or("auto");
+                    let index = ["auto", "low", "medium", "high", "max"]
+                        .iter()
+                        .position(|level| *level == current)
+                        .unwrap_or(2);
+                    self.overlay = Some(Overlay::Thinking { index });
+                } else {
+                    if let Some(ready) = &mut self.ready {
+                        ready.thinking = argument.to_string();
+                    }
+                    let _ = worker
+                        .commands
+                        .send(Command::SetThinking(argument.to_string()));
+                }
+            }
+            "/compact" => {
+                let _ = worker.commands.send(Command::Compact);
+            }
+            "/rewind" => {
+                // 不带参数时撤回最近一次运行。
+                let steps = argument.parse::<u64>().unwrap_or(1).max(1);
+                let _ = worker.commands.send(Command::Rewind { steps });
+            }
+            "/clear" => {
+                let _ = worker.commands.send(Command::ClearHistory);
+                self.transcript.clear();
+                self.scroll = 0;
+            }
+            "/tools" => {
+                let _ = worker.commands.send(Command::ListTools);
+                self.overlay = Some(Overlay::Tools { index: 0 });
+            }
+            "/provider" => {
+                if let Some(ready) = &self.ready {
+                    self.set_status(format!(
+                        "{} ({}) · {} · {}",
+                        ready.provider, ready.protocol, ready.model, ready.cwd
+                    ));
+                }
+            }
+            "/expand" => {
+                self.expand = !self.expand;
+                self.set_status(if self.expand {
+                    argent_i18n::t(self.locale, "tui.expanded")
+                } else {
+                    argent_i18n::t(self.locale, "tui.folded")
+                });
+            }
+            "/prompts" => self.use_prompt(worker, argument),
+            "/init" => self.init_project(),
+            "/plan" => {
+                self.plan = !self.plan;
+                self.set_status(if self.plan {
+                    argent_i18n::t(self.locale, "tui.plan_on")
+                } else {
+                    argent_i18n::t(self.locale, "tui.plan_off")
+                });
+            }
+            other => {
+                let name = other.trim_start_matches('/');
+                if let Some(doc) = argent_commands::find(&self.commands, name) {
+                    let expanded = doc.expand(argument);
+                    let _ = worker.commands.send(Command::Prompt(expanded.clone()));
+                    self.transcript.push_user(expanded);
+                    self.working = true;
+                    self.queued = self.queued.saturating_add(1);
+                    self.scroll = 0;
+                } else if let Some(template) = self.prompts.get(name) {
+                    let expanded = template.expand(argument);
+                    let _ = worker.commands.send(Command::Prompt(expanded.clone()));
+                    self.transcript.push_user(expanded);
+                    self.working = true;
+                    self.queued = self.queued.saturating_add(1);
+                    self.scroll = 0;
+                    self.set_status(format!(
+                        "{}: {}",
+                        template.name,
+                        template.path.display()
+                    ));
+                } else {
+                    self.set_status(format!(
+                        "{} {}",
+                        argent_i18n::t(self.locale, "tui.unknown_command"),
+                        other
+                    ));
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    fn init_project(&mut self) {
+        let cwd = self
+            .ready
+            .as_ref()
+            .map(|ready| PathBuf::from(&ready.cwd))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let path = cwd.join("AGENTS.md");
+        if path.exists() {
+            self.set_status(format!(
+                "{} already exists; edit it instead of overwriting",
+                path.display()
+            ));
+            return;
+        }
+        match std::fs::write(&path, project_init_text(&cwd)) {
+            Ok(()) => self.set_status(format!("created {}", path.display())),
+            Err(error) => self.set_status(format!("cannot create AGENTS.md: {}", error)),
+        }
+    }
+
+    fn use_prompt(&mut self, worker: &Worker, argument: &str) {
+        if self.prompts.is_empty() {
+            self.set_status(
+                "no prompt templates in .argent/prompts, .agents/prompts or ~/.argent/prompts",
+            );
+            return;
+        }
+        if argument.is_empty() {
+            let items: Vec<String> = self
+                .prompts
+                .templates()
+                .iter()
+                .map(|template| {
+                    if template.argument_hint.is_empty() {
+                        format!("/{} — {}", template.name, template.description)
+                    } else {
+                        format!(
+                            "/{} {} — {}",
+                            template.name, template.argument_hint, template.description
+                        )
+                    }
+                })
+                .collect();
+            self.set_status(format!(
+                "prompts ({}): {}",
+                self.prompts.len(),
+                items.join(" · ")
+            ));
+            return;
+        }
+        let mut parts = argument.splitn(2, char::is_whitespace);
+        let name = parts.next().unwrap_or("");
+        let args = parts.next().unwrap_or("").trim();
+        match self.prompts.get(name) {
+            Some(template) => {
+                let expanded = template.expand(args);
+                let _ = worker.commands.send(Command::Prompt(expanded.clone()));
+                self.transcript.push_user(expanded);
+                self.working = true;
+                self.queued = self.queued.saturating_add(1);
+                self.scroll = 0;
+                self.set_status(format!("{}: {}", template.name, template.path.display()));
+            }
+            None => self.set_status(format!("unknown prompt template '{}'", name)),
+        }
+    }
+
+    // ------------------------------------------------------------ render
+
+    fn frame(&mut self, width: usize, height: usize) -> Vec<String> {
+        self.tick = self.tick.wrapping_add(1);
+        self.metrics.tick();
+        let width = width.max(20);
+        let height = height.max(8);
+
+        let palette = if self.palette_visible() {
+            let items = self.palette_items();
+            let shown = items.len().min(6);
+            Some((items, shown))
+        } else {
+            None
+        };
+        let palette_height = palette.as_ref().map(|(_, shown)| *shown).unwrap_or(0);
+        let body_height = height
+            .saturating_sub(5)
+            .saturating_sub(palette_height)
+            .max(1);
+
+        let mut body = self.transcript_lines(width);
+        let total = body.len();
+        let max_scroll = total.saturating_sub(body_height);
+        self.scroll = self.scroll.min(max_scroll);
+        let end = total.saturating_sub(self.scroll);
+        let start = end.saturating_sub(body_height);
+        let mut visible: Vec<Line> = if start < end {
+            body.drain(start..end).collect()
+        } else {
+            Vec::new()
+        };
+        while visible.len() < body_height {
+            visible.push(Line::plain(""));
+        }
+
+        if let Some(overlay) = self.overlay_lines(width) {
+            let overlay_height = overlay.len();
+            if overlay_height <= body_height {
+                let top = (body_height - overlay_height) / 2;
+                for (offset, line) in overlay.into_iter().enumerate() {
+                    visible[top + offset] = line;
+                }
+            }
+        }
+
+        let mut lines = Vec::with_capacity(height);
+        lines.extend(visible);
+        if let Some((items, shown)) = palette {
+            for (index, item) in items.iter().take(shown).enumerate() {
+                let selected = index == self.palette_index.min(shown.saturating_sub(1));
+                lines.push(self.palette_line(item, selected, width));
+            }
+        }
+        lines.push(input_top(width));
+        lines.push(self.input_line(width));
+        lines.push(separator(width));
+        lines.push(self.status_line(width));
+        // 模型/cwd/用量放在最底一行：视野上方留给正文。
+        lines.push(self.header_line(width));
+
+        // 整帧带底色：终端自带的背景不可控，显式填一层才不会露底。
+        let base = Style::plain().with_bg(crate::theme::current().background);
+        lines
+            .into_iter()
+            .map(|line| line.render(width, base, true))
+            .collect()
+    }
+
+    fn header_line(&self, width: usize) -> Line {
+        let dot = Span::new(" · ", Style::dim(crate::theme::current().dim));
+        let mut left = Line::new();
+        if let Some(ready) = &self.ready {
+            left = left
+                .push(Span::new(ready.model.clone(), Style::plain()))
+                .push(dot.clone())
+                .push(Span::new(
+                    ready.thinking.clone(),
+                    Style::dim(crate::theme::current().dim),
+                ))
+                .push(dot.clone())
+                .push(Span::new(
+                    ready.provider.clone(),
+                    Style::dim(crate::theme::current().secondary),
+                ))
+                .push(dot.clone())
+                .push(Span::new(
+                    ready.cwd.clone(),
+                    Style::dim(crate::theme::current().dim),
+                ));
+        }
+        if self.working {
+            left = left.push(Span::new("  ", Style::plain())).push(Span::new(
+                SPINNER[(self.tick as usize) % SPINNER.len()],
+                Style::bold(crate::theme::current().success),
+            ));
+        } else if self.queued > 0 {
+            left = left.push(Span::new("  ", Style::plain())).push(Span::new(
+                format!("{} queued", self.queued),
+                Style::dim(crate::theme::current().dim),
+            ));
+        }
+
+        let percent = (self.metrics.context_fraction() * 100.0).round() as u32;
+        let right = format!(
+            "{} {}% · {:.0} {} ",
+            argent_i18n::t(self.locale, "tui.ctx"),
+            percent,
+            self.metrics.rate(),
+            argent_i18n::t(self.locale, "tui.tok_s")
+        );
+        fill_between(left, right, width, Style::dim(crate::theme::current().dim))
+    }
+
+    fn status_line(&mut self, width: usize) -> Line {
+        let hint = match &self.status {
+            Some((text, at)) if at.elapsed() < Duration::from_secs(6) => text.clone(),
+            _ if !self.hint_shown => {
+                self.hint_shown = true;
+                argent_i18n::t(self.locale, "tui.hint").to_string()
+            }
+            // 开场提示只显示一次；临时状态过期后这一行留空。
+            _ => String::new(),
+        };
+        let right = if let Some(ready) = &self.ready {
+            let default = ["session", "tokens", "cache", "cost"];
+            let segments: Vec<&str> = if self.statusline.is_empty() {
+                default.to_vec()
+            } else {
+                self.statusline.iter().map(String::as_str).collect()
+            };
+            let mut parts = Vec::new();
+            if self.plan {
+                parts.push("PLAN".to_string());
+            }
+            for segment in segments {
+                match segment {
+                    "session" => parts.push(ready.session.clone()),
+                    "model" => parts.push(self.metrics.model.clone()),
+                    "thinking" => {
+                        if !self.metrics.thinking.is_empty() {
+                            parts.push(self.metrics.thinking.clone());
+                        }
+                    }
+                    "cwd" => parts.push(ready.cwd.clone()),
+                    "tokens" => parts.push(format_tokens(
+                        self.metrics.prompt_tokens + self.metrics.completion_tokens,
+                    )),
+                    "cache" => {
+                        if let Some(hit) = self.metrics.cache_hit_percent() {
+                            if hit > 0 {
+                                parts.push(format!("cache {}%", hit));
+                            }
+                        }
+                    }
+                    "cost" => {
+                        if let Some(cost) = self.metrics.cost {
+                            parts.push(format!("${:.4}", cost));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            format!("{} ", parts.join(" · "))
+        } else {
+            String::new()
+        };
+        fill_between(Line::plain(hint), right, width, Style::dim(crate::theme::current().dim))
+    }
+
+    fn input_line(&self, width: usize) -> Line {
+        let inner = width.saturating_sub(4).max(1);
+        let start = if self.cursor > inner {
+            self.cursor - inner
+        } else {
+            0
+        };
+        let visible: Vec<char> = self.input.iter().skip(start).take(inner).copied().collect();
+        let mut line = Line::new().push(Span::new(USER_MARK, Style::bold(crate::theme::current().accent)));
+        if self.input.is_empty() {
+            line = line
+                .push(Span::new(
+                    argent_i18n::t(self.locale, "tui.placeholder"),
+                    Style::dim(crate::theme::current().dim),
+                ))
+                .push(Span::new(" ", Style::reverse(crate::theme::current().accent)));
+            return line;
+        }
+        let cursor_at = self.cursor.saturating_sub(start).min(visible.len());
+        for (index, ch) in visible.iter().enumerate() {
+            if index == cursor_at {
+                line = line.push(Span::new(ch.to_string(), Style::reverse(crate::theme::current().accent)));
+            } else {
+                line = line.push(Span::new(ch.to_string(), Style::plain()));
+            }
+        }
+        if cursor_at >= visible.len() {
+            line = line.push(Span::new(" ", Style::reverse(crate::theme::current().accent)));
+        }
+        line
+    }
+
+    fn palette_line(&self, item: &PaletteItem, selected: bool, width: usize) -> Line {
+        let text = format!(
+            "  /{:<14} {}",
+            item.name,
+            clip_to_width(&item.description, width.saturating_sub(20))
+        );
+        let style = if selected {
+            Style::reverse(crate::theme::current().accent)
+        } else {
+            Style::dim(crate::theme::current().dim)
+        };
+        Line::plain(text).with_style(style)
+    }
+
+    fn transcript_lines(&self, width: usize) -> Vec<Line> {
+        let mut lines = Vec::new();
+        for entry in self.transcript.entries() {
+            match entry {
+                Entry::User(text) => {
+                    lines.extend(wrapped(text, width, USER_MARK, "  ", Style::bold(crate::theme::current().accent)));
+                }
+                Entry::Assistant(text) => {
+                    // ◆ 是回答行的锚点：正文不带边框，靠前缀与颜色分角色。
+                    // markdown 只做四件事：代码块、行内代码、粗体、标题。
+                    lines.extend(markdown_lines(text, width, ASSISTANT_MARK, "  "));
+                }
+                Entry::Thinking(text) => {
+                    let mut rendered = wrapped(
+                        text,
+                        width,
+                        "✻ ",
+                        "  ",
+                        Style::dim(crate::theme::current().dim),
+                    );
+                    if !self.expand && rendered.len() > 4 {
+                        rendered.truncate(3);
+                        rendered.push(Line::new().push(Span::new(
+                            format!("  … {}", argent_i18n::t(self.locale, "tui.folded_hint")),
+                            Style::dim(crate::theme::current().dim),
+                        )));
+                    }
+                    lines.extend(rendered);
+                }
+                Entry::Tool(run) => {
+                    // 第一行是"做了什么"：名字 + 主参数（path/command…），
+                    // 不把整段 JSON 甩在对话里。
+                    let primary = tool_primary_arg(&run.arguments)
+                        .map(|value| format!("({})", value))
+                        .unwrap_or_default();
+                    let style = if run.state.is_failed() {
+                        Style::fg(crate::theme::current().error)
+                    } else if run.state.is_running() {
+                        Style::fg(crate::theme::current().warning)
+                    } else {
+                        Style::fg(crate::theme::current().success)
+                    };
+                    lines.push(
+                        Line::new()
+                            .push(Span::new(TOOL_MARK, style))
+                            .push(Span::new(format!("{}{}", run.name, primary), style)),
+                    );
+                    // 第二行是"结果如何"：状态、耗时、行数。
+                    let mut footer = format!("{} {}", run.state.glyph(), run.state.describe());
+                    let output_lines = run.output.lines().count();
+                    if output_lines > 0 {
+                        footer.push_str(&format!(" · {} lines", output_lines));
+                    }
+                    let footer_style = if run.state.is_failed() {
+                        Style::fg(crate::theme::current().error)
+                    } else {
+                        Style::dim(crate::theme::current().dim)
+                    };
+                    lines.push(Line::new().push(Span::new(
+                        format!("  ⎿ {}", footer),
+                        footer_style,
+                    )));
+                    if self.expand && !run.output.is_empty() {
+                        for output in run.output.lines().take(16) {
+                            lines.push(Line::new().push(Span::new(
+                                format!("   {}", clip_to_width(output, width.saturating_sub(4))),
+                                Style::dim(crate::theme::current().dim),
+                            )));
+                        }
+                        if run.output.lines().count() > 16 {
+                            lines.push(Line::plain(format!(
+                                "   … {} more lines",
+                                run.output.lines().count() - 16
+                            )));
+                        }
+                    }
+                }
+                Entry::Notice(kind, text) => {
+                    let style = match kind {
+                        NoticeKind::Info => Style::dim(crate::theme::current().accent),
+                        NoticeKind::Warning => Style::fg(crate::theme::current().warning),
+                        NoticeKind::Error => Style::fg(crate::theme::current().error),
+                    };
+                    lines.extend(wrapped(text, width, "! ", "  ", style));
+                }
+            }
+            lines.push(Line::plain(""));
+        }
+        if lines.is_empty() {
+            lines.push(Line::new().push(Span::new(
+                argent_i18n::t(self.locale, "tui.empty"),
+                Style::dim(crate::theme::current().dim),
+            )));
+            lines.push(Line::plain(""));
+        }
+        lines
+    }
+
+    fn overlay_lines(&self, width: usize) -> Option<Vec<Line>> {
+        let (title, content) = match self.overlay.as_ref()? {
+            Overlay::Help => (
+                argent_i18n::t(self.locale, "tui.help.title").to_string(),
+                vec![
+                    ("Enter", argent_i18n::t(self.locale, "tui.help.enter")),
+                    ("Esc", argent_i18n::t(self.locale, "tui.help.ctrl_c")),
+                    ("Ctrl+D", argent_i18n::t(self.locale, "tui.help.ctrl_d")),
+                    (
+                        "↑ ↓",
+                        argent_i18n::t(self.locale, "tui.help.history"),
+                    ),
+                    (
+                        "PgUp / PgDn",
+                        argent_i18n::t(self.locale, "tui.help.scroll"),
+                    ),
+                    ("Ctrl+E", argent_i18n::t(self.locale, "tui.help.ctrl_e")),
+                    (
+                        "Ctrl+P / Ctrl+N",
+                        argent_i18n::t(self.locale, "tui.help.history"),
+                    ),
+                    ("Ctrl+L", argent_i18n::t(self.locale, "tui.help.ctrl_l")),
+                    (
+                        "/model /thinking",
+                        argent_i18n::t(self.locale, "tui.help.models"),
+                    ),
+                    (
+                        "/new /fork /rename /import",
+                        argent_i18n::t(self.locale, "tui.help.sessions"),
+                    ),
+                    (
+                        "/resume /sessions",
+                        argent_i18n::t(self.locale, "tui.help.resume"),
+                    ),
+                    (
+                        "/compact /clear /copy /tools /rewind",
+                        argent_i18n::t(self.locale, "tui.help.utils"),
+                    ),
+                    (
+                        "/tree",
+                        argent_i18n::t(self.locale, "tui.help.tree"),
+                    ),
+                ]
+                .into_iter()
+                .map(|(key, description)| (key.to_string(), description.to_string()))
+                .collect(),
+            ),
+            Overlay::Sessions { index: _ } => {
+                let mut content: Vec<(String, String)> = self
+                    .sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(_position, row)| {
+                        (
+                            row.title.clone(),
+                            format!(
+                                "{}  {}",
+                                row.updated,
+                                row.path
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                                    .unwrap_or("")
+                            ),
+                        )
+                    })
+                    .collect();
+                content.push((String::new(), String::new()));
+                content.push((
+                    "enter open · ctrl+r rename · ctrl+d delete · esc close".to_string(),
+                    String::new(),
+                ));
+                (
+                    argent_i18n::t(self.locale, "tui.sessions.title").to_string(),
+                    content,
+                )
+            }
+            Overlay::RenameSession { index, input } => {
+                let current = self
+                    .sessions
+                    .get(*index)
+                    .map(|row| row.title.clone())
+                    .unwrap_or_default();
+                (
+                    argent_i18n::t(self.locale, "tui.sessions.rename").to_string(),
+                    vec![
+                        (current, String::new()),
+                        (format!("> {}", input), String::new()),
+                        ("enter save · esc cancel".to_string(), String::new()),
+                    ],
+                )
+            }
+            Overlay::Tree { index: _ } => (
+                argent_i18n::t(self.locale, "tui.tree.title").to_string(),
+                self.tree_rows
+                    .iter()
+                    .map(|row| {
+                        let indent = "  ".repeat(row.depth);
+                        let marker = if row.leaf {
+                            "● "
+                        } else if row.on_path {
+                            "│ "
+                        } else {
+                            "○ "
+                        };
+                        let flag = if row.branch { " [branch]" } else { "" };
+                        (
+                            format!("{}{}{}{}", indent, marker, row.label, flag),
+                            row.id.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            Overlay::Models { index: _ } => (
+                argent_i18n::t(self.locale, "tui.models.title").to_string(),
+                self.models
+                    .iter()
+                    .map(|model| (model.clone(), String::new()))
+                    .collect(),
+            ),
+            Overlay::Thinking { index: _ } => (
+                argent_i18n::t(self.locale, "tui.thinking.title").to_string(),
+                ["auto", "low", "medium", "high", "max"]
+                    .iter()
+                    .map(|level| (level.to_string(), String::new()))
+                    .collect(),
+            ),
+            Overlay::Tools { .. } => (
+                argent_i18n::t(self.locale, "tui.tools.title").to_string(),
+                self.tools
+                    .iter()
+                    .map(|(name, description)| (name.clone(), clip_to_width(description, 48)))
+                    .collect(),
+            ),
+            Overlay::Approval {
+                tool,
+                args,
+                selected: _,
+            } => (
+                argent_i18n::t(self.locale, "tui.permission.title").to_string(),
+                vec![
+                    (tool.clone(), clip_to_width(args, 56)),
+                    (String::new(), String::new()),
+                    (
+                        argent_i18n::t(self.locale, "tui.permission.choice").to_string(),
+                        String::new(),
+                    ),
+                ],
+            ),
+        };
+        Some(boxed_overlay(
+            &title,
+            &content,
+            width,
+            self.overlay.as_ref(),
+        ))
+    }
+}
+
+/// 回答的 markdown 渲染：代码块、行内代码、粗体、标题。
+///
+/// 只做终端里真正提升可读性的几件事，不追求完整 markdown。
+fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) -> Vec<Line> {
+    let theme = crate::theme::current();
+    let code_bg = Color::Fixed(236);
+    let mut out: Vec<Line> = Vec::new();
+    let mut in_code = false;
+    let mut first_line = true;
+    for raw in text.lines() {
+        let trimmed = raw.trim_end();
+        if trimmed.trim_start().starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            // 代码块：整行铺深一档的底色，行尾补空格盖满宽度。
+            let body_width = width.saturating_sub(2);
+            let clipped = clip_to_width(trimmed, body_width);
+            let pad = body_width.saturating_sub(text_width(&clipped));
+            out.push(Line::new().push(Span::new(
+                format!("  {}{}", clipped, " ".repeat(pad)),
+                Style::fg(theme.dim).with_bg(code_bg),
+            )));
+            first_line = false;
+            continue;
+        }
+        let (spans, _) = inline_spans(trimmed, theme);
+        let spans: Vec<Span> = if trimmed.starts_with('#') {
+            let body = trimmed.trim_start_matches('#').trim_start();
+            vec![Span::new(body.to_string(), Style::bold(theme.accent))]
+        } else {
+            spans
+        };
+        let prefix = if first_line { first } else { rest };
+        out.extend(wrap_spans(spans, width, prefix, rest));
+        first_line = false;
+    }
+    if out.is_empty() {
+        out.push(Line::new().push(Span::new(first.to_string(), Style::plain())));
+    }
+    out
+}
+
+/// 行内样式：`code` 用高亮色，**bold** 加粗，其余原样。
+fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span>, bool) {
+    let mut spans: Vec<Span> = Vec::new();
+    let mut buf = String::new();
+    let mut chars = text.chars().peekable();
+    let mut saw_style = false;
+    while let Some(ch) = chars.next() {
+        if ch == '`' {
+            if !buf.is_empty() {
+                spans.push(Span::new(std::mem::take(&mut buf), Style::plain()));
+            }
+            let mut code = String::new();
+            for next in chars.by_ref() {
+                if next == '`' {
+                    break;
+                }
+                code.push(next);
+            }
+            if !code.is_empty() {
+                spans.push(Span::new(code, Style::fg(theme.warning)));
+                saw_style = true;
+            }
+            continue;
+        }
+        if ch == '*' && chars.peek() == Some(&'*') {
+            chars.next();
+            if !buf.is_empty() {
+                spans.push(Span::new(std::mem::take(&mut buf), Style::plain()));
+            }
+            let mut bold = String::new();
+            let mut closed = false;
+            while let Some(next) = chars.next() {
+                if next == '*' && chars.peek() == Some(&'*') {
+                    chars.next();
+                    closed = true;
+                    break;
+                }
+                bold.push(next);
+            }
+            spans.push(Span::new(
+                bold,
+                if closed { Style::bold(theme.text) } else { Style::plain() },
+            ));
+            saw_style = true;
+            continue;
+        }
+        buf.push(ch);
+    }
+    if !buf.is_empty() {
+        spans.push(Span::new(buf, Style::plain()));
+    }
+    (spans, saw_style)
+}
+
+/// 把带样式的片段按宽度折行，续行用 `rest` 前缀。
+fn wrap_spans(spans: Vec<Span>, width: usize, first: &str, rest: &str) -> Vec<Line> {
+    let prefix_width = text_width(first).max(text_width(rest));
+    let body_width = width.saturating_sub(prefix_width).max(1);
+    let mut out: Vec<Line> = Vec::new();
+    let mut current_spans: Vec<Span> = Vec::new();
+    let mut used = 0usize;
+    for span in spans {
+        let mut piece = String::new();
+        for ch in span.text.chars() {
+            let width = text_width(&ch.to_string()).max(1);
+            if used + width > body_width {
+                if !piece.is_empty() {
+                    current_spans.push(Span::new(std::mem::take(&mut piece), span.style));
+                }
+                let mut line = Line::new();
+                line = line.push(Span::new(
+                    if out.is_empty() { first.to_string() } else { rest.to_string() },
+                    Style::plain(),
+                ));
+                for part in std::mem::take(&mut current_spans) {
+                    line = line.push(part);
+                }
+                out.push(line);
+                used = 0;
+            }
+            piece.push(ch);
+            used += width;
+        }
+        if !piece.is_empty() {
+            current_spans.push(Span::new(piece, span.style));
+        }
+    }
+    let mut line = Line::new().push(Span::new(
+        if out.is_empty() { first.to_string() } else { rest.to_string() },
+        Style::plain(),
+    ));
+    for part in current_spans {
+        line = line.push(part);
+    }
+    out.push(line);
+    out
+}
+
+/// 工具调用行里最有信息量的那个参数值。
+///
+/// 模型给的参数是 JSON；把整段打出来会把对话淹掉，取 path/command 这类
+/// 主键，再截断到一行。
+fn tool_primary_arg(arguments: &str) -> Option<String> {
+    let value = argent_core::json::Json::parse(arguments).ok()?;
+    for key in ["path", "command", "query", "pattern", "url", "name", "uri", "job"] {
+        if let Some(raw) = value.get(key).and_then(argent_core::json::Json::as_str) {
+            if raw.is_empty() {
+                continue;
+            }
+            let one_line: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+            let clipped = clip_to_width(&one_line, 48);
+            return Some(clipped);
+        }
+    }
+    None
+}
+
+fn wrapped(
+    text: &str,
+    width: usize,
+    first_prefix: &str,
+    rest_prefix: &str,
+    style: Style,
+) -> Vec<Line> {
+    let prefix_width = text_width(first_prefix).max(text_width(rest_prefix));
+    let body_width = width.saturating_sub(prefix_width).max(1);
+    let mut out = Vec::new();
+    for paragraph in text.split('\n') {
+        for segment in wrap_text(paragraph, body_width) {
+            let prefix = if out.is_empty() {
+                first_prefix
+            } else {
+                rest_prefix
+            };
+            out.push(
+                Line::new()
+                    .push(Span::new(prefix, style))
+                    .push(Span::new(segment, style)),
+            );
+        }
+    }
+    if out.is_empty() {
+        out.push(Line::plain(""));
+    }
+    out
+}
+
+fn separator(width: usize) -> Line {
+    Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
+}
+
+fn input_top(width: usize) -> Line {
+    // 只有一条细线：输入区不需要标签，占位符已经说明了它是什么。
+    Line::plain("─".repeat(width.saturating_sub(2)))
+        .with_style(Style::dim(crate::theme::current().dim))
+}
+
+fn fill_between(mut left: Line, right: String, width: usize, style: Style) -> Line {
+    let right_width = text_width(&right);
+    let left_width = left.width();
+    let gap = width.saturating_sub(left_width + right_width);
+    left.spans.push(Span::new(" ".repeat(gap), Style::plain()));
+    left.spans.push(Span::new(right, style));
+    left
+}
+
+fn boxed_overlay(
+    title: &str,
+    content: &[(String, String)],
+    width: usize,
+    overlay: Option<&Overlay>,
+) -> Vec<Line> {
+    let box_width = width.saturating_sub(4).clamp(24, 80);
+    let inner = box_width.saturating_sub(4);
+    let mut lines = Vec::new();
+    let top = format!(
+        "┌─ {} {}┐",
+        title,
+        "─".repeat(box_width.saturating_sub(text_width(title) + 4))
+    );
+    lines.push(Line::plain(clip_to_width(&top, box_width)).with_style(Style::dim(crate::theme::current().accent)));
+    let selected = match overlay {
+        Some(Overlay::Sessions { index })
+        | Some(Overlay::Tree { index })
+        | Some(Overlay::Models { index })
+        | Some(Overlay::Thinking { index })
+        | Some(Overlay::Tools { index }) => Some(*index),
+        _ => None,
+    };
+    for (position, (left, right)) in content.iter().enumerate() {
+        let mut text = if right.is_empty() {
+            left.clone()
+        } else {
+            format!("{:<24} {}", clip_to_width(left, 24), right)
+        };
+        text = clip_to_width(&text, inner);
+        let padding = inner.saturating_sub(text_width(&text));
+        let mut line = Line::new()
+            .push(Span::new("│ ", Style::dim(crate::theme::current().accent)))
+            .push(Span::new(
+                text,
+                if Some(position) == selected {
+                    Style::reverse(crate::theme::current().accent)
+                } else {
+                    Style::plain()
+                },
+            ))
+            .push(Span::new(" ".repeat(padding), Style::plain()))
+            .push(Span::new(" │", Style::dim(crate::theme::current().accent)));
+        if Some(position) == selected {
+            line = line.with_style(Style::reverse(crate::theme::current().accent));
+        }
+        lines.push(line);
+    }
+    lines.push(
+        Line::plain(format!("└{}┘", "─".repeat(box_width.saturating_sub(2))))
+            .with_style(Style::dim(crate::theme::current().accent)),
+    );
+    lines
+}
+
+// ---------------------------------------------------------------- entry
+
+/// Run the full-screen UI. Returns when the operator quits.
+/// Drive a background session over HTTP with the same interface.
+///
+/// The events come from the session's event stream instead of a local agent,
+/// and the input box sends its lines to the session instead of to a worker.
+pub fn run_remote(
+    remote: RemoteLink,
+    title: String,
+    cwd: PathBuf,
+    statusline: Vec<String>,
+    bindings: crate::keybindings::Bindings,
+    events: Receiver<UiEvent>,
+) -> argent_core::Result<i32> {
+    let guard = match RawModeGuard::enable() {
+        Some(guard) => guard,
+        None => {
+            eprintln!("argent: this terminal does not support raw mode");
+            return Ok(1);
+        }
+    };
+    terminal::enter_alternate_screen();
+    terminal::hide_cursor();
+
+    let locale = argent_i18n::Locale::from_env();
+    let (key_tx, key_rx) = mpsc::channel();
+    spawn_input(key_tx);
+    let prompts = crate::prompts::PromptLibrary::discover(
+        &crate::prompts::PromptLibrary::default_roots(&cwd),
+    );
+    let mut app = App::new(Vec::new(), prompts, locale, statusline, bindings)
+        .with_remote(remote.clone());
+    // 状态栏由调用方给的 Ready 事件填好（远端会话没有本地模型信息）。
+    let _ = &title;
+    let initial_size = terminal::size();
+    draw(&app.frame(initial_size.cols as usize, initial_size.rows as usize));
+    // The stand-in worker is the same for every key: its commands go nowhere.
+    let worker = remote_worker();
+
+    while !app.quit {
+        let mut changed = false;
+        loop {
+            match events.try_recv() {
+                Ok(event) => {
+                    if let UiEvent::Agent(argent_agent::AgentEvent::TurnStart { .. }) = &event {
+                        remote
+                            .running
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    if let UiEvent::Agent(argent_agent::AgentEvent::Finished { .. }) = &event {
+                        remote
+                            .running
+                            .store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    app.handle_ui(event);
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    app.quit = true;
+                    break;
+                }
+            }
+        }
+        while let Ok(key) = key_rx.try_recv() {
+            app.handle_key(&worker, key);
+            changed = true;
+        }
+        if app.quit {
+            break;
+        }
+        if changed || app.working {
+            let size = terminal::size();
+            let lines = app.frame(size.cols as usize, size.rows as usize);
+            draw(&lines);
+        }
+        std::thread::sleep(Duration::from_millis(33));
+    }
+
+    terminal::show_cursor();
+    terminal::leave_alternate_screen();
+    drop(guard);
+    Ok(0)
+}
+
+/// A worker stand-in for the remote session: its commands go nowhere, the
+/// abort handle is unused (the session is aborted over HTTP).
+fn remote_worker() -> Worker {
+    let (command_tx, _command_rx) = mpsc::channel();
+    let (_event_tx, event_rx) = mpsc::channel();
+    Worker {
+        commands: command_tx,
+        events: event_rx,
+        abort: AbortHandle::new(),
+        steering: Arc::new(Mutex::new(VecDeque::new())),
+    }
+}
+
+pub fn run(
+    agent: Agent,
+    session: SessionContext,
+    config: argent_core::config::Config,
+    index: SessionIndex,
+    commands: Vec<argent_commands::CommandDoc>,
+    prompts: crate::prompts::PromptLibrary,
+    approvals: Receiver<ApprovalRequest>,
+    subagents: Option<Receiver<argent_tools::SubagentEvent>>,
+    checkpoints: argent_tools::CheckpointStore,
+    cwd: PathBuf,
+    hooks: HookConfig,
+) -> argent_core::Result<i32> {
+    let guard = match RawModeGuard::enable() {
+        Some(guard) => guard,
+        None => {
+            eprintln!("argent: this terminal does not support raw mode");
+            return Ok(1);
+        }
+    };
+    terminal::enter_alternate_screen();
+    terminal::hide_cursor();
+
+    let locale = argent_i18n::Locale::from_env();
+    let statusline = config.statusline.clone();
+    let bindings = crate::keybindings::Bindings::load(&cwd)?;
+    let worker = spawn(agent, session, checkpoints, config, index, cwd.clone(), hooks.clone(), locale);
+    let (key_tx, key_rx) = mpsc::channel();
+    spawn_input(key_tx);
+    let mut app = App::new(commands, prompts, locale, statusline, bindings);
+    // 首帧就显示一次键位提示；后续帧由 hint_shown 保证不再重复。
+    let initial_size = terminal::size();
+    draw(&app.frame(initial_size.cols as usize, initial_size.rows as usize));
+    let mut last_sweep = Instant::now();
+
+    while !app.quit {
+        let mut changed = false;
+        loop {
+            match worker.events.try_recv() {
+                Ok(event) => {
+                    app.handle_ui(event);
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    app.quit = true;
+                    break;
+                }
+            }
+        }
+        while let Ok(request) = approvals.try_recv() {
+            app.handle_approval(request);
+            changed = true;
+        }
+        // 子代理在 worker 线程上跑；进度从独立通道进来，追加成一条提示。
+        if let Some(subagents) = &subagents {
+            while let Ok(event) = subagents.try_recv() {
+                app.handle_ui(UiEvent::Agent(AgentEvent::Notice(event.describe())));
+                changed = true;
+            }
+        }
+        while let Ok(key) = key_rx.try_recv() {
+            app.handle_key(&worker, key);
+            changed = true;
+        }
+        if app.quit {
+            break;
+        }
+        if changed || app.working || app.status.is_some() {
+            let size = terminal::size();
+            let lines = app.frame(size.cols as usize, size.rows as usize);
+            draw(&lines);
+        }
+        if last_sweep.elapsed() >= Duration::from_secs(5) {
+            last_sweep = Instant::now();
+            let _ = worker.commands.send(Command::ListSessions);
+        }
+        std::thread::sleep(Duration::from_millis(33));
+    }
+
+    if let Some(pending) = app.pending.take() {
+        let _ = pending.reply.send(false);
+    }
+    let _ = worker.commands.send(Command::Shutdown);
+    let end_ctx = HookContext {
+        cwd: cwd.clone(),
+        ..HookContext::default()
+    };
+    let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
+    terminal::show_cursor();
+    terminal::leave_alternate_screen();
+    // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
+    if app.transcript.entries().iter().any(|entry| !entry.text().is_empty()) {
+        println!();
+        for line in transcript_plain(&app) {
+            println!("{}", line);
+        }
+    }
+    drop(guard);
+    let _ = std::io::stdout().flush();
+    Ok(0)
+}
+
+/// 退出时回显用的纯文本版本（无颜色、无边框）。
+fn transcript_plain(app: &App) -> Vec<String> {
+    let mut out = Vec::new();
+    for entry in app.transcript.entries() {
+        match entry {
+            argent_ui_core::Entry::User(text) => {
+                for line in text.lines() {
+                    out.push(format!("{} {}", USER_MARK.trim_end(), line));
+                }
+            }
+            argent_ui_core::Entry::Assistant(text) => {
+                for line in text.lines() {
+                    out.push(format!("{} {}", ASSISTANT_MARK.trim_end(), line));
+                }
+            }
+            argent_ui_core::Entry::Thinking(_) => {}
+            argent_ui_core::Entry::Tool(run) => {
+                out.push(format!("{} {}({})", TOOL_MARK.trim_end(), run.name, run.arguments));
+                out.push(format!("  ⎿ {} {}", run.state.glyph(), run.state.describe()));
+            }
+            argent_ui_core::Entry::Notice(_, text) => out.push(format!("! {}", text)),
+        }
+        out.push(String::new());
+    }
+    out
+}
+
+fn draw(lines: &[String]) {
+    let mut out = String::from("\x1b[H");
+    for (index, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        if index + 1 < lines.len() {
+            out.push_str("\r\n");
+        }
+    }
+    out.push_str("\x1b[J");
+    terminal::write_raw(&out);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_records_map_to_typing_and_navigation() {
+        // IME 组合结果是一个 UTF-16 code unit，不是一个 UTF-8 字节流。
+        assert_eq!(
+            key_from_console_record(Some('你'), 0, false, false),
+            Some(Key::Char('你'))
+        );
+        assert_eq!(
+            key_from_console_record(Some('a'), 0x41, false, false),
+            Some(Key::Char('a'))
+        );
+        assert_eq!(
+            key_from_console_record(Some('\r'), 0x0D, false, false),
+            Some(Key::Enter)
+        );
+        assert_eq!(
+            key_from_console_record(Some('\u{0}'), 0x26, false, false),
+            Some(Key::Up)
+        );
+        assert_eq!(
+            key_from_console_record(Some('\u{0}'), 0x2D, false, false),
+            Some(Key::Delete)
+        );
+        assert_eq!(
+            key_from_console_record(Some('\u{0}'), 0x1B, false, false),
+            Some(Key::Esc)
+        );
+        // Ctrl+R 不能落成一个可打印字符，也不能污染输入框。
+        assert_eq!(
+            key_from_console_record(Some('\u{0}'), 0x52, true, false),
+            Some(Key::CtrlR)
+        );
+        assert_eq!(
+            key_from_console_record(Some('\u{12}'), 0x52, true, false),
+            None
+        );
+        // 纯修饰键按下不产生输入。
+        assert_eq!(
+            key_from_console_record(Some('\u{0}'), 0x11, true, false),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_arrows_and_control_keys() {
+        let mut bytes = VecDeque::from(vec![0x1b, b'[', b'A']);
+        assert_eq!(next_key(&mut bytes), Some(Key::Up));
+        let mut bytes = VecDeque::from(vec![0x1b, b'[', b'5', b'~']);
+        assert_eq!(next_key(&mut bytes), Some(Key::PageUp));
+        let mut bytes = VecDeque::from(vec![0x03]);
+        assert_eq!(next_key(&mut bytes), Some(Key::CtrlC));
+        // bracketed paste（ESC[200~ … ESC[201~）不能被当成 Esc：
+        // 否则一粘贴就会触发中止。
+        let mut paste = VecDeque::from(b"[200~".to_vec());
+        assert_eq!(next_key(&mut paste), Some(Key::PasteStart));
+        let mut paste = VecDeque::from(b"[201~".to_vec());
+        assert_eq!(next_key(&mut paste), Some(Key::PasteEnd));
+        // 未知 CSI（焦点/鼠标事件）忽略，而不是 Esc。
+        let mut focus = VecDeque::from(b"[I".to_vec());
+        assert_eq!(next_key(&mut focus), Some(Key::Ignore));
+        let mut bytes = VecDeque::from(vec![0x0d]);
+        assert_eq!(next_key(&mut bytes), Some(Key::Enter));
+    }
+
+    #[test]
+    fn parses_utf8_characters() {
+        let mut bytes = VecDeque::from("你".as_bytes().to_vec());
+        assert_eq!(next_key(&mut bytes), Some(Key::Char('你')));
+    }
+
+    #[test]
+    fn the_opening_hint_is_not_repeated() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        let text = |line: argent_core::screen::Line| -> String {
+            line.spans
+                .iter()
+                .map(|span| span.text.clone())
+                .collect()
+        };
+        let first = text(app.status_line(100));
+        assert!(first.contains("Enter 发送"), "{}", first);
+        let second = text(app.status_line(100));
+        assert!(!second.contains("Enter 发送"), "{}", second);
+    }
+
+    #[test]
+    fn the_first_prompt_names_the_task() {
+        assert_eq!(title_from_prompt("修复登录 bug\n第二行"), "修复登录 bug");
+        assert_eq!(title_from_prompt("   "), "新任务");
+        assert_eq!(title_from_prompt("x".repeat(80).as_str()).chars().count(), 60);
+    }
+
+    #[test]
+    fn at_file_expands_into_the_prompt() {
+        let dir = std::env::temp_dir().join(format!("argent-tui-attach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "attached body\n").unwrap();
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.ready = Some(ReadyInfo {
+            model: "m".to_string(),
+            thinking: "auto".to_string(),
+            provider: "p".to_string(),
+            protocol: "openai-chat-completions".to_string(),
+            cwd: dir.display().to_string(),
+            session: "s".to_string(),
+            session_path: String::new(),
+        });
+        let (prompt, attached) = app.expand_attachments("@a.txt summarize this");
+        assert!(prompt.contains("attached body"), "{}", prompt);
+        assert_eq!(attached, vec!["a.txt".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bang_commands_run_without_the_model() {
+        let dir = std::env::temp_dir().join(format!("argent-tui-shell-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (output, ok) = run_shell(&dir, "echo shell-ok");
+        assert!(ok, "{}", output);
+        assert!(output.contains("shell-ok"), "{}", output);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn init_describes_the_repository() {
+        let dir = std::env::temp_dir().join(format!("argent-tui-init-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+        let text = project_init_text(&dir);
+        assert!(text.contains("cargo test"), "{}", text);
+        assert!(text.contains("Rust"), "{}", text);
+        assert!(text.contains("src/"), "{}", text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_incomplete_escape_waits_for_more_bytes() {
+        let mut bytes = VecDeque::from(vec![0x1b, b'[']);
+        assert_eq!(next_key(&mut bytes), None);
+    }
+
+    /// 会话管理 overlay：两次 Ctrl+D 才发删除命令，Ctrl+R 进改名输入。
+    #[test]
+    fn the_session_manager_needs_a_second_ctrl_d_and_renames_in_place() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::En,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.sessions = vec![
+            SessionRow {
+                path: std::path::PathBuf::from("/tmp/one.jsonl"),
+                title: "one".to_string(),
+                updated: "now".to_string(),
+            },
+            SessionRow {
+                path: std::path::PathBuf::from("/tmp/two.jsonl"),
+                title: "two".to_string(),
+                updated: "now".to_string(),
+            },
+        ];
+        app.overlay = Some(Overlay::Sessions { index: 1 });
+        let (command_tx, command_rx) = std::sync::mpsc::channel();
+        let (_event_tx, event_rx) = std::sync::mpsc::channel();
+        let worker = Worker {
+            commands: command_tx,
+            events: event_rx,
+            abort: argent_agent::AbortHandle::new(),
+            steering: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::VecDeque::new(),
+            )),
+        };
+
+        // 第一次 Ctrl+D 只要求确认。
+        app.handle_key(&worker, Key::CtrlD);
+        assert!(command_rx.try_recv().is_err(), "no delete on the first press");
+        assert_eq!(app.session_delete_pending, Some(1));
+        // 第二次才真的删。
+        app.handle_key(&worker, Key::CtrlD);
+        match command_rx.try_recv().expect("delete command") {
+            Command::DeleteSession(path) => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/two.jsonl"));
+            }
+            _ => panic!("expected DeleteSession"),
+        }
+
+        // Ctrl+R 带着当前标题进入改名输入。
+        app.overlay = Some(Overlay::Sessions { index: 0 });
+        app.handle_key(&worker, Key::CtrlR);
+        match &app.overlay {
+            Some(Overlay::RenameSession { index, input }) => {
+                assert_eq!(*index, 0);
+                assert_eq!(input, "one");
+            }
+            _ => panic!("expected the rename overlay"),
+        }
+        // 输入字符、退格、回车提交。
+        app.handle_key(&worker, Key::Char('!'));
+        app.handle_key(&worker, Key::Backspace);
+        app.handle_key(&worker, Key::Enter);
+        match command_rx.try_recv().expect("rename command") {
+            Command::RenameSession(path, name) => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/one.jsonl"));
+                assert_eq!(name, "one");
+            }
+            _ => panic!("expected RenameSession"),
+        }
+    }
+
+    /// 临时：把一帧渲染成文本，用于肉眼检查排版。
+    #[test]
+    fn dump_a_representative_frame() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::En,
+            vec!["session".to_string(), "tokens".to_string()],
+            crate::keybindings::Bindings::default(),
+        );
+        app.ready = Some(ReadyInfo {
+            model: "claude-sonnet-4.5".to_string(),
+            thinking: "high".to_string(),
+            provider: "anthropic".to_string(),
+            protocol: "anthropic-messages".to_string(),
+            cwd: "D:\\code\\mpi\\argent".to_string(),
+            session: "demo-session".to_string(),
+            session_path: "C:\\Users\\demo\\.argent".to_string(),
+        });
+        app.transcript.push_user("帮我看看 src/main.rs 里的启动逻辑");
+        app.transcript
+            .push_entry(Entry::Assistant("我先读一下文件。".to_string()));
+        app.transcript.push_entry(Entry::Tool(argent_ui_core::ToolRun {
+            call_id: "c1".to_string(),
+            name: "read".to_string(),
+            arguments: r#"{"path":"src/main.rs"}"#.to_string(),
+            output: "fn main() { ... }".to_string(),
+            state: argent_ui_core::ToolState::Failed { ms: 23 },
+        }));
+        app.transcript.push_entry(Entry::Assistant(
+            "main 只做三件事：配置、注册工具、进循环。".to_string(),
+        ));
+        app.transcript.push_entry(Entry::Assistant(
+            "```rust\nfn main() {\n    run();\n}\n```\n用 `cargo run` 启动，**一次**就好。".to_string(),
+        ));
+
+        let lines = app.frame(100, 24);
+        for line in &lines {
+            println!("{}", line);
+        }
+    }
+
+    #[test]
+    fn a_frame_has_the_requested_height_and_keeps_text() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.transcript.push_user("hello world");
+        app.transcript
+            .push_entry(Entry::Assistant("hi there".to_string()));
+        let lines = app.frame(80, 24);
+        assert_eq!(lines.len(), 24);
+        let joined = lines.join("\n");
+        assert!(joined.contains("hello world"), "{}", joined);
+        assert!(joined.contains("hi there"), "{}", joined);
+    }
+
+    #[test]
+    fn the_opening_hint_only_appears_in_the_first_frame() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        let first = app.frame(100, 24).join("
+");
+        assert!(first.contains("Enter 发送"), "{}", first);
+        let second = app.frame(100, 24).join("
+");
+        assert!(!second.contains("Enter 发送"), "{}", second);
+    }
+
+    #[test]
+    fn a_frame_has_the_header_and_status_bar() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        let lines = app.frame(80, 24);
+        let joined = lines.join(
+            "
+",
+        );
+        assert!(joined.contains("argent"), "{}", joined);
+        assert!(joined.contains("Enter 发送"), "{}", joined);
+    }
+
+    #[test]
+    fn palette_lists_custom_commands() {
+        let mut app = App::new(
+            vec![argent_commands::CommandDoc {
+                name: "review".to_string(),
+                description: "review a diff".to_string(),
+                body: "Review $ARGUMENTS".to_string(),
+                path: PathBuf::new(),
+            }],
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.input = "/rev".chars().collect();
+        app.cursor = app.input.len();
+        let items = app.palette_items();
+        assert!(items.iter().any(|item| item.name == "review"));
+    }
+
+    #[test]
+    fn the_palette_offers_rewind() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.input = "/rew".chars().collect();
+        app.cursor = app.input.len();
+        assert!(app
+            .palette_items()
+            .iter()
+            .any(|item| item.name == "rewind"));
+    }
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    /// A tiny HTTP server that records the first request it receives.
+    fn recorder() -> (u16, std::thread::JoinHandle<(String, String)>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            // Read the whole request: the head, then the body it announces.
+            let mut buffer: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 1024];
+            let mut head_end = 0usize;
+            loop {
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                if read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+                if head_end == 0 {
+                    if let Some(position) = find(&buffer, b"\r\n\r\n") {
+                        head_end = position + 4;
+                    }
+                }
+                if head_end > 0 {
+                    let head = String::from_utf8_lossy(&buffer[..head_end]).to_string();
+                    let length = content_length(&head);
+                    if buffer.len() >= head_end + length {
+                        break;
+                    }
+                }
+            }
+            let request = String::from_utf8_lossy(&buffer).to_string();
+            let head = request[..head_end.min(request.len())].to_string();
+            let body = request[head_end.min(request.len())..].to_string();
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}",
+            );
+            (head, body)
+        });
+        (port, handle)
+    }
+
+    fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    fn content_length(head: &str) -> usize {
+        head.lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+            .and_then(|line| line.split(':').nth(1))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0)
+    }
+
+    fn link(port: u16) -> RemoteLink {
+        RemoteLink::new(format!("http://127.0.0.1:{}", port), "Bearer tok")
+    }
+
+    #[test]
+    fn a_line_typed_during_a_run_is_steered_in() {
+        let (port, server) = recorder();
+        let remote = link(port);
+        remote.running.store(true, std::sync::atomic::Ordering::SeqCst);
+        remote.send_text("wait, do this instead").expect("send");
+        let (head, body) = server.join().expect("server");
+        assert!(head.starts_with("POST /v1/steer"), "{}", head);
+        assert!(body.contains("wait, do this instead"), "{}", body);
+        assert!(head.contains("authorization: Bearer tok"), "{}", head);
+    }
+
+    #[test]
+    fn a_line_typed_while_idle_starts_a_request() {
+        let (port, server) = recorder();
+        let remote = link(port);
+        remote.send_text("hello").expect("send");
+        let (head, body) = server.join().expect("server");
+        assert!(head.starts_with("POST /v1/prompt"), "{}", head);
+        assert!(body.contains("hello"), "{}", body);
+    }
+
+    #[test]
+    fn aborting_goes_to_the_abort_endpoint() {
+        let (port, server) = recorder();
+        let remote = link(port);
+        remote.abort_run().expect("abort");
+        let (head, _) = server.join().expect("server");
+        assert!(head.starts_with("POST /v1/abort"), "{}", head);
+    }
+
+    #[test]
+    fn a_refused_session_reports_the_error() {
+        // Nothing listens on this port: the caller must see why.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        let remote = link(port);
+        let error = remote.send_text("hello").expect_err("should fail");
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn remote_events_show_up_in_the_transcript() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        )
+        .with_remote(link(1));
+        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText(
+            "from the session".to_string(),
+        )));
+        let frame = app.frame(80, 24);
+        let text = frame.join("\n");
+        assert!(text.contains("from the session"), "{}", text);
+    }
+
+    #[test]
+    fn a_remote_session_cannot_run_shell_commands() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        )
+        .with_remote(link(1));
+        app.input = "!rm -rf /".chars().collect();
+        app.submit(&remote_worker());
+        // The command never reached a shell: the status says so.
+        let status = app
+            .status
+            .as_ref()
+            .map(|(text, _)| text.clone())
+            .unwrap_or_default();
+        assert!(status.contains("cannot run shell"), "{}", status);
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+
+    /// Feed a character sequence through the paste state machine and collect
+    /// the keys it produced.
+    fn feed(chars: &str) -> Vec<Key> {
+        let (tx, rx) = channel();
+        let mut mode = PasteMode::Normal;
+        for ch in chars.chars() {
+            handle_paste_key(&mut mode, Some(ch), &tx);
+        }
+        rx.try_iter().collect()
+    }
+
+    #[test]
+    fn a_plain_character_is_left_alone() {
+        let (tx, rx) = channel();
+        let mut mode = PasteMode::Normal;
+        assert_eq!(handle_paste_key(&mut mode, Some('a'), &tx), None);
+        assert!(rx.try_iter().next().is_none());
+    }
+
+    #[test]
+    fn a_lone_escape_is_an_escape() {
+        // Esc on its own must still abort the run: it is the only way out.
+        // The machine waits for a possible sequence first, so the pending
+        // Esc is flushed when the input goes quiet.
+        let (tx, rx) = channel();
+        let mut mode = PasteMode::Normal;
+        handle_paste_key(&mut mode, Some('\u{1b}'), &tx);
+        assert!(
+            rx.try_iter().next().is_none(),
+            "not yet: a sequence may follow"
+        );
+        flush_pending(&mut mode, &tx);
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![Key::Esc]);
+    }
+
+    #[test]
+    fn a_pending_escape_is_not_flushed_twice() {
+        let (tx, rx) = channel();
+        let mut mode = PasteMode::Normal;
+        handle_paste_key(&mut mode, Some('\u{1b}'), &tx);
+        flush_pending(&mut mode, &tx);
+        flush_pending(&mut mode, &tx);
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![Key::Esc]);
+    }
+
+    #[test]
+    fn a_pasted_block_arrives_in_one_piece() {
+        let keys = feed("\u{1b}[200~hello\u{1b}[201~");
+        assert_eq!(keys, vec![Key::Paste("hello".to_string())]);
+    }
+
+    #[test]
+    fn a_paste_does_not_look_like_an_escape() {
+        // The whole point: no Esc may escape from a paste.
+        let keys = feed("\u{1b}[200~some text\u{1b}[201~");
+        assert!(
+            !keys.iter().any(|key| matches!(key, Key::Esc)),
+            "{:?}",
+            keys
+        );
+    }
+
+    #[test]
+    fn a_multiline_paste_keeps_its_lines() {
+        let keys = feed("\u{1b}[200~one\r\ntwo\u{1b}[201~");
+        assert_eq!(keys, vec![Key::Paste("one\ntwo".to_string())]);
+    }
+
+    #[test]
+    fn an_unfinished_paste_stays_quiet() {
+        let keys = feed("\u{1b}[200~half a paste");
+        assert!(keys.is_empty(), "{:?}", keys);
+    }
+
+    #[test]
+    fn a_sequence_that_is_not_a_paste_ends_as_ordinary_keys() {
+        // ESC [ A is not a paste marker: it must not swallow the keys.
+        let keys = feed("\u{1b}[A");
+        assert_eq!(keys, vec![Key::Esc, Key::Char('['), Key::Char('A')]);
+    }
+
+    #[test]
+    fn the_escape_before_a_paste_is_not_a_second_escape() {
+        // Two escapes in a row: the first one is a real Esc.
+        let keys = feed("\u{1b}\u{1b}");
+        assert_eq!(keys, vec![Key::Esc]);
+    }
+}

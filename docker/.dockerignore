@@ -1,0 +1,6 @@
+target
+.argent
+.tmp
+.git
+*.log
+*.jsonl

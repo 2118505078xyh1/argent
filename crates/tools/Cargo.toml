@@ -1,0 +1,12 @@
+[package]
+name = "argent-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "argent built-in tool suite and registry"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-ai = { path = "../ai" }
+argent-memory = { path = "../memory" }

@@ -1,0 +1,11 @@
+[package]
+name = "argent-commands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Discover and expand markdown slash commands"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-tools = { path = "../tools" }

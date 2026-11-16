@@ -1,0 +1,10 @@
+[package]
+name = "argent-hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Lifecycle hooks, command execution and workspace trust"
+
+[dependencies]
+argent-core = { path = "../core" }

@@ -1,0 +1,11 @@
+[package]
+name = "argent-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Provider and model catalog, protocol selection and client factory"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-ai = { path = "../ai" }

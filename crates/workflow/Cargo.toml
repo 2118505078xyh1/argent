@@ -1,0 +1,12 @@
+[package]
+name = "argent-workflow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Dependency-aware subagent workflow runner with a resumable journal"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-tools = { path = "../tools" }
+argent-session = { path = "../session" }

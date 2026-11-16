@@ -1,0 +1,11 @@
+[package]
+name = "argent-telemetry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Opt-in local telemetry and crash log"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-config = { path = "../config" }

@@ -1,0 +1,14 @@
+[package]
+name = "argent-plugins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ZCode-compatible plugin manifests, discovery and installation"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-config = { path = "../config" }
+argent-mcp = { path = "../mcp" }
+argent-hooks = { path = "../hooks" }
+argent-update = { path = "../update" }

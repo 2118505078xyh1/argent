@@ -1,0 +1,13 @@
+[package]
+name = "argent-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "argent MCP client: JSON-RPC over stdio"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-ai = { path = "../ai" }
+argent-tools = { path = "../tools" }
+argent-config = { path = "../config" }

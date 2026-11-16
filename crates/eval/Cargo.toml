@@ -1,0 +1,13 @@
+[package]
+name = "argent-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reproducible evaluation harness: scripted models against real tools"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-ai = { path = "../ai" }
+argent-agent = { path = "../agent" }
+argent-tools = { path = "../tools" }

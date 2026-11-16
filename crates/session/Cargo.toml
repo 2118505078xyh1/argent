@@ -1,0 +1,13 @@
+[package]
+name = "argent-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "argent session persistence and compaction"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-ai = { path = "../ai" }
+argent-agent = { path = "../agent" }
+rusqlite = { version = "0.32", features = ["bundled"] }

@@ -1,0 +1,13 @@
+{
+  "provider": "zai",
+  "model": "GLM-5.3",
+  "thinkingLevel": "high",
+  "mode": "guarded",
+  "theme": "dark",
+  "maxOutputTokens": 8192,
+  "maxContextTokens": 128000,
+  "plugins": {
+    "enabled": [],
+    "disabled": []
+  }
+}

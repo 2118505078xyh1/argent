@@ -1,0 +1,153 @@
+{
+  "scenarios": [
+    {
+      "name": "reads a file before answering",
+      "prompt": "what is in notes.txt?",
+      "files": [
+        { "path": "notes.txt", "content": "the release notes are here\n" }
+      ],
+      "script": [
+        { "tool": "read", "arguments": { "path": "notes.txt" } },
+        { "text": "notes.txt says the release notes are here" }
+      ],
+      "expect": {
+        "tools": ["read"],
+        "textContains": ["release notes"],
+        "reason": "complete"
+      }
+    },
+    {
+      "name": "writes a file when asked",
+      "prompt": "write the answer to out.txt",
+      "script": [
+        { "tool": "write", "arguments": { "path": "out.txt", "content": "the answer\n" } },
+        { "text": "written" }
+      ],
+      "expect": {
+        "tools": ["write"],
+        "textContains": ["written"],
+        "reason": "complete",
+        "rewindRestores": true
+      }
+    },
+    {
+      "name": "rewind restores the files a run changed",
+      "prompt": "edit notes.txt and create out.txt",
+      "files": [
+        { "path": "notes.txt", "content": "before\n" }
+      ],
+      "script": [
+        { "tool": "edit", "arguments": { "path": "notes.txt", "oldText": "before", "newText": "after" } },
+        { "tool": "write", "arguments": { "path": "out.txt", "content": "new\n" } },
+        { "text": "changed both" }
+      ],
+      "expect": {
+        "tools": ["edit", "write"],
+        "textContains": ["changed both"],
+        "reason": "complete",
+        "rewindRestores": true
+      }
+    },
+    {
+      "name": "lists a directory before reading a file in it",
+      "prompt": "what files are here?",
+      "files": [
+        { "path": "a.txt", "content": "a\n" },
+        { "path": "b.txt", "content": "b\n" }
+      ],
+      "script": [
+        { "tool": "ls", "arguments": { "path": "." } },
+        { "tool": "read", "arguments": { "path": "a.txt" } },
+        { "text": "there are two files" }
+      ],
+      "expect": {
+        "tools": ["ls", "read"],
+        "textContains": ["two files"],
+        "reason": "complete"
+      }
+    },
+    {
+      "name": "an identical read is answered from the first result",
+      "prompt": "read notes.txt twice",
+      "files": [
+        { "path": "notes.txt", "content": "once\n" }
+      ],
+      "script": [
+        { "tool": "read", "arguments": { "path": "notes.txt" } },
+        { "tool": "read", "arguments": { "path": "notes.txt" } },
+        { "text": "read it once" }
+      ],
+      "expect": {
+        "tools": ["read", "read"],
+        "textContains": ["read it once"],
+        "reason": "complete"
+      }
+    },
+    {
+      "name": "the turn limit ends a run that never stops",
+      "prompt": "loop forever",
+      "repeat": true,
+      "script": [
+        { "tool": "current_time", "arguments": {} }
+      ],
+      "expect": {
+        "reason": "turn limit reached"
+      }
+    },
+    {
+      "name": "a token budget stops the run before the next tool batch",
+      "prompt": "read the file then stop",
+      "maxTotalTokens": 1,
+      "files": [
+        { "path": "notes.txt", "content": "hello\n" }
+      ],
+      "script": [
+        { "tool": "read", "arguments": { "path": "notes.txt" } },
+        { "text": "never reached" }
+      ],
+      "expect": {
+        "reason": "budget limit"
+      }
+    },
+    {
+      "name": "the policy blocks a denied path",
+      "prompt": "read the secret",
+      "denyPaths": ["secret.env"],
+      "script": [
+        { "tool": "read", "arguments": { "path": "secret.env" } },
+        { "text": "I will not touch it again" }
+      ],
+      "expect": {
+        "tools": ["read"],
+        "outputContains": ["denied by policy"],
+        "reason": "complete"
+      }
+    },
+    {
+      "name": "a custom turn limit ends the run early",
+      "prompt": "take two steps",
+      "maxTurns": 2,
+      "repeat": true,
+      "script": [
+        { "tool": "current_time", "arguments": {} }
+      ],
+      "expect": {
+        "reason": "turn limit reached"
+      }
+    },
+    {
+      "name": "a spend ceiling stops an expensive loop",
+      "prompt": "keep going",
+      "repeat": true,
+      "maxCostUsd": 0.02,
+      "priceInputPerMtok": 1000,
+      "priceOutputPerMtok": 1000,
+      "script": [
+        { "tool": "current_time", "arguments": {} }
+      ],
+      "expect": {
+        "reason": "budget limit"
+      }
+    }
+  ]
+}

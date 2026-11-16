@@ -1,0 +1,13 @@
+[package]
+name = "argent-plugin-demo"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A demo argent plugin: two tools behind the stable C ABI"
+
+[lib]
+name = "argent_plugin_demo"
+crate-type = ["cdylib"]
+
+[dependencies]
+argent-plugin = { path = "../../crates/plugin" }

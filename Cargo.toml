@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/memory",
+    "crates/ai",
+    "crates/config",
+    "crates/profiles",
+    "crates/security",
+    "crates/automation",
+    "crates/eval",
+    "crates/provider",
+    "crates/auth",
+    "crates/plugins",
+    "crates/commands",
+    "crates/hooks",
+    "crates/workflow",
+    "crates/telemetry",
+    "crates/update",
+    "crates/i18n",
+    "crates/tools",
+    "crates/agent",
+    "crates/session",
+    "crates/mcp",
+    "crates/plugin",
+    "crates/device",
+    "crates/lsp",
+    "crates/jobs",
+    "crates/ast",
+    "crates/pty",
+    "crates/ui-core",
+    "crates/engine",
+    "crates/native",
+    "crates/cli",
+    "examples/plugin-demo",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# The webview and its windowing stack are large; compiling them with the same
+# LTO settings as the core makes a window build take minutes for no runtime
+# gain.
+[profile.dev.package."*"]
+opt-level = 2

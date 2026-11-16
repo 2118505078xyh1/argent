@@ -1,0 +1,12 @@
+[package]
+name = "argent-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "argent plugin ABI: a stable C contract for external tools"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-ai = { path = "../ai" }
+argent-tools = { path = "../tools" }

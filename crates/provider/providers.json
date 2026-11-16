@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "id": "local",
+      "name": "Local OpenAI-compatible gateway",
+      "protocol": "openai-chat-completions",
+      "baseUrl": "http://127.0.0.1:3425/v1",
+      "defaultModel": "auto/deepseek-v4.1-flash",
+      "thinking": true,
+      "models": [
+        {
+          "id": "auto/deepseek-v4.1-flash",
+          "name": "Auto (local gateway)",
+          "context": 128000,
+          "maxOutput": 16384,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "zai",
+      "name": "Z.ai Coding Plan",
+      "protocol": "anthropic-messages",
+      "baseUrl": "https://api.z.ai/api/anthropic",
+      "apiKeyEnv": "ZAI_API_KEY",
+      "defaultModel": "GLM-5.3",
+      "thinking": true,
+      "models": [
+        {
+          "id": "GLM-5.3",
+          "name": "GLM-5.3",
+          "context": 1000000,
+          "maxOutput": 128000,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "GLM-5.3-Flash",
+          "name": "GLM-5.3 Flash",
+          "context": 1000000,
+          "maxOutput": 128000,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "bigmodel",
+      "name": "BigModel Coding Plan",
+      "protocol": "anthropic-messages",
+      "baseUrl": "https://open.bigmodel.cn/api/anthropic",
+      "apiKeyEnv": "BIGMODEL_API_KEY",
+      "defaultModel": "GLM-5.3",
+      "thinking": true,
+      "models": [
+        {
+          "id": "GLM-5.3",
+          "name": "GLM-5.3",
+          "context": 1000000,
+          "maxOutput": 128000,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "GLM-5.3-Flash",
+          "name": "GLM-5.3 Flash",
+          "context": 1000000,
+          "maxOutput": 128000,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "protocol": "anthropic-messages",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "defaultModel": "claude-sonnet-5-5",
+      "thinking": true,
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "name": "Claude Opus 5.5",
+          "context": 200000,
+          "maxOutput": 64000,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "name": "Claude Sonnet 5.5",
+          "context": 200000,
+          "maxOutput": 64000,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "name": "Claude Haiku 5.5",
+          "context": 200000,
+          "maxOutput": 32000,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "protocol": "openai-chat-completions",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "defaultModel": "gpt-5.6",
+      "thinking": true,
+      "models": [
+        {
+          "id": "gpt-5.6",
+          "name": "GPT-5.6",
+          "context": 400000,
+          "maxOutput": 128000,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "gpt-5.4",
+          "name": "GPT-5.4",
+          "context": 400000,
+          "maxOutput": 128000,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "protocol": "anthropic-messages",
+      "baseUrl": "https://api.deepseek.com/anthropic",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "defaultModel": "deepseek-v4-pro",
+      "thinking": true,
+      "models": [
+        {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "context": 256000,
+          "maxOutput": 64000,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "deepseek-flash",
+          "name": "DeepSeek Flash",
+          "context": 256000,
+          "maxOutput": 32000,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "moonshot",
+      "name": "Moonshot / Kimi",
+      "protocol": "anthropic-messages",
+      "baseUrl": "https://api.moonshot.cn/anthropic",
+      "apiKeyEnv": "MOONSHOT_API_KEY",
+      "defaultModel": "kimi-k3.1-pro",
+      "thinking": true,
+      "models": [
+        {
+          "id": "kimi-k3.1-pro",
+          "name": "Kimi K3.1 Pro",
+          "context": 256000,
+          "maxOutput": 32768,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "k2.7-code",
+          "name": "Kimi K2.7 Code",
+          "context": 256000,
+          "maxOutput": 32768,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "qwen",
+      "name": "Alibaba Cloud Model Studio",
+      "protocol": "openai-chat-completions",
+      "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "defaultModel": "qwen3.8-max",
+      "thinking": true,
+      "models": [
+        {
+          "id": "qwen3.8-max",
+          "name": "Qwen 3.8 Max",
+          "context": 262144,
+          "maxOutput": 32768,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "qwen3.8-flash",
+          "name": "Qwen 3.8 Flash",
+          "context": 262144,
+          "maxOutput": 32768,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "protocol": "anthropic-messages",
+      "baseUrl": "https://api.minimaxi.com/anthropic",
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "defaultModel": "MiniMax-M3",
+      "thinking": true,
+      "models": [
+        {
+          "id": "MiniMax-M3",
+          "name": "MiniMax M3",
+          "context": 200000,
+          "maxOutput": 32768,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "protocol": "openai-chat-completions",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "defaultModel": "anthropic/claude-sonnet-4.5",
+      "thinking": true,
+      "models": [
+        {
+          "id": "anthropic/claude-sonnet-4.5",
+          "name": "Claude Sonnet 4.5 (OpenRouter)",
+          "context": 200000,
+          "maxOutput": 64000,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "z-ai/glm-4.6",
+          "name": "GLM-4.6 (OpenRouter)",
+          "context": 200000,
+          "maxOutput": 32768,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    },
+    {
+      "id": "xai",
+      "name": "xAI",
+      "protocol": "openai-responses",
+      "baseUrl": "https://api.x.ai/v1",
+      "apiKeyEnv": "XAI_API_KEY",
+      "defaultModel": "grok-4.7",
+      "thinking": true,
+      "models": [
+        {
+          "id": "grok-4.7",
+          "name": "Grok 4.7",
+          "context": 256000,
+          "maxOutput": 64000,
+          "tools": true,
+          "reasoning": true
+        },
+        {
+          "id": "grok-build-0.1",
+          "name": "Grok Build 0.1",
+          "context": 256000,
+          "maxOutput": 32000,
+          "tools": true,
+          "reasoning": true
+        }
+      ]
+    }
+  ]
+}

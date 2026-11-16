@@ -1,0 +1,11 @@
+[package]
+name = "argent-automation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Scheduled agent tasks: schedule parsing, a durable store, and a runner"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-config = { path = "../config" }

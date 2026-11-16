@@ -1,0 +1,9 @@
+[package]
+name = "argent-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Zero-dependency foundation: JSON, HTTP, SSE, process, terminal, config"
+
+[dependencies]

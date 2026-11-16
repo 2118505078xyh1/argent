@@ -1,0 +1,11 @@
+[package]
+name = "argent-ast"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "argent structural code search: token-level patterns without a parser"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-tools = { path = "../tools" }

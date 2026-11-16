@@ -1,0 +1,8 @@
+/target
+/.tools
+/.argent
+/.agents
+/.tmp
+/dist
+*.log
+*.zip

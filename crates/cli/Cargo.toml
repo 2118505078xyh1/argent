@@ -1,0 +1,40 @@
+[package]
+name = "argent-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "argent command-line entry point"
+
+[[bin]]
+name = "argent"
+path = "src/main.rs"
+
+[dependencies]
+argent-core = { path = "../core" }
+argent-ai = { path = "../ai" }
+argent-config = { path = "../config" }
+argent-profiles = { path = "../profiles" }
+argent-security = { path = "../security" }
+argent-automation = { path = "../automation" }
+argent-eval = { path = "../eval" }
+argent-provider = { path = "../provider" }
+argent-auth = { path = "../auth" }
+argent-plugins = { path = "../plugins" }
+argent-commands = { path = "../commands" }
+argent-hooks = { path = "../hooks" }
+argent-workflow = { path = "../workflow" }
+argent-telemetry = { path = "../telemetry" }
+argent-update = { path = "../update" }
+argent-i18n = { path = "../i18n" }
+argent-tools = { path = "../tools" }
+argent-agent = { path = "../agent" }
+argent-session = { path = "../session" }
+argent-ui-core = { path = "../ui-core" }
+argent-mcp = { path = "../mcp" }
+argent-plugin = { path = "../plugin" }
+argent-device = { path = "../device" }
+argent-lsp = { path = "../lsp" }
+argent-jobs = { path = "../jobs" }
+argent-ast = { path = "../ast" }
+argent-pty = { path = "../pty" }
