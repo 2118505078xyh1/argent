@@ -36,6 +36,7 @@ cargo test -p argent-agent a_token_budget_stops_before_the_next_tool_batch   # s
 Most tests are inline `#[cfg(test)]` modules in `crates/*/src`. Integration tests live in `crates/*/tests` and auto-skip when their prerequisites are missing:
 
 - MCP live tests need Python 3 (`python`/`python3`/`py`) and use `tests/fixtures/*.py`.
+- `crates/cli/tests/agent_loop_e2e.rs` drives the real binary against `tests/fixtures/agent_loop_provider.py` (Python 3): one prompt, a `read` tool call, the final answer, then a replay from the session JSONL.
 - `crates/plugin/tests/live_plugin.rs` needs the demo cdylib built first: `cargo build -p argent-plugin-demo`.
 
 Integration eval — scripted model driving the real tool registry, policy, and budget (deterministic, no network); non-zero exit means a scenario failed:
