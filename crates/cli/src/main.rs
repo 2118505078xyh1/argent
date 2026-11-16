@@ -1422,7 +1422,7 @@ assistant: {}",
                 // and the operator sees the rename immediately.
                 if let Some(title) = assistant.title_for(&exchange) {
                     let index = argent_session::SessionIndex::new(
-                        argent_config::Paths::new(&cwd).sessions(),
+                        argent_config::Paths::new(cwd).sessions(),
                     );
                     let _ = index.rename(&session.path, &title);
                 }
