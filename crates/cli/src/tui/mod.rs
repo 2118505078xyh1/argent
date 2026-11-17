@@ -1555,6 +1555,26 @@ fn refresh_session_cache_key(path: &std::path::Path) {
     std::env::set_var("ARGENT_CACHE_KEY", key);
 }
 
+/// Rows for the `/skills` panel: name/description plus the source path.
+fn skill_overview(cwd: &Path) -> Vec<(String, String)> {
+    let mut roots = argent_tools::SkillRegistry::default_roots(cwd);
+    let manager = argent_plugins::PluginManager::for_workspace(cwd);
+    roots.extend(manager.skill_dirs());
+    let registry = argent_tools::SkillRegistry::discover(&roots);
+    registry
+        .skills()
+        .iter()
+        .map(|skill| {
+            let summary = if skill.description.is_empty() {
+                skill.name.clone()
+            } else {
+                format!("{} — {}", skill.name, skill.description)
+            };
+            (summary, skill.path.display().to_string())
+        })
+        .collect()
+}
+
 /// Rows for the `/hooks` panel: trust state per document, then each command.
 fn hook_overview(cwd: &Path) -> Vec<(String, String)> {
     let manager = argent_plugins::PluginManager::for_workspace(cwd);
@@ -1697,6 +1717,14 @@ enum Overlay {
     Hooks {
         index: usize,
     },
+    /// 已发现的 skills（名称、描述、来源）。
+    Skills {
+        index: usize,
+    },
+    /// 自定义 slash commands。
+    Commands {
+        index: usize,
+    },
     Approval {
         tool: String,
         args: String,
@@ -1784,6 +1812,7 @@ struct App {
     models: Vec<String>,
     tools: Vec<(String, String)>,
     hook_rows: Vec<(String, String)>,
+    skill_rows: Vec<(String, String)>,
     commands: Vec<argent_commands::CommandDoc>,
     prompts: crate::prompts::PromptLibrary,
     input: Vec<char>,
@@ -1871,6 +1900,7 @@ impl App {
             models: Vec::new(),
             tools: Vec::new(),
             hook_rows: Vec::new(),
+            skill_rows: Vec::new(),
             commands,
             prompts,
             input: Vec::new(),
@@ -2010,7 +2040,9 @@ impl App {
             | Overlay::Models { index }
             | Overlay::Thinking { index }
             | Overlay::Tools { index }
-            | Overlay::Hooks { index } => Some(*index),
+            | Overlay::Hooks { index }
+            | Overlay::Skills { index }
+            | Overlay::Commands { index } => Some(*index),
             Overlay::SessionActions { selected, .. } => Some(*selected),
             Overlay::SessionInfo { selected } => Some(SESSION_INFO_ROWS + selected),
             _ => None,
@@ -2647,6 +2679,30 @@ impl App {
                     Key::Esc | Key::Char('q') => {}
                     _ => self.overlay = Some(Overlay::Hooks { index }),
                 },
+                Overlay::Skills { mut index } => match key {
+                    Key::Up => {
+                        index = index.saturating_sub(1);
+                        self.overlay = Some(Overlay::Skills { index });
+                    }
+                    Key::Down => {
+                        index = (index + 1).min(self.skill_rows.len().saturating_sub(1));
+                        self.overlay = Some(Overlay::Skills { index });
+                    }
+                    Key::Esc | Key::Char('q') => {}
+                    _ => self.overlay = Some(Overlay::Skills { index }),
+                },
+                Overlay::Commands { mut index } => match key {
+                    Key::Up => {
+                        index = index.saturating_sub(1);
+                        self.overlay = Some(Overlay::Commands { index });
+                    }
+                    Key::Down => {
+                        index = (index + 1).min(self.commands.len().saturating_sub(1));
+                        self.overlay = Some(Overlay::Commands { index });
+                    }
+                    Key::Esc | Key::Char('q') => {}
+                    _ => self.overlay = Some(Overlay::Commands { index }),
+                },
                 Overlay::SessionInfo { mut selected } => match key {
                     Key::Up => {
                         selected = selected.saturating_sub(1);
@@ -2927,6 +2983,8 @@ impl App {
             ("copy", "copy the last reply to the clipboard"),
             ("tools", "list tool schemas"),
             ("hooks", "list trusted hook documents"),
+            ("skills", "list discovered skills"),
+            ("commands", "list custom slash commands"),
             ("provider", "show provider and model"),
             ("expand", "toggle tool output"),
             ("init", "create AGENTS.md for this project"),
@@ -3506,6 +3564,19 @@ impl App {
                     .unwrap_or_else(|| PathBuf::from("."));
                 self.hook_rows = hook_overview(&cwd);
                 self.overlay = Some(Overlay::Hooks { index: 0 });
+            }
+            "/skills" => {
+                let cwd = self
+                    .ready
+                    .as_ref()
+                    .map(|ready| PathBuf::from(&ready.cwd))
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| PathBuf::from("."));
+                self.skill_rows = skill_overview(&cwd);
+                self.overlay = Some(Overlay::Skills { index: 0 });
+            }
+            "/commands" => {
+                self.overlay = Some(Overlay::Commands { index: 0 });
             }
             "/provider" => {
                 if let Some(ready) = &self.ready {
@@ -4524,6 +4595,39 @@ impl App {
                 ));
                 (
                     format!("hooks · {} row(s)", self.hook_rows.len()),
+                    content,
+                )
+            }
+            Overlay::Skills { index: _ } => {
+                let mut content = self.skill_rows.clone();
+                content.push((String::new(), String::new()));
+                content.push((
+                    "name · description · path · ↑↓ move · esc close".to_string(),
+                    String::new(),
+                ));
+                (
+                    format!("skills · {} found", self.skill_rows.len()),
+                    content,
+                )
+            }
+            Overlay::Commands { index: _ } => {
+                let mut content: Vec<(String, String)> = self
+                    .commands
+                    .iter()
+                    .map(|doc| {
+                        (
+                            format!("/{} — {}", doc.name, doc.description),
+                            doc.path.display().to_string(),
+                        )
+                    })
+                    .collect();
+                content.push((String::new(), String::new()));
+                content.push((
+                    "custom commands only · ↑↓ move · esc close".to_string(),
+                    String::new(),
+                ));
+                (
+                    format!("commands · {} found", self.commands.len()),
                     content,
                 )
             }
@@ -7273,6 +7377,50 @@ mod cursor_tests {
         assert_eq!(col, 1 + text_width(USER_MARK) + 8);
         // The frame still has exactly the requested height.
         assert_eq!(app.frame(100, 30).len(), 30);
+    }
+
+    #[test]
+    fn skills_and_commands_panels_list_their_entries() {
+        let dir = std::env::temp_dir().join(format!("argent-skills-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".argent/skills")).unwrap();
+        std::fs::write(
+            dir.join(".argent/skills/demo.md"),
+            "---
+name: demo-skill
+description: does demo things
+---
+body
+",
+        )
+        .unwrap();
+        let rows = skill_overview(&dir);
+        assert!(
+            rows.iter()
+                .any(|(text, _)| text.contains("demo-skill") && text.contains("demo things")),
+            "{:?}",
+            rows
+        );
+
+        let mut app = app();
+        app.skill_rows = rows;
+        app.overlay = Some(Overlay::Skills { index: 0 });
+        let frame = app.frame(100, 30).join("
+");
+        assert!(frame.contains("demo-skill"), "{}", frame);
+        assert!(frame.contains("skills · ") && frame.contains(" found"), "{}", frame);
+
+        app.commands = vec![argent_commands::CommandDoc {
+            name: "deploy".to_string(),
+            description: "ship it".to_string(),
+            body: String::new(),
+            path: std::path::PathBuf::from("/tmp/commands/deploy.md"),
+        }];
+        app.overlay = Some(Overlay::Commands { index: 0 });
+        let frame = app.frame(100, 30).join("
+");
+        assert!(frame.contains("/deploy — ship it"), "{}", frame);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

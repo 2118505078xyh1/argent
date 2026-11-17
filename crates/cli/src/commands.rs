@@ -295,6 +295,89 @@ fn plugins(args: &[String]) -> Result<i32> {
             }
             Ok(0)
         }
+        "search" | "find" => {
+            let Some(query) = positional.get(1).map(|value| value.to_lowercase()) else {
+                return Err(Error::config("usage: argent plugins search <query>"));
+            };
+            let matches = |name: &str, description: &str| {
+                name.to_lowercase().contains(&query) || description.to_lowercase().contains(&query)
+            };
+            let mut hits = 0usize;
+            for plugin in manager.all() {
+                if matches(&plugin.manifest.name, &plugin.manifest.description) {
+                    println!(
+                        "installed   {:<28} {}  {}",
+                        plugin.manifest.name, plugin.manifest.version, plugin.manifest.description
+                    );
+                    hits += 1;
+                }
+            }
+            let store = MarketplaceStore::load()?;
+            for record in store.list() {
+                let Ok(catalog) = store.catalog(record) else {
+                    continue;
+                };
+                for entry in &catalog.plugins {
+                    if matches(&entry.name, &entry.description) {
+                        println!(
+                            "{:<11} {:<28} {}  {}",
+                            catalog.name, entry.name, entry.version, entry.description
+                        );
+                        hits += 1;
+                    }
+                }
+            }
+            if hits == 0 {
+                println!("no plugins match '{}'", query);
+            }
+            Ok(0)
+        }
+        "info" | "show" => {
+            let Some(name) = positional.get(1) else {
+                return Err(Error::config("usage: argent plugins info <name>"));
+            };
+            if let Some(plugin) = manager.get(name) {
+                let manifest = &plugin.manifest;
+                let status = argent_plugins::signature::verify(
+                    &manifest.root,
+                    &SignaturePolicy::from_settings(&settings),
+                );
+                println!("{} {}", manifest.name, manifest.version);
+                println!("  state:       {}", if plugin.enabled { "enabled" } else { "disabled" });
+                println!("  root:        {}", manifest.root.display());
+                println!("  description: {}", manifest.description);
+                if let Some(author) = &manifest.author {
+                    println!("  author:      {}", author);
+                }
+                if let Some(license) = &manifest.license {
+                    println!("  license:     {}", license);
+                }
+                println!("  signature:   {}", status.describe());
+                println!(
+                    "  surfaces:    skills {}, commands {}, agents {}, hooks {}, mcp {}",
+                    manifest.skills.len(),
+                    manifest.commands.len(),
+                    manifest.agents.len(),
+                    manifest.hooks.len(),
+                    manifest.mcp_servers.len()
+                );
+                for server in &manifest.mcp_servers {
+                    println!("  mcp:         {}", server.name);
+                }
+                for surface in &manifest.ui_surfaces {
+                    println!("  ui:          {:?}", surface);
+                }
+                return Ok(0);
+            }
+            let store = MarketplaceStore::load()?;
+            let (catalog, entry) = store.find_plugin(name, None)?;
+            println!("{} {} (not installed)", entry.name, entry.version);
+            println!("  marketplace: {}", catalog.name);
+            println!("  source:      {}", entry.source);
+            println!("  description: {}", entry.description);
+            println!("  install:     argent plugins install {}@{}", entry.name, catalog.name);
+            Ok(0)
+        }
         "install" => {
             let Some(source) = positional.get(1) else {
                 return Err(Error::config(
@@ -2127,13 +2210,159 @@ fn keybindings(args: &[String]) -> Result<i32> {
 /// `argent themes`：列出可用主题与当前选择。
 fn themes(args: &[String]) -> Result<i32> {
     let cwd = cwd_from(args);
-    let names = crate::theme::names(&cwd);
-    let current = crate::theme::current();
-    for name in names {
-        let marker = if name == current.name { "*" } else { " " };
-        println!("{} {}", marker, name);
+    let positional: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect();
+    let action = positional.first().copied().unwrap_or("list");
+    let paths = Paths::new(&cwd);
+    let user_dir = paths.storage().join("themes");
+    let project_dir = cwd.join(".argent").join("themes");
+    let locate = |name: &str| -> Option<PathBuf> {
+        [project_dir.join(format!("{name}.json")), user_dir.join(format!("{name}.json"))]
+            .into_iter()
+            .find(|path| path.is_file())
+    };
+
+    match action {
+        "list" | "ls" | "themes" => {
+            let current = crate::theme::current();
+            for name in crate::theme::names(&cwd) {
+                let marker = if name == current.name { "*" } else { " " };
+                println!("{} {}", marker, name);
+            }
+            Ok(0)
+        }
+        "validate" | "check" => {
+            let Some(name) = positional.get(1) else {
+                return Err(Error::config("usage: argent themes validate <name>"));
+            };
+            let Some(path) = locate(name) else {
+                return Err(Error::config(format!("theme '{}' has no JSON file", name)));
+            };
+            let text = std::fs::read_to_string(&path)
+                .map_err(|error| Error::io(format!("read {} failed: {}", path.display(), error)))?;
+            let value = Json::parse(&text)
+                .map_err(|error| Error::config(format!("{}: {}", path.display(), error)))?;
+            let known = [
+                "background",
+                "accent",
+                "secondary",
+                "text",
+                "dim",
+                "success",
+                "warning",
+                "error",
+                "user_fg",
+                "user_bg",
+                "code_fg",
+                "code_bg",
+            ];
+            let mut warnings = 0;
+            for (key, _) in value.as_object().unwrap_or(&[]) {
+                if !known.contains(&key.as_str()) {
+                    eprintln!("warning: unknown field '{}' (ignored)", key);
+                    warnings += 1;
+                }
+            }
+            let base = crate::theme::Theme::builtin("dark").expect("dark");
+            base.overlaid(&value)?;
+            println!(
+                "ok: {} ({} known field(s), {} warning(s))",
+                path.display(),
+                known.len(),
+                warnings
+            );
+            Ok(0)
+        }
+        "export" => {
+            let Some(name) = positional.get(1) else {
+                return Err(Error::config("usage: argent themes export <name> [--output FILE]"));
+            };
+            let theme = crate::theme::load(name, &cwd);
+            let mut data = Json::obj();
+            for (key, color) in [
+                ("background", theme.background),
+                ("accent", theme.accent),
+                ("secondary", theme.secondary),
+                ("text", theme.text),
+                ("dim", theme.dim),
+                ("success", theme.success),
+                ("warning", theme.warning),
+                ("error", theme.error),
+                ("user_fg", theme.user_fg),
+                ("user_bg", theme.user_bg),
+                ("code_fg", theme.code_fg),
+                ("code_bg", theme.code_bg),
+            ] {
+                data.set(key, Json::string(color_text(color)));
+            }
+            let text = data.dump_pretty();
+            match flag_value(args, "--output") {
+                Some(path) => {
+                    std::fs::write(&path, format!("{}
+", text))
+                        .map_err(|error| Error::io(format!("write {} failed: {}", path, error)))?;
+                    println!("exported {} to {}", theme.name, path);
+                }
+                None => println!("{}", text),
+            }
+            Ok(0)
+        }
+        "import" => {
+            let Some(source) = positional.get(1) else {
+                return Err(Error::config("usage: argent themes import <file.json>"));
+            };
+            let path = Path::new(source);
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| Error::io(format!("read {} failed: {}", path.display(), error)))?;
+            let value = Json::parse(&text)
+                .map_err(|error| Error::config(format!("{}: {}", path.display(), error)))?;
+            crate::theme::Theme::builtin("dark")
+                .expect("dark")
+                .overlaid(&value)?;
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                return Err(Error::config("theme file needs a name"));
+            };
+            std::fs::create_dir_all(&user_dir).map_err(|error| {
+                Error::io(format!("create {} failed: {}", user_dir.display(), error))
+            })?;
+            let destination = user_dir.join(format!("{}.json", stem));
+            if destination.exists() && !args.iter().any(|arg| arg == "--force") {
+                return Err(Error::config(format!(
+                    "{} already exists; pass --force to overwrite",
+                    destination.display()
+                )));
+            }
+            std::fs::write(&destination, text).map_err(|error| {
+                Error::io(format!("write {} failed: {}", destination.display(), error))
+            })?;
+            println!("imported {} as '{}'", source, stem);
+            Ok(0)
+        }
+        other => Err(Error::config(format!(
+            "unknown themes command '{}'; expected list, validate, export or import",
+            other
+        ))),
     }
-    Ok(0)
+}
+
+fn color_text(color: argent_core::screen::Color) -> String {
+    use argent_core::screen::Color;
+    match color {
+        Color::Default => "default".to_string(),
+        Color::Red => "red".to_string(),
+        Color::Green => "green".to_string(),
+        Color::Yellow => "yellow".to_string(),
+        Color::Blue => "blue".to_string(),
+        Color::Magenta => "magenta".to_string(),
+        Color::Cyan => "cyan".to_string(),
+        Color::Gray => "gray".to_string(),
+        Color::White => "white".to_string(),
+        Color::Fixed(index) => index.to_string(),
+        Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
+    }
 }
 
 fn sessions(args: &[String]) -> Result<i32> {
@@ -3245,6 +3474,54 @@ mod tests {
         assert!(!branch_is_ancestor(&dir, "argent/unmerged", "main"));
         assert!(last_commit_time(&dir).unwrap_or(0) > 0);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn themes_validate_export_and_import_round_trip() {
+        let dir = std::env::temp_dir().join(format!("argent-theme-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let themes_dir = dir.join(".argent/themes");
+        std::fs::create_dir_all(&themes_dir).expect("themes dir");
+        std::fs::write(
+            themes_dir.join("custom.json"),
+            r##"{"accent":"#ff0000","text":"white"}"##,
+        )
+        .expect("write theme");
+        let args = |action: &str, extra: &[&str]| {
+            let mut out = vec![
+                action.to_string(),
+                "custom".to_string(),
+                "--workspace".to_string(),
+                dir.display().to_string(),
+            ];
+            out.extend(extra.iter().map(|value| value.to_string()));
+            out
+        };
+        assert_eq!(themes(&args("validate", &[])).expect("valid theme"), 0);
+
+        let exported = dir.join("exported.json");
+        assert_eq!(
+            themes(&args("export", &["--output", exported.to_str().unwrap()])).expect("export"),
+            0
+        );
+        let text = std::fs::read_to_string(&exported).expect("exported file");
+        assert!(text.contains("\"accent\""), "{text}");
+
+        let imported = dir.join("imported.json");
+        std::fs::write(&imported, text).expect("write import");
+        let code = themes(&[
+            "import".to_string(),
+            imported.display().to_string(),
+            "--workspace".to_string(),
+            dir.display().to_string(),
+        ])
+        .expect("import");
+        assert_eq!(code, 0);
+
+        std::fs::write(themes_dir.join("custom.json"), r#"{"accent":"not-a-color"}"#)
+            .expect("write bad theme");
+        assert!(themes(&args("validate", &[])).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
