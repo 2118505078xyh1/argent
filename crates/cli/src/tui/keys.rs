@@ -27,6 +27,7 @@ pub enum Key {
     ScrollDown,
     /// 鼠标左键（屏幕行/列，0 基）。按下→拖→松开由 TUI 自己处理：
     /// 原地松开 = 点击（展开/收起思考块），拖动 = 选中并复制文字。
+    #[allow(dead_code)] // 仅在鼠标事件解析接线后由 TUI 构造
     MouseClick { row: u16, col: u16 },
     MousePress { row: u16, col: u16 },
     MouseDrag { row: u16, col: u16 },

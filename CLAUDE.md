@@ -80,13 +80,13 @@ cli -> everything
 - Provider templates are data, not code: `crates/provider/providers.json`, overridable/extendable in config. Protocols: Anthropic Messages, OpenAI chat completions, OpenAI Responses.
 - Beware similarly named crates: `crates/plugin` is the native C-ABI loader for out-of-tree tool libraries; `crates/plugins` is manifest discovery/install/marketplace for `.zcode-plugin` / `.claude-plugin` / `.codex-plugin` bundles.
 - Hooks implement eleven events (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact`, `SessionEnd`, `SubagentStop`, `Stop`); hook documents must pass a SHA-256 trust check before any command runs.
-- `--sandbox-mode read-only|workspace-write|danger-full-access` gates file tools: `read-only` drops mutating tools at the registry; `workspace-write` (**the default**) gives `write`/`edit` a `ToolCtx::write_roots` check (cwd + `--add-dir`); `danger-full-access` removes the boundary. This is a policy layer, not an OS jail — `bash` writes bypass it, and bare `--sandbox` is the Windows Job Object. `--output-schema` validation lives in `crates/cli/src/structured.rs`; failure retries once, then `reason=error` / exit 1.
+- `--sandbox-mode read-only|workspace-write|danger-full-access` gates file tools: `read-only` drops mutating tools at the registry; `workspace-write` (**the default**) gives `write`/`edit` a `ToolCtx::write_roots` check (cwd + `--add-dir`); `danger-full-access` removes the boundary. This is a policy layer, not OS-level isolation — use a container for strong isolation. `--output-schema` validation lives in `crates/cli/src/structured.rs`; failure retries once, then `reason=error` / exit 1.
 - `--bg` spawns a detached copy of the binary serving HTTP (`--serve`) on a random port; the port and a random token live under `<storage>/background/`. `agents` / `logs` / `attach` (TUI by default, `--plain` streams) / `stop` / `rm` are file-based (no daemon) and attach drives `/v1/steer`, `/v1/prompt`, `/v1/abort` over HTTP. `--worktree[=name]` creates `<storage>/worktrees/<repo>/<name>` on branch `argent/<name>` before config loading.
 - UI strings for CLI/TUI/GUI live in `argent-i18n` and are embedded in the binary (zh-CN/en-US) — there are no external locale files.
 - `argent-native` is a plain iced window with no WebView and no JavaScript; it polls the same `argent-engine` channels. There is no external frontend asset pipeline.
 - `argent --rpc` (ZCode-compatible `app-server`), `argent --serve` (HTTP/SSE), and `argent acp` are additional transports over the same agent; keep their event/steering semantics in parity when changing the loop.
 
-## Project constraints (from docs/ROADMAP.md)
+## Project constraints
 
 - The CLI path must stay a single binary: no browser engine, no Node runtime.
 - Keep the agent core provider-agnostic; protocol specifics belong in `argent-ai`.

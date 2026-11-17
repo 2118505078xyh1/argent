@@ -445,21 +445,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
         base_registry.register_plugin_tool(argent_tools::plugin::SKILLS, tool);
     }
 
-    // MCP servers: spawn each configured process once and register its tools
-    // as extensions, so `tool_search` can promote them like built-ins. The
-    // settings shape matches Claude Code and Codex CLI, so an existing
-    // `mcpServers` block copies over unchanged. A server that fails to start
-    // becomes a startup notice, never an error: the conversation must run
-    // without it.
-    let (mcp_tools, mcp_notices) =
-        argent_plugin::mcp_discover(&argent_plugin::mcp_parse_specs(settings.raw()));
-    for tool in mcp_tools {
-        base_registry.register_extension(tool);
-    }
-    for notice in &mcp_notices {
-        eprintln!("[argent] {}", notice);
-    }
-
     base_registry.register_plugin_tool(
         argent_tools::plugin::DELEGATE,
         Box::new(DelegateTool::disabled()),

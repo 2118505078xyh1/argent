@@ -6,7 +6,7 @@
 
 - 纯 Rust 嵌入式脚本引擎，编译进同一个二进制；增量约 1.5 MB（对比 Extism/wasmtime 的 ~12 MB）。
 - 自带操作数和表达式深度上限，脚本无法死循环或耗尽内存。
-- 与 codemode 共用同一套引擎思路，整个项目只有一种脚本语言。
+- 整个项目只有一种脚本语言，无 WASM/Node 运行时。
 
 ## 构建
 
@@ -75,17 +75,6 @@ fn arg_call(input) {
 | `argent_now()` → i64 | 当前 Unix 毫秒 |
 | `argent_call_tool(#{ name, arguments })` → Map | 调用已注册工具，走同一套权限/审批/审计 |
 
-## codemode 内置脚本
-
-`code` 工具新增 `language: "rhai"`：脚本在进程内运行，通过 `argent_call(name, args)` 调用工具，没有外部 node/python、没有回调 HTTP 服务。Python/JavaScript 路径保留作兼容，但需要机器上装有解释器。
-
-```rhai
-let a = argent_call("grep", #{ pattern: "TODO", path: "src" });
-print(a);
-```
-
-脚本还可用 `store(key, value)` / `load(key)` 保留跨调用的小 JSON 状态（传 `()` 删除键）。写入只在脚本成功时提交；失败的脚本不会留下状态。
-
 ## 安全
 
 - 插件必须先被 `PluginManager` 发现并启用。
@@ -95,4 +84,3 @@ print(a);
 ## 测试
 
 - `crates/script-plugin/tests/plugin_roundtrip.rs`：真实 `.rhai` 插件声明工具 → 执行 → 回调宿主工具。
-- `crates/tools/src/codemode.rs`：rhai codemode 脚本在进程内调用工具、捕获 print 输出。

@@ -74,3 +74,24 @@ conversation now owns exactly one thread.
 - Repository history rewritten with a neutral author identity; test
   fixtures carry no local usernames or personal model choices.
 - Zero clippy warnings workspace-wide, 1020+ tests green.
+- KV-cache continuation on OpenAI-compatible endpoints: resending
+  `reasoning_content` dropped new tokens on a continued turn from ~96 to 37.
+- Release binaries: argent 5.01 MB, argent-native 6.60 MB.
+
+### Strategic direction
+
+What argent follows from competitor directions (everything else is either
+already present or conflicts with the pure-Rust single-binary, low-memory
+design):
+
+| Direction | Decision |
+|---|---|
+| Implicit title / summary agent (background small model) | Done — opt-in in 0.2.0 |
+| Async hooks / MCP calls | Done |
+| Image input | Done — `@path` → `Content::Image`, vision capability gates it |
+| Background subagent progress | Present; display polish remains |
+| session → eval regression loop | Done — `replay --to-eval` |
+
+Explicitly out of scope: WebView / Electron desktop / embedded ChatGPT /
+Artifacts / Remote Control; an embedded V8 or TS/Effect SDK (Rhai only);
+plugin marketplace / GUI themes / Mermaid rendering; `/loop`.

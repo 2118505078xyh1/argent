@@ -13,7 +13,7 @@ JS、图标或其他专有资产。
 
 | 对比项 | ZCode | argent |
 |---|---|---|
-| 桌面外壳 | Electron + Chromium + 内置 Node | CLI/TUI 无外壳；图形端规划 iced，不再以 WebView 为主 |
+| 桌面外壳 | Electron + Chromium + 内置 Node | CLI/TUI 无外壳；图形端已实现 iced，不再以 WebView 为主 |
 | agent 核心 | 15 MB 的 JS bundle | 原生 Rust 二进制 |
 | 无头模式 | 需要 Node 运行时 | 一个 `argent.exe`，无运行时依赖 |
 | 插件 | Node 包 + MCP server | 清单 + MCP server；能用 Rust 原生工具就不用 Node |
@@ -46,7 +46,7 @@ description: 读 diff、报缺陷
 model: GLM-5.3
 provider: zai
 thinking: high
-tools: read, grep, find, ls, lsp
+tools: read, grep, find, codeintel
 plugins: explore, codeintel
 readOnly: true
 maxTurns: 9
@@ -141,7 +141,7 @@ argent --serve --serve-port 7777 --serve-token mytoken
 }
 ```
 
-脚本定义 `arg_init`（返回工具/命令声明）和 `arg_call`（执行工具）。宿主提供 `argent_log`、`argent_call_tool`、`argent_var`、`argent_now`；`argent_call_tool` 走同一套 ToolRegistry，权限、审批与审计不会绕过。CLI 与桌面 GUI 启动时加载插件，工具在模型看到前注册完成。`code` 工具也新增 `language: "rhai"` 内置沙箱，不再需要外部 node/python；脚本可用 `store(key, value)` / `load(key)` 在多次调用间保留小状态（失败的脚本不提交写入）。详见 [docs/SCRIPT-PLUGINS.md](docs/SCRIPT-PLUGINS.md)。
+脚本定义 `arg_init`（返回工具/命令声明）和 `arg_call`（执行工具）。宿主提供 `argent_log`、`argent_call_tool`、`argent_var`、`argent_now`；`argent_call_tool` 走同一套 ToolRegistry，权限、审批与审计不会绕过。CLI 与桌面 GUI 启动时加载插件，工具在模型看到前注册完成。详见 [docs/SCRIPT-PLUGINS.md](docs/SCRIPT-PLUGINS.md)。
 
 插件功能默认关闭（保持最小体积）。启用：`cargo build --release -p argent-cli -p argent-native --features script-plugins`，二进制增加约 1.5 MB。
 
@@ -321,7 +321,7 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 - 提示词缓存预热：`cacheWarming: "off" | "streaming"`，streaming 在每次运行结束后发一个最小请求续期缓存（Anthropic）；默认 off
 - 后台小模型助手（opt-in）：`backgroundIntelligence: true` 后，会话标题、压缩摘要、分支切换摘要由 `backgroundModel`（默认主模型）生成，失败自动回退到原有启发式，任何后台调用失败都不会影响运行
 - 模型范围：`enabledModels` 限制模型选择器与循环范围（支持 `*` 通配，匹配可含 `provider/` 前缀）；为空表示全部
-- MCP 服务器：`mcpServers` 配置外部工具，形状与 Claude Code / Codex CLI 相同，直接复制过来就能用。每个服务器启动一个 stdio 进程，其工具以 `mcp_<服务器>_<工具>` 注册进注册表，`tool_search` 按需提升；某台服务器起不来只打一行提示，不影响运行
+- MCP 服务器：`mcpServers` 配置外部工具，形状与 Claude Code / Codex CLI 相同，直接复制过来就能用。每个服务器启动一个 stdio 进程，其工具以 `mcp__<server>__<tool>` 注册进注册表，`tool_search` 按需提升；某台服务器起不来只打一行提示，不影响运行
   ```json
   {
     "mcpServers": {
@@ -470,7 +470,7 @@ argent --sessions               列出已有会话
   tool_use/tool_result 与 function_call/function_call_output 的双向转换、
   thinking delta、usage/cache 统计。
 - 核心工具（`read`、`write`、`edit`、`bash`）加上 explore、plan、memory、
-  skills、web、LSP、AST、jobs、code mode、subagents、device 工具。
+  skills、web、codeintel、jobs、subagents、device 工具。
 - 文件检查点：write/edit 改文件前留快照，TUI/REPL/桌面的 `/rewind [n]`
   按运行回滚（恢复旧内容、删除新建文件），native 窗口有“↶ 回滚”按钮；
   子代理的写入记在父运行里。
@@ -484,9 +484,10 @@ argent --sessions               列出已有会话
 - Prompt 模板：`.argent/prompts/*.md`、`.agents/prompts/*.md` 和
   `~/.argent/prompts` 会被发现，出现在 TUI 的斜杠面板里，`/prompts` 列出，
   `/名字 参数` 按 `$1`/`$@` 展开后发送。
-- Skills、markdown 斜杠命令（`$ARGUMENTS`/`$1`），以及全部七个 hook 事件
+- Skills、markdown 斜杠命令（`$ARGUMENTS`/`$1`），以及全部 11 个 hook 事件
   （`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PermissionRequest`、
-  `PostToolUse`、`PostToolUseFailure`、`Stop`），带 SHA-256 信任库；
+  `PostToolUse`、`PostToolUseFailure`、`Notification`、`PreCompact`、
+  `SessionEnd`、`SubagentStop`、`Stop`），带 SHA-256 信任库；
   `UserPromptSubmit` 和 `PermissionRequest` 可以阻断。hook 命令可设
   `"async": true` 在后台执行、不阻塞工具调用，输出完成后以 Notice 报告。
 - 后台小模型助手（opt-in）：`backgroundIntelligence: true` 后，会话标题、
@@ -506,7 +507,7 @@ argent --sessions               列出已有会话
   10k 行/3MB、输出 32k、超时 300s、100 轮、策略拒绝重试 3 次
 - KV 缓存命中修复：assistant 的 reasoning 原样随历史重发
   （`reasoning_content`），本地端点（llama.cpp/DeepSeek）的续轮前缀命中
-  从 96 新 token 降到 ~15
+  从 96 新 token 降到 37
 - `--continue` 在 Windows 上修复：会话头 cwd 规范化后存储，
   此前每次 `-c` 都静默新建会话
 - JSONL 会话树：resume、compaction、fork/rename、会话标签。
@@ -554,17 +555,11 @@ argent --sessions               列出已有会话
 - SQLite 在线镜像：配置 `sessionBackend: "sqlite"` 或 `ARGENT_SQLITE=1` 后，
   每次 JSONL 追加也会写入 `~/.argent/cli/db/db.sqlite`；另有
   `argent sessions export --sqlite <path>` 做一次性导出/迁移。
-- 进程沙箱 v1：`--sandbox` 或 `ARGENT_SANDBOX=1` 把工具子进程放进 Windows
-  Job Object，带 kill-on-close、64 个子进程上限、单进程 8GB/整组 16GB
-  内存上限和 UI 限制；子进程崩溃不会拖垮桌面。
-- 文件写边界默认开：`workspace-write`（默认）把 write/edit 限制在 cwd 与
-  `--add-dir` 声明的目录里；`--sandbox-mode danger-full-access` 恢复无边界。
-  bash 不受此约束——进程级沙箱用 `--sandbox`，强隔离用容器。
 - 提示词缓存：Anthropic 协议显式发送 `cache_control` 断点（system、tools、
   最后一条消息），`ARGENT_PROMPT_CACHE=0` 可关闭；usage 仍统计 cached tokens，
   TUI 状态栏显示 cache 命中率和本次成本。
-- 工具输出预算：单个结果默认最多约 6000 tokens，且一轮所有工具结果合计
-  默认最多 20000 tokens；超出时只回 head+tail / 诊断摘要和完整输出路径
+- 工具输出预算：单个结果默认最多 15k tokens，且一轮所有工具结果合计
+  默认最多 60k tokens；超出时只回 head+tail / 诊断摘要和完整输出路径
   （`~/.argent/tool-output/*.log`），模型可用 `read offset/limit` 取回中间部分。
   `ARGENT_TOOL_OUTPUT_TOKENS` / `ARGENT_TOOL_TURN_TOKENS` 可调整或设为 0 关闭。
 - 构建/测试失败会做结构化提取：cargo/rustc 的 `error[E…]`、`-->` 位置、
@@ -586,9 +581,7 @@ argent --sessions               列出已有会话
 ## 还没做的
 
 JSONL 仍是会话的可移植源，SQLite 是实时镜像而非唯一源。Office 官方渲染/
-锚点协议和 `.dwf.ts` 工作流兼容仍是长尾。沙箱目前是**进程级**
-（Job Object），不是文件系统 jail：Windows AppContainer、macOS Seatbelt、
-Linux namespace/bwrap 和网络隔离还没做。要强隔离，用容器跑 argent，
+锚点协议和 `.dwf.ts` 工作流兼容仍是长尾。要强隔离，用容器跑 argent，
 见上面的「在容器里跑 argent（强隔离）」。详见
 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
@@ -669,7 +662,7 @@ argent eval evals/core.json
 
 退出码是本次是否有失败场景，CI 可直接用。`evals/core.json` 覆盖了读、写、
 列目录、重复调用保护、回合上限、令牌预算、策略拦截和自定义回合上限，目前
-8/8 通过。
+10/10 通过。
 
 ## 发布包
 
@@ -679,7 +672,6 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 
 该脚本构建两个二进制，把文档和示例拷到
 `dist/argent-<version>-windows-x64/`，生成 `SHA256SUMS`，并打包 zip。
-窗口需要 WebView2 运行时；CLI/TUI 不需要。
 
 ## 安全
 

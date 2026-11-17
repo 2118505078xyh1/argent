@@ -21,7 +21,7 @@ core            无依赖
 │   ├── commands markdown 斜杠命令
 │   ├── hooks   生命周期 hook + 信任
 │   ├── workflow 依赖感知的子代理工作流
-│   ├── lsp / jobs / ast / pty / device
+│   ├── lsp / jobs / ast / pty / device   （lsp+ast 的工具层已合并为 codeintel）
 │   └── plugin  原生 C ABI（树外工具）
 └── cli         `argent` 二进制
 ```
@@ -63,12 +63,12 @@ SQLite 不是唯一源，所以数据库被锁或损坏不会丢 transcript。�
 `argent sessions export --sqlite <path>`。
 
 文件检查点存放在会话文件旁的 `checkpoints/<会话名>/`：`manifest.jsonl`
-逐条记录每次 write/edit 的运行号与路径，`blobs/<sha256>` 按内容寻址保存旧
-内容。一次用户 prompt 内的所有写入（含子代理）记在同一个运行号下；TUI、
+逐条记录每次 write/edit 的运行号与路径，以及 bash 命令扫描出的
+删除/移动/覆盖目标，`blobs/<sha256>` 按内容寻址保存旧内容。一次用户 prompt
+内的所有写入（含子代理）记在同一个运行号下；TUI、
 REPL、桌面与 native 的 `/rewind [n]`（native 为“↶ 回滚”按钮）撤销最近 n
 次有改动的运行——恢复每个路径在区间内最早的快照，删除运行中新建的文件。
-只覆盖 argent 的 write/edit，bash 里做的修改不在其中；有文件恢复失败时不写
-回滚标记，可以重试。会话文件被删除时其检查点目录一并清理。
+有文件恢复失败时不写回滚标记，可以重试。会话文件被删除时其检查点目录一并清理。
 
 ## 配置
 
@@ -134,7 +134,7 @@ Hooks 使用 Claude Code / ZCode 的文档格式。文档必须先通过 SHA-256
 配置了 hook 的批次会串行执行，保证 hook 顺序与工具顺序一致。
 `SessionStart` 和 `Stop` 在 worker 上运行；`UserPromptSubmit` 在 prompt
 前运行，可以阻断；`PermissionRequest` 在审批弹窗前运行，可以拒绝调用。
-七个事件全部会派发。
+全部 11 个事件（`HookEvent::ALL`）都会派发。
 
 Hook 进程默认用 bash（Windows 上是 Git Bash），找不到可用的 bash 才回退
 `cmd`（Windows）或 `sh`（Unix）。
@@ -210,8 +210,8 @@ agent loop 在 `execute_tool` 的最前面、以及并行批次里都调用这�
 `crates/cli/src/serve.rs` 把 agent 挂到 HTTP 上。`POST /v1/prompt` 返回
 SSE，其余端点返回 JSON。每个连接一个线程，agent 在 `Arc<Mutex<Agent>>`
 后面串行执行。默认只绑 `127.0.0.1`；配置 token 后，除 `/v1/health` 外的
-所有端点都需要 `Authorization: Bearer <token>`。9 个集成测试用真实 TCP
-连接验证认证、SSE 帧、历史与未知端点。
+所有端点都需要 `Authorization: Bearer <token>`。模块内单元测试覆盖认证、
+SSE 帧、历史与未知端点。
 
 ## 传输层的 TLS
 

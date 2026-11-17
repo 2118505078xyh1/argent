@@ -3772,7 +3772,7 @@ fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span>, bool) {
             // [label](url)：链接文字与 URL 分色，失配时按普通文本处理。
             let mut label = String::new();
             let mut matched_label = false;
-            while let Some(next) = chars.next() {
+            for next in chars.by_ref() {
                 if next == ']' {
                     matched_label = true;
                     break;
@@ -3783,7 +3783,7 @@ fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span>, bool) {
                 chars.next();
                 let mut url = String::new();
                 let mut matched_url = false;
-                while let Some(next) = chars.next() {
+                for next in chars.by_ref() {
                     if next == ')' {
                         matched_url = true;
                         break;

@@ -26,102 +26,19 @@ agent 已经可用；剩余工作主要是表面层和较大的插件能力。
    `plugin@marketplace` 安装、更新、可用插件列表。签名策略和托管注册表
    待做。
 4. ~~浏览器 OAuth + PKCE + refresh token~~ **完成**
-   （`crates/auth/src/oauth.rs`），Windows 上另有 DPAPI 加密存储。OS
-   keyring 后端待做。
+   （`crates/auth/src/oauth.rs`），Windows 上另有 DPAPI 加密存储，macOS/Linux
+   用系统 keyring。
 5. ~~OpenAI Responses provider~~ **完成**；逐模型能力规则引擎**完成**（见 B 批）。
-6. ~~派发全部七个 hook 事件~~ **完成**：`SessionStart`、
+6. ~~派发全部 11 个 hook 事件~~ **完成**：`SessionStart`、
    `UserPromptSubmit`、`PreToolUse`、`PermissionRequest`、`PostToolUse`、
-   `PostToolUseFailure`、`Stop`；prompt 和 permission hook 可以阻断。
+   `PostToolUseFailure`、`Notification`、`PreCompact`、`SessionEnd`、
+   `SubagentStop`、`Stop`；prompt 和 permission hook 可以阻断。
 7. 会话命令：TUI 的 `/new`、`/resume`、`/fork`、`/rename` **完成**；
    `/rewind [n]` **完成**（TUI/REPL/桌面/native，按运行回滚 write/edit）。
 8. ~~ACP 兼容 app-server~~ **完成**（`argent acp`）：v1 initialize、会话、
    prompt、流式更新、取消、权限请求。
 9. ~~多会话~~ **完成**：会话标签各有一个 worker/agent，后台运行跨切换
    继续；事件按会话过滤。
-
-## 下一步批次（2026-11）
-
-> 执行进度账本以 `docs/TODO.md` 为准；本节只列批次意图与完成情况。
-
-顺序按“先补齐 GUI 运行时，再做能力规则与安全”排列；每批结束时
-`cargo test --workspace` 与 `argent eval evals/core.json` 必须全绿。
-
-### A. GUI 运行时对齐（P0）
-
-CLI 与桌面共用同一个 agent 循环，但装配层长期是两套：CLI 有的门禁与
-能力，engine 未必有。本批把近期新增能力补齐到 GUI。
-
-1. **检查点与 `/rewind`（已完成）**：`argent_ui_core::Command` 增加
-   `Rewind { steps }`；engine worker 按当前会话文件建 `CheckpointStore`，
-   在首个 prompt 建会话、`OpenSession`、`NewSession` 时 `retarget`；桌面与
-   iced 前端加入口；删除会话时清理对应 checkpoints 目录。
-2. **动态插件与插件 MCP（已完成）**：`argent_plugins::runtime` 新增
-   `add_mcp_servers`/`expand_plugin_text`，CLI 与 engine 共用同一套占位符
-   展开；engine `build_agent` 引入 `PluginManager`（发现 + `apply_state`）、
-   原生插件工具库（`argent_plugin::loader::load_all`）、插件技能目录与插件
-   MCP server 合并。
-3. **Hook 派发（已完成）**：`argent_plugins::runtime` 新增
-   `workspace_hook_files`/`load_trusted_hooks`（信任库路径显式传入，
-   通知走回调），CLI 与 engine 共用；engine 的 `pre_tool`/`post_tool`
-   以 Notice 向 GUI 报告 hook 失败；信任库路径键统一分隔符，清单里的
-   `/` 与手工拼出的 `\` 不再失配。
-4. **子代理（已完成）**：engine 装配 `ChildFactory`（角色目录 = 内置 +
-   `.argent/roles` + 插件 agents；策略、审计、钩子、审批、检查点全部继承），
-   `delegate` 从占位换成带工厂的真实现；`SubagentEvent` 以 Notice 转发到
-   GUI 时间线；角色目录进入系统提示。
-
-验收（A 批已全部完成）：GUI 中能 `/rewind`、能看到插件工具、hook 能
-拦截、能派发子代理；engine 测试与 eval 全绿。
-
-### B. 模型能力规则（P1，已完成）
-
-`ModelInfo` 已有 `context_length` / `supports_tools` / `supports_reasoning`，
-但请求构造不据此裁剪。新增可测试的规则层：
-
-- 非视觉模型剥离 image 内容并附文字说明，而不是让 provider 报错；
-- 不支持 reasoning 的模型忽略 thinking 设置；
-- 上下文窗口与输出上限按“模型目录 > provider 模板 > 配置”合并；
-- 三种协议在 `argent-ai` 的请求构造处统一执行同一套规则。
-
-落地方式：`argent_ai::Capabilities::for_model` 按模型目录查能力（未知模型全开，
-保守默认）；Anthropic / OpenAI chat / Responses 的 `build_body` 都走同一套
-裁剪，图片换成 `[image omitted: …]` 占位说明，`max_tokens` 被模型的
-`max_output` 封顶。`argent-provider` 模板新增 `vision` 字段，
-`Config.supports_vision` 与 `ChildFactory.models` 把能力一路带到子代理。
-
-### C. 安全与凭据（P2，已完成）
-
-- **插件签名策略**（M1.3）：复用 `argent-update` 的签名原语，安装时按
-  `pluginSignature: required|warn|off` 校验清单与文件。
-- **OS keyring**（M1.4）：抽象 `CredentialStore`；Windows 走 Credential
-  Manager FFI（保持零依赖），macOS/Linux 走系统凭据工具，DPAPI 文件保留
-  为回退。
-
-落地方式：`argent_update::verify_detached`/`sign_detached` 提供分离签名；
-`argent_plugins::signature` 用与清单同级的 `plugin.sig`（清单原始字节的
-Ed25519 签名）实现 `SignaturePolicy`，`PluginManager::install_local` 与
-`Marketplace::install` 按 `InstallPolicy` 执行，`argent plugins sign` 生成签名。
-`argent_auth::keyring::SecretBackend` 抽象存/取/删，Windows 直接 FFI 调
-`CredWriteW`/`CredReadW`/`CredDeleteW`，macOS 用 `security`、Linux 用
-`secret-tool`；`credentialBackend: "keyring"` 时密钥环为主、DPAPI 文件为
-回退，文件里的旧凭据会自动迁移进密钥环。`argent doctor` 显示当前后端。
-
-### D. 长尾（P3，已完成）
-
-- 检查点 GC：孤儿会话目录与未引用 blob；`argent sessions prune`。
-- 更新安装器：自动替换运行中的二进制与回滚（M3）。
-- 远端遥测 sink 与同意 UI（M3）。
-- `.dwf.ts` 兼容与 `world.run` 门（M3，单独立项）。
-
-落地方式：`argent_tools::checkpoint::collect_garbage` 找出没有会话文件的检查点
-目录和无人引用的 blob（`--dry-run` 只报告），CLI 为 `argent sessions prune`；
-`argent_update::install` 负责解包（zip 走 tar/unzip/Expand-Archive，裸二进制
-直接落盘）、定位可执行文件、改名备份后替换（Windows 上运行中的 exe 不能
-覆盖但能改名），`argent update apply` / `rollback` 串起整条链路，失败自动回滚；
-遥测新增 `telemetry.endpoint` + `telemetry.consent`，两者齐备才在后台线程
-POST，无同意绝不联网；`Workflow::load` 接受 `.dwf.ts` 的
-`export default {...}` / `defineWorkflow({...})` 声明式外壳，遇到
-`world.run`、`import`、函数代码明确拒绝而不执行 JavaScript。
 
 ## M2 — 能力插件
 
@@ -300,12 +217,9 @@ POST，无同意绝不联网；`Workflow::load` 接受 `.dwf.ts` 的
   - **文件系统策略**：`--sandbox-mode read-only|workspace-write|
     danger-full-access`。`read-only` 在注册表层摘掉所有 mutating 工具；
     `workspace-write` 给 `write`/`edit` 加根目录检查（cwd + `--add-dir`）。
-    这是策略层，不是 OS 级 jail：`bash` 子进程的写入不经过路径检查，
-    AppContainer/Seatbelt/namespace 隔离仍单独立项。
+    这是策略层，不是 OS 级隔离；需要强隔离时用容器。
 
 ## 指导约束
 
-- CLI 路径必须保持单二进制：无浏览器引擎、无 Node 运行时。
-- agent 核心必须保持 provider 无关；协议怪癖都在 `argent-ai` 里。
-- 插件清单和 hook 文档与 ZCode、Claude Code、Codex bundle 保持源兼容。
-- 每个新子系统在它引入的边界上有测试。
+与 `CLAUDE.md` 的「Project constraints」一致：单二进制、provider 无关、
+清单/hook 源兼容、边界有测试、shell 优先 bash。以 `CLAUDE.md` 为准。
