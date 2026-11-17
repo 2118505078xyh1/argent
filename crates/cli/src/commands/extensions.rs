@@ -586,7 +586,13 @@ pub(super) fn hooks(args: &[String]) -> Result<i32> {
                 .map(PathBuf::from);
             let files = match explicit {
                 Some(path) => vec![path],
-                None => crate::workspace_hook_files(&manager, &cwd),
+                // 默认发现会无条件列出两个约定路径（见 workspace_hook_files）；
+                // 不存在的文件对 list 是"没找到"，对 validate 也该如此，
+                // 而不是报 cannot read 退出 1。显式指定的路径仍如实报错。
+                None => crate::workspace_hook_files(&manager, &cwd)
+                    .into_iter()
+                    .filter(|path| path.is_file())
+                    .collect(),
             };
             hooks_validate(&files)
         }
