@@ -1,14 +1,20 @@
 //! What a session starts with: project instruction files and remembered facts.
 //!
-//! Both are read once, when the agent is built, and frozen into the system
+//! Both are resolved once, when the agent is built, and frozen into the system
 //! prompt. Re-reading them on every turn would change the prompt prefix and
 //! throw away the provider's prompt cache — the mistake opencode fixed in
 //! PR #14203, where instruction files were read inside the request loop.
+//!
+//! Full instruction files are NOT inlined. A real `CLAUDE.md` is thousands of
+//! characters that get re-sent every turn; the model can `read` the file when
+//! it needs the detail. Only short files (below [`INLINE_LIMIT`]) are kept
+//! verbatim — inlining those costs less than a read round-trip.
 
 use std::path::Path;
 
-/// Most bytes of project instructions to include.
-pub const PROJECT_CONTEXT_LIMIT: usize = 8_000;
+/// Files longer than this are indexed, not inlined. A read round-trip is
+/// cheaper than re-sending several thousand characters on every turn.
+pub const INLINE_LIMIT: usize = 500;
 
 /// Most characters of remembered project facts to include.
 pub const MEMORY_DIGEST_LIMIT: usize = 1_200;
@@ -22,12 +28,12 @@ const MAX_DEPTH: usize = 8;
 /// `AGENTS.md` / `CLAUDE.md` from the working directory up to the root.
 ///
 /// Nearest first, so a nested project file overrides the shape of the outer
-/// one, and both are visible. An instruction file is a small, hand-written
-/// document; the cap only exists so a pathological one cannot consume the
-/// whole context.
+/// one, and both are visible. Short files are inlined verbatim; long ones are
+/// listed by path so the model can `read` them on demand instead of paying
+/// for thousands of characters on every turn.
 pub fn project_instructions(cwd: &Path) -> String {
-    let mut out = String::new();
-    let mut budget = PROJECT_CONTEXT_LIMIT;
+    let mut inline = String::new();
+    let mut index: Vec<String> = Vec::new();
     let mut directory = Some(cwd);
     let mut depth = 0usize;
 
@@ -45,20 +51,15 @@ pub fn project_instructions(cwd: &Path) -> String {
                 continue;
             }
 
-            let header = format!("<file path=\"{}\">\n", path.display());
-            let footer = "\n</file>\n";
-            let block_len = header.len() + text.len() + footer.len();
-            if block_len > budget {
-                out.push_str(&header);
-                let keep = budget.saturating_sub(header.len());
-                out.extend(text.chars().take(keep));
-                out.push_str("\n… [truncated]\n</file>\n");
-                return out;
+            if text.len() <= INLINE_LIMIT {
+                inline.push_str(&format!(
+                    "<file path=\"{}\">\n{}\n</file>\n",
+                    path.display(),
+                    text
+                ));
+            } else {
+                index.push(format!("{} ({} chars)", path.display(), text.len()));
             }
-            budget -= block_len;
-            out.push_str(&header);
-            out.push_str(text);
-            out.push_str(footer);
         }
 
         depth += 1;
@@ -66,6 +67,20 @@ pub fn project_instructions(cwd: &Path) -> String {
             break;
         }
         directory = current.parent();
+    }
+
+    let mut out = String::new();
+    if !inline.is_empty() {
+        out.push_str(&inline);
+    }
+    if !index.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("Project instruction files (read them when the task needs project rules):\n");
+        for entry in index {
+            out.push_str(&format!("- {}\n", entry));
+        }
     }
     out
 }
@@ -132,6 +147,40 @@ mod tests {
     fn a_tree_without_instruction_files_is_empty() {
         let cwd = scratch("empty");
         assert!(project_instructions(&cwd).is_empty());
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn short_files_are_inlined_verbatim() {
+        let cwd = scratch("short");
+        std::fs::write(cwd.join("AGENTS.md"), "be brief").unwrap();
+        let text = project_instructions(&cwd);
+        assert!(text.contains("be brief"), "short rule should be inlined");
+        assert!(!text.contains("read them when"), "no index when everything fits");
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn long_files_are_indexed_not_inlined() {
+        let cwd = scratch("long");
+        let big = "rule line\n".repeat(200);
+        std::fs::write(cwd.join("CLAUDE.md"), &big).unwrap();
+        let text = project_instructions(&cwd);
+        assert!(text.contains("CLAUDE.md"), "path should be listed");
+        assert!(text.contains("read them when"), "model should be told to read it");
+        assert!(!text.contains(&big), "full text must not be in the prompt");
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn mixed_tree_inlines_short_and_indexes_long() {
+        let cwd = scratch("mixed");
+        std::fs::write(cwd.join("AGENTS.md"), "tiny").unwrap();
+        std::fs::write(cwd.join("CLAUDE.md"), "x".repeat(2_000)).unwrap();
+        let text = project_instructions(&cwd);
+        assert!(text.contains("tiny"), "short file inlined");
+        assert!(text.contains("CLAUDE.md"), "long file indexed");
+        assert!(!text.contains(&"x".repeat(2_000)), "long file not inlined");
         let _ = std::fs::remove_dir_all(&cwd);
     }
 }
