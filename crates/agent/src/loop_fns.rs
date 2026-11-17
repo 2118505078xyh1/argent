@@ -113,7 +113,7 @@ pub fn build_system_prompt(
         "- Read a file before editing it, and match its exact current text.
 ",
     );
-    prompt.push_str("- Read a directory to list its entries; locate a symbol with the explore plugin's repo_map before reading whole files, and use grep/find rather than guessing paths.\n");
+    prompt.push_str("- Read a directory to list its entries; locate a symbol with grep before reading whole files, and never guess paths.\n");
     prompt.push_str("- Verify your work: run the build or tests and report the real result.\n");
     prompt.push_str("- Report what changed, what you verified, and what remains.\n\n");
 
