@@ -244,7 +244,10 @@ pub fn run(raw: &[String]) -> Result<i32> {
     };
 
     let mut config = Config::load(&cli.cwd)?;
+    // `-c key=value` 属于配置层：在 flag 与环境变量之前生效。
+    apply_config_overrides(&mut config, &cli.config_overrides)?;
     // 拼错的设置键会被静默忽略——启动时就告诉操作者，别等问题查半天。
+    // 放在 `-c` 覆盖之后：命令行里的拼写错误也走 merge_into，一并被记录。
     for (key, source) in &config.unknown_keys {
         let hint = match argent_core::config::suggest_setting(key) {
             Some(known) => format!(" — did you mean \"{known}\"?"),
@@ -252,8 +255,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
         };
         eprintln!("warning: unknown setting \"{key}\" in {source}{hint}");
     }
-    // `-c key=value` 属于配置层：在 flag 与环境变量之前生效。
-    apply_config_overrides(&mut config, &cli.config_overrides)?;
     apply_cli(&mut config, &cli);
     apply_settings(&mut config, &cli, profile.as_ref())?;
     // Environment overrides are the last word, so a shell export can point a
@@ -2815,6 +2816,20 @@ mod tests {
         };
         apply_cli(&mut config, &cli);
         assert_eq!(config.model, "from-flag");
+    }
+
+    #[test]
+    fn a_typoed_override_is_recorded_like_a_file_key() {
+        let mut config = Config::default();
+        apply_config_overrides(
+            &mut config,
+            &[("fallbakModel".to_string(), "x".to_string())],
+        )
+        .expect("apply");
+        assert_eq!(
+            config.unknown_keys,
+            vec![("fallbakModel".to_string(), "<command line>".to_string())]
+        );
     }
 
     #[test]
