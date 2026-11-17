@@ -4555,6 +4555,32 @@ mod cursor_tests {
     }
 
     #[test]
+    fn the_session_panel_appends_warm_requests_to_the_cached_line() {
+        let mut app = app();
+        app.metrics.session_prompt_tokens = 10_000;
+        app.metrics.session_cached_tokens = 8_000;
+        app.metrics.session_warm_requests = 3;
+        app.overlay = Some(Overlay::SessionInfo { selected: 0 });
+        let overlay = app.overlay_lines(80).expect("session overlay");
+        let joined = overlay
+            .iter()
+            .map(|line| line.plain_text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("· 3 warm"), "{joined}");
+        // 没有暖请求时这一段不出现。
+        app.metrics.session_warm_requests = 0;
+        app.overlay = Some(Overlay::SessionInfo { selected: 0 });
+        let overlay = app.overlay_lines(80).expect("session overlay");
+        let joined = overlay
+            .iter()
+            .map(|line| line.plain_text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!joined.contains("warm"), "{joined}");
+    }
+
+    #[test]
     fn slash_session_shows_a_navigable_list_and_actions_menu() {
         let mut app = App::new(
             Vec::new(),
