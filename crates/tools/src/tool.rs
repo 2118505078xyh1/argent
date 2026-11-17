@@ -42,6 +42,12 @@ pub struct ToolCtx {
     /// Shared across clones, so every tool call in one session sees the same
     /// table; a new session starts with an empty one.
     pub read_cache: Arc<Mutex<HashMap<PathBuf, CachedRead>>>,
+    /// Working directory the shell last ended in, for one session.
+    ///
+    /// Shared across clones like `read_cache`: a `cd` in one bash call keeps
+    /// holding for the next one, and the model stops having to pass `cwd`
+    /// every time. `None` until the first bash call reports its directory.
+    pub shell_cwd: Arc<Mutex<Option<PathBuf>>>,
     /// 本次运行的取消信号。所有上下文克隆共享同一个信号；agent 在每次
     /// 运行开始时把中止标志接进来，长命令据此提前退出。
     pub cancel: argent_core::interrupt::Cancellation,
@@ -63,6 +69,7 @@ impl ToolCtx {
             auto_approve_bash: true,
             vars: BTreeMap::new(),
             read_cache: Arc::new(Mutex::new(HashMap::new())),
+            shell_cwd: Arc::new(Mutex::new(None)),
             cancel: argent_core::interrupt::Cancellation::new(),
             checkpoints: None,
             write_roots: Vec::new(),

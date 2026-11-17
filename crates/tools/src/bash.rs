@@ -1,5 +1,6 @@
 //! Shell execution tool.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use argent_core::error::Result;
@@ -228,7 +229,7 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Run a shell command and return its output. Destructive commands require confirmation."
+        "Run a shell command and return its output. The working directory persists across calls in this session: `cd` keeps holding, and the explicit `cwd` argument only overrides it. Destructive commands require confirmation."
     }
 
     fn parameters(&self) -> Json {
@@ -240,7 +241,11 @@ impl Tool for BashTool {
                     "integer",
                     "Timeout in seconds (default 120, max 600)",
                 ),
-                ("cwd", "string", "Working directory for the command"),
+                (
+                    "cwd",
+                    "string",
+                    "Override the working directory for this command only",
+                ),
             ],
             vec!["command"],
         )
@@ -260,38 +265,94 @@ impl Tool for BashTool {
         let timeout_secs = arg_usize_opt(args, "timeout")
             .unwrap_or(ctx.timeout_secs as usize)
             .clamp(1, 600);
-        let cwd = match args.get("cwd").and_then(Json::as_str) {
-            Some(dir) => crate::fs_tools::resolve_arg(ctx, dir),
-            None => ctx.cwd.clone(),
-        };
+        let mut explicit_cwd = args.get("cwd").and_then(Json::as_str).map(|dir| {
+            let dir = crate::fs_tools::resolve_arg(ctx, dir);
+            store_shell_cwd(ctx, &dir);
+            dir
+        });
+        if explicit_cwd.is_none() {
+            // The session's shell may have cd'd somewhere; an explicit `cwd`
+            // argument overrides it.
+            explicit_cwd = last_shell_cwd(ctx).filter(|dir| dir.is_dir());
+        }
+        let cwd = explicit_cwd.unwrap_or_else(|| ctx.cwd.clone());
 
         // The shell is probed, not assumed: a Windows `bash.exe` can be the WSL
         // alias. Pick the shell that will actually run the command, and report
         // it so the model does not assume POSIX syntax under PowerShell.
         let flavor = ShellFlavor::detect();
+        // The command travels in an environment variable and runs through
+        // `eval`, so the same shell that `cd`'d records where it ended. A
+        // sentinel after the command reports the final directory. Overly long
+        // commands skip the wrapper: the Windows environment block caps total
+        // size, and correctness beats convenience there.
+        const ENV_COMMAND_LIMIT: usize = 8_000;
+        let track_cwd = flavor != ShellFlavor::WindowsCmd && command.len() <= ENV_COMMAND_LIMIT;
         let shell = match flavor {
             ShellFlavor::Posix => {
                 let program = locate_posix_shell().unwrap_or_else(|| "sh".to_string());
-                CommandSpec::new(program).arg("-lc").arg(&command)
+                if track_cwd {
+                    CommandSpec::new(program)
+                        .arg("-c")
+                        .arg(
+                            // The command's own `cd` changes $PWD inside this
+                            // shell, so the sentinel reads the real result.
+                            "cd \"$ARGENT_CWD\" 2>/dev/null || true; \
+                             eval \"$ARGENT_CMD\"; __argent=$?; \
+                             printf '\\036__ARGENT_PWD__%s\\036' \"$PWD\"; \
+                             exit $__argent",
+                        )
+                } else {
+                    CommandSpec::new(program).arg("-lc").arg(&command)
+                }
             }
             ShellFlavor::WindowsCmd => CommandSpec::new("cmd").arg("/C").arg(&command),
-            ShellFlavor::PowerShell => CommandSpec::new("powershell")
-                .arg("-NoProfile")
-                .arg("-Command")
-                .arg(&command),
+            ShellFlavor::PowerShell => {
+                if track_cwd {
+                    CommandSpec::new("powershell")
+                        .arg("-NoProfile")
+                        .arg("-Command")
+                        .arg(
+                            "if (Test-Path $env:ARGENT_CWD) { Set-Location $env:ARGENT_CWD }; \
+                             Invoke-Expression $env:ARGENT_CMD; \
+                             $code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }; \
+                             Write-Output (\"{0}__ARGENT_PWD__{1}{0}\" -f [char]0x1e, $PWD.Path); \
+                             exit $code",
+                        )
+                } else {
+                    CommandSpec::new("powershell")
+                        .arg("-NoProfile")
+                        .arg("-Command")
+                        .arg(&command)
+                }
+            }
         };
 
         let spec = shell
             .cwd(cwd.to_string_lossy().into_owned())
             .timeout(Duration::from_secs(timeout_secs as u64))
             .env("ARGENT_TOOL", "bash")
+            .env("ARGENT_CWD", cwd.to_string_lossy().into_owned())
+            .env("ARGENT_CMD", &command)
             // 取消（Esc/Ctrl+C、子代理超时）要能打断正在跑的命令。
             .cancel(ctx.cancel.clone());
 
         let output = run(&spec)?;
+        let mut stdout = output.stdout.clone();
+        // A reported directory wins even when the command failed: the `cd`
+        // already happened. A timeout or interrupt can kill the shell before
+        // the sentinel prints, and then the previous directory stands.
+        if track_cwd {
+            if let Some(dir) = take_pwd_sentinel(&mut stdout) {
+                let dir = PathBuf::from(dir);
+                if dir.is_dir() {
+                    store_shell_cwd(ctx, &dir);
+                }
+            }
+        }
         let mut text = String::new();
-        if !output.stdout.is_empty() {
-            text.push_str(output.stdout.trim_end());
+        if !stdout.trim_end().is_empty() {
+            text.push_str(stdout.trim_end());
         }
         if !output.stderr.is_empty() {
             if !text.is_empty() {
@@ -305,6 +366,16 @@ impl Tool for BashTool {
         }
         if output.interrupted {
             text.push_str("\n[interrupted by the operator]");
+        }
+        if track_cwd {
+            // Tell the model where the shell stands now, so the next call
+            // can rely on it instead of re-passing cwd.
+            let now = last_shell_cwd(ctx);
+            if now.as_deref() != Some(cwd.as_path()) {
+                if let Some(dir) = now {
+                    text.push_str(&format!("\n[cwd: {}]", dir.display()));
+                }
+            }
         }
         text.push_str(&format!(
             "\n[exit {} in {:.1}s, {}]",
@@ -327,6 +398,35 @@ impl Tool for BashTool {
         ]));
         Ok(result)
     }
+}
+
+/// The working directory the session's shell last ended in.
+fn last_shell_cwd(ctx: &ToolCtx) -> Option<PathBuf> {
+    ctx.shell_cwd.lock().ok().and_then(|state| state.clone())
+}
+
+/// Remember the working directory a shell call ended in.
+fn store_shell_cwd(ctx: &ToolCtx, dir: &Path) {
+    if let Ok(mut state) = ctx.shell_cwd.lock() {
+        *state = Some(dir.to_path_buf());
+    }
+}
+
+/// Pull the trailing `__ARGENT_PWD__` sentinel out of the shell's output and
+/// return the directory it carried.
+///
+/// The sentinel is written by the wrapper after the user's command; it must
+/// never reach the model, which would read it as command output.
+fn take_pwd_sentinel(stdout: &mut String) -> Option<String> {
+    let start = stdout.rfind("\x1e__ARGENT_PWD__")?;
+    let rest = &stdout[start + "\x1e__ARGENT_PWD__".len()..];
+    let end = rest.find('\x1e')?;
+    let dir = rest[..end].to_string();
+    // The wrapper prints a separator before the sentinel; a bare trailing
+    // newline belongs to it too.
+    let cut = stdout[..start].trim_end_matches(['\r', '\n']).len();
+    stdout.truncate(cut);
+    Some(dir)
 }
 
 /// Report the current time. Zero-argument, always in the schema.
@@ -617,5 +717,44 @@ mod tests {
     fn iso_week_is_in_range() {
         let week = iso_week(1_700_000_000);
         assert!((1..=53).contains(&week));
+    }
+
+    #[test]
+    fn pwd_sentinel_is_stripped_and_parsed() {
+        let mut out = "line one\nline two\n\x1e__ARGENT_PWD__/tmp/x\x1e".to_string();
+        let dir = take_pwd_sentinel(&mut out).expect("sentinel");
+        assert_eq!(dir, "/tmp/x");
+        assert_eq!(out, "line one\nline two");
+    }
+
+    #[test]
+    fn missing_pwd_sentinel_leaves_output_alone() {
+        let mut out = "plain output".to_string();
+        assert!(take_pwd_sentinel(&mut out).is_none());
+        assert_eq!(out, "plain output");
+    }
+
+    #[test]
+    fn cd_persists_across_bash_calls() {
+        let Some(shell) = locate_posix_shell() else {
+            return; // Windows without a POSIX shell; wrapper covered by parsing tests.
+        };
+        let ctx = ToolCtx::new(std::env::temp_dir());
+        let spec = CommandSpec::new(&shell)
+            .arg("-c")
+            .arg(
+                "cd \"$ARGENT_CWD\" 2>/dev/null || true; \
+                 eval \"$ARGENT_CMD\"; __argent=$?; \
+                 printf '\\036__ARGENT_PWD__%s\\036' \"$PWD\"; \
+                 exit $__argent",
+            )
+            .cwd(ctx.cwd.to_string_lossy().into_owned())
+            .env("ARGENT_CWD", ctx.cwd.to_string_lossy().into_owned())
+            .env("ARGENT_CMD", "cd / && pwd");
+        let output = run(&spec).expect("run");
+        let mut stdout = output.stdout;
+        let dir = take_pwd_sentinel(&mut stdout).expect("sentinel after cd /");
+        assert_eq!(dir, "/");
+        assert_eq!(stdout.trim(), "/");
     }
 }
