@@ -20,9 +20,9 @@ pub(crate) use keys::next_key;
 pub(crate) const ASSISTANT_MARK: &str = "◆ ";
 pub(crate) const TOOL_MARK: &str = "● ";
 pub(crate) const USER_MARK: &str = "› ";
-/// 用户消息块：深蓝底（Fixed(24)，#005f87）配白字，一整条铺满行宽。
+/// 用户消息块：中蓝底（Fixed(25)，#005faf）配白字，一整条铺满行宽。
 pub(crate) const USER_FG: argent_core::screen::Color = argent_core::screen::Color::Fixed(255);
-pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(24);
+pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(25);
 fn user_style() -> Style {
     Style::fg(USER_FG).with_bg(USER_BG)
 }
@@ -1587,6 +1587,10 @@ struct App {
     thinking_durations: Vec<std::time::Duration>,
     thinking_block_started: Option<std::time::Instant>,
     thinking_block_last: Option<std::time::Instant>,
+    /// 网关常常一个 SSE chunk 给二三十个字，直接贴上去像整块刷新；
+    /// 缓冲后按帧放出，视觉上才是逐字显示。
+    animate_stream: bool,
+    pending_text: std::collections::VecDeque<char>,
     /// 每轮结束追加一行 dim 摘要（model · 时长 · tok/s · ttft），
     /// 值为 (该轮结束时的 entries 数, 文本)：渲染到锚点立即打印，
     /// 而不是全部堆在正文尾巴。重开会话（SessionOpened 重建正文）时清空。
@@ -1661,6 +1665,8 @@ impl App {
             thinking_durations: Vec::new(),
             thinking_block_started: None,
             thinking_block_last: None,
+            animate_stream: false,
+            pending_text: std::collections::VecDeque::new(),
             turn_summaries: Vec::new(),
             locale,
             statusline,
@@ -1704,8 +1710,12 @@ impl App {
     }
 
     fn handle_ui(&mut self, event: UiEvent) {
-        // 思考块计时：第一个 delta 开计时，最后一个 delta 落定时长；
-        // 任何非思考事件都会先把进行中的块关掉。
+        // 新事件到来时，上一批缓冲的正文必须落盘（轮次结束、中止、重建都算）。
+        if !matches!(&event, UiEvent::Agent(AgentEvent::AssistantText(_))) {
+            self.flush_stream_text();
+        }
+        // 一轮一次思考计时：thinking delta 与回答交错到达，不能每来一个
+        // 回答 chunk 就把计时关掉；轮次边界才收口。
         match &event {
             UiEvent::Agent(AgentEvent::Thinking(_)) => {
                 let now = std::time::Instant::now();
@@ -1714,7 +1724,11 @@ impl App {
                 }
                 self.thinking_block_last = Some(now);
             }
-            _ => self.close_thinking_block(),
+            UiEvent::Agent(AgentEvent::TurnStart { .. })
+            | UiEvent::Agent(AgentEvent::Finished { .. })
+            | UiEvent::Agent(AgentEvent::Aborted)
+            | UiEvent::TurnDone { .. } => self.close_thinking_block(),
+            _ => {}
         }
         match event {
             UiEvent::Ready {
@@ -1754,8 +1768,17 @@ impl App {
                         self.working = true;
                         self.metrics.begin_turn();
                     }
-                    AgentEvent::AssistantText(text) => self.metrics.note_text(text),
+                    AgentEvent::AssistantText(text) => {
+                        self.metrics.note_text(text);
+                        if self.animate_stream {
+                            self.pending_text.extend(text.chars());
+                        }
+                    }
                     _ => {}
+                }
+                // 逐字队列：统计照记，正文等帧循环一小段一小段放出来。
+                if self.animate_stream && matches!(event, AgentEvent::AssistantText(_)) {
+                    return;
                 }
                 self.transcript.apply(&event);
             }
@@ -1876,6 +1899,36 @@ impl App {
         hash ^= self.thinking_durations.len() as u64;
         hash = hash.wrapping_mul(PRIME);
         hash
+    }
+
+    /// 每帧放一小段缓冲字符；积压越多放得越快，避免网关一次给一大块时
+    /// 答案落后于完成。30fps 下 10 字积压 → 每帧 3 字，很快追平。
+    fn pump_stream_text(&mut self) {
+        if !self.animate_stream || self.pending_text.is_empty() {
+            return;
+        }
+        let queued = self.pending_text.len();
+        let count = (queued / 4).max(1).min(queued);
+        let mut chunk = String::new();
+        for _ in 0..count {
+            if let Some(ch) = self.pending_text.pop_front() {
+                chunk.push(ch);
+            }
+        }
+        if !chunk.is_empty() {
+            self.transcript.apply(&AgentEvent::AssistantText(chunk));
+            self.dirty = true;
+        }
+    }
+
+    /// 轮次结束 / 中止时把剩余缓冲一次写完，绝不丢字。
+    fn flush_stream_text(&mut self) {
+        if self.pending_text.is_empty() {
+            return;
+        }
+        let chunk: String = self.pending_text.drain(..).collect();
+        self.transcript.apply(&AgentEvent::AssistantText(chunk));
+        self.dirty = true;
     }
 
     fn handle_approval(&mut self, request: ApprovalRequest) {
@@ -3134,7 +3187,7 @@ impl App {
         // allocation for every keystroke is wasteful, and `text_width` already
         // measures the full string (including CJK width) correctly.
         let text: String = visible.iter().collect();
-        line.push(Span::new(text, Style::dim(crate::theme::current().dim)))
+        line.push(Span::new(text, Style::plain()))
     }
 
     /// 终端光标应该停在的位置（ANSI 1 基 row/col）。
@@ -3207,32 +3260,65 @@ impl App {
         let mut fold_rows: Vec<(usize, usize)> = Vec::new();
         let mut thinking_ordinal = 0usize;
         let mut user_row: Option<usize> = None;
-        let mut seen_any = false;
         let mut consumed = 0usize;
         let mut summary_index = 0usize;
-        let mut groups: Vec<Group> = Vec::new();
+        // 一轮 = 到下一个 User 之前的所有条目。流式 delta 的思考与回答
+        // 会交错到达，按原顺序画会把思考劈成两半、中间插进回答；先把这一
+        // 轮所有 Thinking 收成一个块放到回答前，视觉上才是"先想后答"。
+        let mut turns: Vec<Vec<Entry>> = Vec::new();
         for entry in self.transcript.entries() {
-            match entry {
-                Entry::User(text) => groups.push(Group::User(text.clone())),
-                Entry::Assistant(text) => match groups.last_mut() {
-                    Some(Group::Assistant(parts)) => parts.push(text.clone()),
-                    _ => groups.push(Group::Assistant(vec![text.clone()])),
-                },
-                Entry::Thinking(text) => match groups.last_mut() {
-                    Some(Group::Thinking(parts)) => parts.push(text.clone()),
-                    _ => groups.push(Group::Thinking(vec![text.clone()])),
-                },
-                other => groups.push(Group::Other(other.clone())),
+            if matches!(entry, Entry::User(_)) || turns.is_empty() {
+                turns.push(Vec::new());
+            }
+            turns.last_mut().expect("turn").push(entry.clone());
+        }
+        let mut groups: Vec<Group> = Vec::new();
+        for turn in turns {
+            let thinking: Vec<String> = turn
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::Thinking(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            let mut thinking_emitted = thinking.is_empty();
+            for entry in turn {
+                match entry {
+                    Entry::User(text) => {
+                        groups.push(Group::User(text));
+                        if !thinking_emitted {
+                            groups.push(Group::Thinking(thinking.clone()));
+                            thinking_emitted = true;
+                        }
+                    }
+                    Entry::Thinking(_) => {} // 已合并到本轮开头的思考块
+                    Entry::Assistant(text) => {
+                        if !thinking_emitted {
+                            groups.push(Group::Thinking(thinking.clone()));
+                            thinking_emitted = true;
+                        }
+                        match groups.last_mut() {
+                            Some(Group::Assistant(parts)) => parts.push(text),
+                            _ => groups.push(Group::Assistant(vec![text])),
+                        }
+                    }
+                    other => {
+                        if !thinking_emitted {
+                            groups.push(Group::Thinking(thinking.clone()));
+                            thinking_emitted = true;
+                        }
+                        groups.push(Group::Other(other));
+                    }
+                }
+            }
+            // 整轮只有思考（回答还在流式生成中）时也要把块画出来。
+            if !thinking_emitted {
+                groups.push(Group::Thinking(thinking));
             }
         }
         let mut lines = Vec::new();
         for group in groups {
-            // 输入/思考/回答/工具之间紧凑排布；只有上一轮结束、下一轮
-            // 的用户消息来了才空一行，把两轮分开。
-            if seen_any && matches!(&group, Group::User(_)) {
-                lines.push(Line::plain(""));
-            }
-            seen_any = true;
+            // 正文、摘要、下一轮用户消息之间都不插空行。
             consumed += match &group {
                 Group::Assistant(parts) | Group::Thinking(parts) => parts.len(),
                 _ => 1,
@@ -3255,14 +3341,17 @@ impl App {
                     let expanded = self.expand || self.expanded_thinking.contains(&ordinal);
                     let dim = Style::dim(crate::theme::current().dim);
                     let accent = Style::fg(crate::theme::current().accent);
-                    let mut header = Line::new()
-                        .push(Span::new(if expanded { "-" } else { "+" }, accent))
-                        .push(Span::new("Thought", dim));
+                    let mut header = Line::new();
                     if let Some(duration) = self.thinking_durations.get(ordinal) {
-                        header = header.push(Span::new(
-                            format!(" · {}", format_thought_duration(*duration)),
-                            dim,
-                        ));
+                        header = header
+                            .push(Span::new(if expanded { "-" } else { "+" }, accent))
+                            .push(Span::new(
+                                format!("Thought · {}", format_thought_duration(*duration)),
+                                dim,
+                            ));
+                    } else {
+                        // 还在流式思考：只写 Thinking，不把半成品摊在正文里。
+                        header = header.push(Span::new("Thinking", dim));
                     }
                     // 标题行的 body 行号＋块序号给点击展开/收起用。
                     fold_rows.push((lines.len(), ordinal));
@@ -3885,8 +3974,8 @@ pub fn run_remote(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 鼠标上报：点击折叠的思考行展开（Shift+拖拽仍可选中复制）。
-    terminal::enable_mouse();
+    // 不开鼠标上报：框选复制必须能用（?1000h 会把普通拖拽变成点击）。
+    // 思考块展开用 Ctrl+E。
 
     let locale = argent_i18n::Locale::from_env();
     let (key_tx, key_rx) = mpsc::channel();
@@ -3896,6 +3985,7 @@ pub fn run_remote(
     );
     let mut app = App::new(Vec::new(), prompts, locale, statusline, bindings)
         .with_remote(remote.clone());
+    app.animate_stream = true;
     // 状态栏由调用方给的 Ready 事件填好（远端会话没有本地模型信息）。
     let _ = &title;
     let initial_size = terminal::size();
@@ -3944,6 +4034,7 @@ pub fn run_remote(
         if app.quit {
             break;
         }
+        app.pump_stream_text();
         if changed || app.working {
             let size = terminal::size();
             let lines = app.frame(size.cols as usize, size.rows as usize);
@@ -3975,7 +4066,7 @@ pub fn run_remote(
         std::thread::sleep(Duration::from_millis(33));
     }
 
-    terminal::disable_mouse();
+    app.flush_stream_text();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     drop(guard);
@@ -4017,8 +4108,8 @@ pub fn run(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 鼠标上报：点击折叠的思考行展开（Shift+拖拽仍可选中复制）。
-    terminal::enable_mouse();
+    // 不开鼠标上报：框选复制必须能用（?1000h 会把普通拖拽变成点击）。
+    // 思考块展开用 Ctrl+E。
 
     let locale = argent_i18n::Locale::from_env();
     let statusline = config.statusline.clone();
@@ -4031,6 +4122,7 @@ pub fn run(
     let (key_tx, key_rx) = mpsc::channel();
     spawn_input(key_tx);
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
+    app.animate_stream = true;
     app.context_max = max_context_tokens;
     let initial_size = terminal::size();
     let mut last_frame: Vec<String> = Vec::new();
@@ -4093,6 +4185,7 @@ pub fn run(
         if app.quit {
             break;
         }
+        app.pump_stream_text();
         if changed || app.working || app.status.is_some() {
             let size = terminal::size();
             let lines = app.frame(size.cols as usize, size.rows as usize);
@@ -4138,7 +4231,7 @@ pub fn run(
         ..HookContext::default()
     };
     let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
-    terminal::disable_mouse();
+    app.flush_stream_text();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
@@ -4387,11 +4480,16 @@ mod tests {
 ")
         };
         let frame = stripped(&mut app);
-        assert!(frame.contains("+Thought"), "folded marker: {}", frame);
+        assert!(frame.contains("Thinking"), "live marker: {}", frame);
         assert!(!frame.contains("reasoning here"), "folded by default: {}", frame);
-        app.expand = true;
+        app.thinking_durations.push(std::time::Duration::from_millis(500));
+        app.body_cache = None;
         let frame = stripped(&mut app);
-        assert!(frame.contains("-Thought"), "global expand shows -Thought: {}", frame);
+        assert!(frame.contains("+Thought · 500ms"), "finished marker: {}", frame);
+        app.expand = true;
+        app.body_cache = None;
+        let frame = stripped(&mut app);
+        assert!(frame.contains("-Thought · 500ms"), "global expand: {}", frame);
         assert!(frame.contains("reasoning here"), "global expand shows the body: {}", frame);
     }
     #[test]
@@ -5197,7 +5295,7 @@ mod cursor_tests {
             app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n")
         };
         let collapsed = joined(&mut app);
-        assert!(collapsed.contains("+Thought"), "折叠态应只有一行 +Thought：{}", collapsed);
+        assert!(collapsed.contains("Thinking"), "流式中只显示 Thinking：{}", collapsed);
         assert!(!collapsed.contains("思考 3"), "折叠态不应露出正文：{}", collapsed);
         assert!(!app.visible_fold_rows.is_empty(), "思考标题行应被记录");
         assert!(!app.expand);
@@ -5205,12 +5303,42 @@ mod cursor_tests {
         let (row, _) = app.visible_fold_rows[0];
         app.handle_key(&worker, Key::MouseClick { row, col: 0 });
         let expanded = joined(&mut app);
-        assert!(expanded.contains("-Thought"), "点击后应展开为 -Thought：{}", expanded);
+        assert!(expanded.contains("Thinking"), "展开后仍有标题：{}", expanded);
         assert!(expanded.contains("思考 3"), "点击后正文可见：{}", expanded);
         let (row, _) = app.visible_fold_rows[0];
         app.handle_key(&worker, Key::MouseClick { row, col: 0 });
         let collapsed = joined(&mut app);
-        assert!(collapsed.contains("+Thought"), "再点一次应收起：{}", collapsed);
+        assert!(!collapsed.contains("思考 3"), "再点一次应收起：{}", collapsed);
+    }
+
+    #[test]
+    fn thinking_is_grouped_before_the_answer_of_its_turn() {
+        let mut app = app();
+        app.transcript.push_user("问题");
+        app.transcript.push_entry(Entry::Thinking("先想".to_string()));
+        app.transcript.push_entry(Entry::Assistant("回答".to_string()));
+        app.transcript.push_entry(Entry::Thinking("又想".to_string()));
+        app.expand = true;
+        let joined = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
+        let think = joined.find("Thinking").expect("one thinking header");
+        let answer = joined.find("回答").expect("answer");
+        assert!(think < answer, "思考要整体排在回答之前：{}", joined);
+        assert!(joined.contains("先想") && joined.contains("又想"), "所有思考段都在：{}", joined);
+        assert_eq!(joined.matches("Thinking").count(), 1, "思考只显示一个块");
+    }
+
+    #[test]
+    fn streamed_text_is_revealed_gradually_and_never_lost() {
+        let mut app = app();
+        app.animate_stream = true;
+        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText("你好世界".to_string())));
+        assert!(!app.frame(80, 24).iter().any(|l| strip_ansi(l).contains("你好世界")));
+        app.pump_stream_text();
+        let partial = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
+        assert!(partial.contains("你"), "第一帧应放出一些字：{}", partial);
+        app.flush_stream_text();
+        let full = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
+        assert!(full.contains("你好世界"), "flush 后全部落盘：{}", full);
     }
 
     #[test]
@@ -5228,6 +5356,7 @@ mod cursor_tests {
         app.handle_ui(UiEvent::Agent(AgentEvent::Thinking("想一个字 ".to_string())));
         std::thread::sleep(std::time::Duration::from_millis(2));
         app.handle_ui(UiEvent::Agent(AgentEvent::Thinking("再想一个字".to_string())));
+        app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 1 }));
         app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText("答案".to_string())));
         let joined = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("Thought · "), "思考块应显示 · 时长：{}", joined);
