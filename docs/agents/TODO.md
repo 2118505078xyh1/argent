@@ -1,6 +1,6 @@
 # argent 下一步 TODO
 
-基准：argent 0.2.0，HEAD `5588803`；对照结论见 [argent-comparison.md](argent-comparison.md)。
+基准：argent 0.2.0，HEAD `c7ff80d`；对照结论见 [argent-comparison.md](argent-comparison.md)。
 
 图例：`[ ]` 待做，`[~]` 进行中，`[x]` 完成。优先级：P0 立刻、P1 近期、P2 战略/大工程。
 
@@ -30,7 +30,8 @@
   - 每次改 TUI 先跑这组，避免“修一个坏一个”。
 - [x] **输入区编辑能力**
   - ←/→/Home/End/Delete；Ctrl+A/K/U/W；Ctrl+←/→ 按词移动；Ctrl+Z/Ctrl+Y 撤销/重做（100 步）。
-  - 仍待补：多行折行编辑、鼠标定位光标。
+  - 多行软折行（最多 4 行，窗口跟随光标，帧高不变）。
+  - 仍待补：鼠标定位光标。
 - [ ] **`/session` 面板继续补齐**
   - 显示 model/thinking/cwd/session id、最后错误、缓存命中、上下文占用。
   - 操作项与 CLI 能力对齐：rename/tree/compact/export/copy path。
@@ -43,10 +44,6 @@
   - 测试：`the_channel_sink_times_the_first_stream_chunk`、usage ledger 断言。
 - [x] **P1：无头/RPC/ACP 也记 ttft**
   - 共享 `argent_agent::TtftClock`；一次性/REPL、`--json-lines`、RPC、ACP、engine 全部在首个 Thinking/AssistantText chunk 计时。
-- [ ] **P1：prompt cache warmer**
-  - 空闲接近 TTL 时用 `max_tokens=1` 重发最后请求保活；默认关闭，env 开关。
-  - 经济性门槛：预计节省 > 成本才 warm；记录 warm 次数/成本。
-  - 参考：pi cache-warmer、OpenCode warming。
 - [ ] **P1：缓存诊断**
   - 每次 miss 归因：idle 超时 / 模型切换 / 前缀漂移 / provider 不支持。
   - `/cost` 或 `argent usage --explain` 展示。
@@ -61,7 +58,8 @@
   - TUI `/hooks`：信任状态、事件、matcher、timeout、async、命令，只读面板。
   - 修了 `--workspace` 未被 `cwd_from` 识别的 bug。
 - [x] **prompt cache warmer**
-  - 已有实现（`cacheWarming: "streaming"`），本次补 `ARGENT_CACHE_WARMING` 环境变量覆盖，方便单次实验。
+  - 已有实现（`cacheWarming: "streaming"`），支持 `ARGENT_CACHE_WARMING` 环境变量覆盖。
+  - 仍待补：TTL 前主动保活、经济性门槛、warm 次数/成本记录。
 - [ ] **Skills/commands 发现可视**
   - TUI `/skills`、`/commands` 列出名称、来源、优先级、冲突。
   - 参考：ZCode 的 settings/skills 管理。
@@ -95,8 +93,8 @@
 ## 已完成的近期项（存档）
 
 - [x] pi 风格 Markdown 语义配色（标题/链接/行内码/代码块/列表）。
-- [ ] 思考块整块可点（需要 TUI 接管鼠标；当前让位给终端原生选择，点击暂不可用，`Ctrl+E` 仍可全局切换）。
-- [x] 鼠标拖选复制（交给终端原生选择 + 右键复制/粘贴；TUI 不再请求鼠标上报）。
+- [x] 思考块整块可点（原地按下松开切换展开/收起；`Ctrl+E` 全局切换）。
+- [x] 鼠标拖选复制（TUI 自管拖选，松开写剪贴板；点击与拖选不冲突）。
 - [x] 会话操作二级菜单（Open/Rename/Delete/Branch）。
 - [x] `/session` 信息面板 + 操作菜单（pi 对齐）。
 - [x] `/tools` 列表可导航 + 详情页。
@@ -108,9 +106,8 @@
 
 ## 执行顺序建议
 
-1. 本轮：cache missed 统计。
-2. 已完成：会话选择器搜索/过滤（P0 手感）+ TUI TTFT 记账。
-3. 下一轮：无头/RPC/ACP TTFT + TUI 回归清单。
-4. 再下一轮：cache warmer（默认关）+ 缓存归因。
-5. 之后：SDK / hooks 诊断 / skills 可视。
-6. 战略项等前五项稳定后再评估。
+1. 已完成：cache missed 统计、选择器搜索、TTFT 全入口、hooks 诊断/面板、输入折行。
+2. 下一轮：TUI 回归 snapshot 测试（先稳住现有手感）。
+3. 再下一轮：缓存归因（idle/切换/前缀漂移）→ cache warmer 保活。
+4. 之后：SDK、skills/commands 可视、插件市场、主题系统。
+5. 战略项（agent teams/宿主/远程/发布）等前四项稳定后再评估。
