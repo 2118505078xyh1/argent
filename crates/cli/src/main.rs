@@ -340,6 +340,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
             24,
         );
         std::env::set_var("ARGENT_CACHE_KEY", key);
+        std::env::set_var("ARGENT_CACHE_KEY_AUTO", "1");
     }
 
     // The session file is a tree: every entry names its parent, so a fork

@@ -64,6 +64,8 @@ pub struct OpenAiConfig {
     pub cache_key: Option<String>,
     /// `prompt_cache_retention`；`ARGENT_CACHE_RETENTION=off` 时不发送。
     pub cache_retention: Option<String>,
+    /// 键来自环境变量时，每次请求重新读取：切会话能立刻换 cache key。
+    cache_key_dynamic: bool,
 }
 
 impl OpenAiConfig {
@@ -81,6 +83,7 @@ impl OpenAiConfig {
                 "" | "0" | "off" | "false" | "none"
             )
         };
+        let cache_key_dynamic = std::env::var_os("ARGENT_CACHE_KEY").is_some();
         let cache_key = std::env::var("ARGENT_CACHE_KEY")
             .ok()
             .map(|value| value.trim().to_string())
@@ -100,6 +103,7 @@ impl OpenAiConfig {
             models: Vec::new(),
             cache_key,
             cache_retention,
+            cache_key_dynamic,
         }
     }
 
@@ -132,10 +136,26 @@ impl OpenAiConfig {
     /// Pin requests from one session to one provider-side cache shard.
     pub fn with_cache_key(mut self, key: impl Into<String>) -> OpenAiConfig {
         self.cache_key = Some(key.into());
+        self.cache_key_dynamic = false;
         if self.cache_retention.is_none() {
             self.cache_retention = Some("24h".to_string());
         }
         self
+    }
+
+    fn current_cache_key(&self) -> Option<String> {
+        if !self.cache_key_dynamic {
+            return self.cache_key.clone();
+        }
+        std::env::var("ARGENT_CACHE_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| {
+                !matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "" | "0" | "off" | "false" | "none"
+                )
+            })
     }
 
     fn chat_url(&self) -> String {
@@ -149,7 +169,7 @@ impl OpenAiConfig {
     /// Routing gateways use one of these names to keep a session on the same
     /// backend. Sending all three is harmless and covers the common ones.
     fn affinity_headers(&self) -> Vec<(&'static str, String)> {
-        match &self.cache_key {
+        match self.current_cache_key() {
             None => Vec::new(),
             Some(key) => vec![
                 ("x-session-id", key.clone()),
@@ -663,7 +683,8 @@ impl Provider for OpenAiProvider {
         request: &ChatRequest,
     ) -> Result<Box<dyn Iterator<Item = Result<StreamEvent>> + Send>> {
         let mut body = OpenAiProvider::build_body_for(request, self.config.stream_usage, &self.config.models);
-        if let Some(key) = &self.config.cache_key {
+        let cache_key = self.config.current_cache_key();
+        if let Some(key) = &cache_key {
             // vLLM / routing gateways use this to shard the prefix cache by
             // session; pure llama.cpp ignores unknown fields. Both are fine.
             body.set("prompt_cache_key", Json::string(key.clone()));
@@ -986,6 +1007,22 @@ mod tests {
     use crate::message::{Message, MessageCache};
     use crate::provider::ChatRequest;
     use std::io::{BufRead, Write};
+
+    #[test]
+    fn session_key_follows_the_current_session() {
+        let previous = std::env::var("ARGENT_CACHE_KEY").ok();
+        std::env::set_var("ARGENT_CACHE_KEY", "sess-a");
+        let provider = OpenAiProvider::new(OpenAiConfig::new("http://127.0.0.1:1/v1"));
+        assert_eq!(provider.config.current_cache_key().as_deref(), Some("sess-a"));
+        std::env::set_var("ARGENT_CACHE_KEY", "sess-b");
+        assert_eq!(provider.config.current_cache_key().as_deref(), Some("sess-b"));
+        std::env::set_var("ARGENT_CACHE_KEY", "off");
+        assert_eq!(provider.config.current_cache_key(), None);
+        match previous {
+            Some(value) => std::env::set_var("ARGENT_CACHE_KEY", value),
+            None => std::env::remove_var("ARGENT_CACHE_KEY"),
+        }
+    }
 
     #[test]
     fn session_key_goes_into_body_and_affinity_headers() {

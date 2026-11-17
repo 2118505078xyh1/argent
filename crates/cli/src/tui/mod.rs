@@ -22,7 +22,7 @@ pub(crate) const TOOL_MARK: &str = "● ";
 pub(crate) const USER_MARK: &str = "› ";
 /// 用户消息块：中蓝底（Fixed(25)，#005faf）配白字，一整条铺满行宽。
 pub(crate) const USER_FG: argent_core::screen::Color = argent_core::screen::Color::Fixed(255);
-pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(25);
+pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(17);
 fn user_style() -> Style {
     Style::fg(USER_FG).with_bg(USER_BG)
 }
@@ -725,6 +725,7 @@ assistant: {}", first, answer);
                                 session.close();
                                 session = opened;
                                 checkpoints.retarget(&path);
+                                refresh_session_cache_key(&path);
                                 argent_session::controller::clear(&mut agent);
                                 if previous_empty {
                                     let _ = std::fs::remove_file(&previous);
@@ -755,6 +756,7 @@ assistant: {}", first, answer);
                         session.close();
                         session = opened;
                         checkpoints.retarget(&path);
+                        refresh_session_cache_key(&path);
                         let messages = session.messages();
                         argent_session::controller::open(&mut agent, messages.clone());
                         let entries = Transcript::from_messages(&messages).entries().to_vec();
@@ -1474,6 +1476,16 @@ mod tree_tests {
     }
 }
 
+/// /resume 切到另一个会话时，缓存亲和键也跟着换，避免和别的会话
+/// 共用一份 KV 前缀（pi 也是按 session 文件做 cache key）。
+fn refresh_session_cache_key(path: &std::path::Path) {
+    if std::env::var_os("ARGENT_CACHE_KEY_AUTO").is_none() {
+        return;
+    }
+    let key = argent_core::hash::short_hash(path.to_string_lossy().as_bytes(), 24);
+    std::env::set_var("ARGENT_CACHE_KEY", key);
+}
+
 fn session_rows(index: &SessionIndex) -> Vec<SessionRow> {
     index
         .list()
@@ -1514,6 +1526,11 @@ enum Overlay {
     Help,
     Sessions {
         index: usize,
+    },
+    /// 会话的二级操作菜单（打开 / 改名 / 删除 / 分支树）。
+    SessionActions {
+        index: usize,
+        selected: usize,
     },
     Tree {
         index: usize,
@@ -2089,8 +2106,17 @@ impl App {
                         self.overlay = Some(Overlay::Sessions { index });
                     }
                     Key::Enter => {
+                        if !self.sessions.is_empty() {
+                            self.overlay = Some(Overlay::SessionActions {
+                                index,
+                                selected: 0,
+                            });
+                        }
+                    }
+                    Key::Char('o') => {
                         if let Some(row) = self.sessions.get(index) {
                             let _ = worker.commands.send(Command::OpenSession(row.path.clone()));
+                            self.overlay = None;
                         }
                     }
                     Key::CtrlD => {
@@ -2123,6 +2149,60 @@ impl App {
                     }
                     Key::Esc => {}
                     _ => self.overlay = Some(Overlay::Sessions { index }),
+                },
+                Overlay::SessionActions { index, mut selected } => match key {
+                    Key::Up => {
+                        selected = selected.saturating_sub(1);
+                        self.overlay = Some(Overlay::SessionActions { index, selected });
+                    }
+                    Key::Down => {
+                        selected = (selected + 1).min(3);
+                        self.overlay = Some(Overlay::SessionActions { index, selected });
+                    }
+                    Key::Esc => self.overlay = Some(Overlay::Sessions { index }),
+                    Key::Enter => match selected {
+                        0 => {
+                            if let Some(row) = self.sessions.get(index) {
+                                let _ =
+                                    worker.commands.send(Command::OpenSession(row.path.clone()));
+                            }
+                            self.overlay = None;
+                        }
+                        1 => {
+                            if let Some(row) = self.sessions.get(index) {
+                                self.overlay = Some(Overlay::RenameSession {
+                                    index,
+                                    input: row.title.clone(),
+                                });
+                            }
+                        }
+                        2 => {
+                            if self.session_delete_pending == Some(index) {
+                                if let Some(row) = self.sessions.get(index) {
+                                    let _ = worker
+                                        .commands
+                                        .send(Command::DeleteSession(row.path.clone()));
+                                }
+                                self.session_delete_pending = None;
+                                self.overlay = None;
+                            } else {
+                                self.session_delete_pending = Some(index);
+                                if let Some(row) = self.sessions.get(index) {
+                                    self.set_status(format!(
+                                        "press enter again to delete \"{}\"",
+                                        row.title
+                                    ));
+                                }
+                                self.overlay = Some(Overlay::SessionActions { index, selected });
+                            }
+                        }
+                        3 => {
+                            let _ = worker.commands.send(Command::Tree);
+                            self.overlay = None;
+                        }
+                        _ => {}
+                    },
+                    _ => self.overlay = Some(Overlay::SessionActions { index, selected }),
                 },
                 Overlay::RenameSession { index, mut input } => match key {
                     Key::Enter => {
@@ -2406,6 +2486,7 @@ impl App {
             ("compact", "compact the conversation now"),
             ("rewind", "undo the last run's file changes"),
             ("resume", "open a stored session"),
+            ("session", "manage stored sessions (↑↓ + enter)"),
             ("new", "start a new session"),
             ("cost", "show usage, cost and context for this session"),
             ("plan", "toggle plan mode"),
@@ -3616,13 +3697,30 @@ impl App {
                     .collect();
                 content.push((String::new(), String::new()));
                 content.push((
-                    "enter open · ctrl+r rename · ctrl+d delete · esc close".to_string(),
+                    "enter actions · o open · ↑↓ move · ctrl+r rename · ctrl+d delete · esc close".to_string(),
                     String::new(),
                 ));
                 (
                     argent_i18n::t(self.locale, "tui.sessions.title").to_string(),
                     content,
                 )
+            }
+            Overlay::SessionActions { index, selected: _ } => {
+                let title = self
+                    .sessions
+                    .get(*index)
+                    .map(|row| row.title.clone())
+                    .unwrap_or_default();
+                let mut content: Vec<(String, String)> = ["Open / resume", "Rename", "Delete", "Browse branches"]
+                    .iter()
+                    .map(|action| (action.to_string(), String::new()))
+                    .collect();
+                content.push((String::new(), String::new()));
+                content.push((
+                    "↑↓ select · enter confirm · esc back".to_string(),
+                    String::new(),
+                ));
+                (format!("{} · actions", title), content)
             }
             Overlay::RenameSession { index, input } => {
                 let current = self
@@ -4075,6 +4173,7 @@ fn boxed_overlay(
         | Some(Overlay::Models { index })
         | Some(Overlay::Thinking { index })
         | Some(Overlay::Tools { index }) => Some(*index),
+        Some(Overlay::SessionActions { selected, .. }) => Some(*selected),
         _ => None,
     };
     for (position, (left, right)) in content.iter().enumerate() {
@@ -5527,6 +5626,62 @@ mod cursor_tests {
         let frame = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("
 ");
         assert!(frame.contains("cache 0%"), "冷启动也要显示 0%：{}", frame);
+    }
+
+    #[test]
+    fn slash_session_shows_a_navigable_list_and_actions_menu() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::En,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        let (command_tx, command_rx) = std::sync::mpsc::channel();
+        let (_event_tx, event_rx) = std::sync::mpsc::channel();
+        let worker = Worker {
+            commands: command_tx,
+            events: event_rx,
+            abort: argent_agent::AbortHandle::new(),
+            steering: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::VecDeque::new(),
+            )),
+        };
+        app.input = "/session".chars().collect();
+        assert!(
+            app.palette_items().iter().any(|item| item.name == "session"),
+            "/session 必须出现在命令提示里"
+        );
+        app.submit(&worker);
+        assert!(matches!(app.overlay, Some(Overlay::Sessions { index: 0 })));
+        assert!(matches!(command_rx.try_recv(), Ok(Command::ListSessions)));
+
+        app.sessions = vec![
+            SessionRow {
+                path: std::path::PathBuf::from("/tmp/one.jsonl"),
+                title: "one".to_string(),
+                updated: "now".to_string(),
+            },
+            SessionRow {
+                path: std::path::PathBuf::from("/tmp/two.jsonl"),
+                title: "two".to_string(),
+                updated: "now".to_string(),
+            },
+        ];
+        app.handle_key(&worker, Key::Down);
+        assert!(matches!(app.overlay, Some(Overlay::Sessions { index: 1 })));
+        app.handle_key(&worker, Key::Enter);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::SessionActions { index: 1, selected: 0 })
+        ));
+        app.handle_key(&worker, Key::Down);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::SessionActions { selected: 1, .. })
+        ));
+        app.handle_key(&worker, Key::Enter);
+        assert!(matches!(app.overlay, Some(Overlay::RenameSession { index: 1, .. })));
     }
 
     #[test]
