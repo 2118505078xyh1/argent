@@ -163,6 +163,12 @@ pub enum UiEvent {
         path: String,
         entries: Vec<Entry>,
     },
+    /// 只改会话标题（首条消息的自动改名）：不重建 transcript，
+    /// 否则刚 push 进去的用户消息会被空条目顶掉。
+    SessionRetitled {
+        title: String,
+        path: String,
+    },
     Models(Vec<String>),
     Tools(Vec<(String, String)>),
     Notice(String),
@@ -400,10 +406,9 @@ pub fn spawn(
                             match SessionContext::open(path.clone()) {
                                 Ok(opened) => {
                                     session = opened;
-                                    let _ = event_tx.send(UiEvent::SessionOpened {
+                                    let _ = event_tx.send(UiEvent::SessionRetitled {
                                         title: session.title(),
                                         path: path.display().to_string(),
-                                        entries: Vec::new(),
                                     });
                                     let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
                                 }
@@ -1740,6 +1745,12 @@ impl App {
             }
             UiEvent::Sessions(rows) => self.sessions = rows,
             UiEvent::TreeRows(rows) => self.tree_rows = rows,
+            UiEvent::SessionRetitled { title, path } => {
+                if let Some(ready) = &mut self.ready {
+                    ready.session = title;
+                    ready.session_path = path;
+                }
+            }
             UiEvent::SessionOpened {
                 title,
                 path,
@@ -5017,6 +5028,26 @@ mod cursor_tests {
         assert!(app.expand);
         app.handle_key(&worker, Key::MouseClick { row: row, col: 0 });
         assert!(!app.expand);
+    }
+
+    #[test]
+    fn the_first_message_survives_the_auto_rename() {
+        // 首条消息触发改名：旧事件带空 entries，TUI 整体替换 transcript，
+        // 于是用户刚发的消息就这么不见了。
+        let mut app = app();
+        app.transcript.push_user("你好");
+        app.handle_ui(UiEvent::SessionRetitled {
+            title: "你好".to_string(),
+            path: "/tmp/renamed.jsonl".to_string(),
+        });
+        let plain = app.frame(80, 24).join("
+");
+        let stripped: String = strip_ansi(&plain);
+        assert!(stripped.contains("你好"), "user entry must survive: {stripped}");
+        assert!(
+            app.transcript.entries().iter().any(|e| matches!(e, Entry::User(t) if t == "你好")),
+            "transcript keeps the user entry"
+        );
     }
 
     #[test]
