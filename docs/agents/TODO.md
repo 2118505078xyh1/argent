@@ -81,17 +81,20 @@
 
 ## P2：架构与战略
 
-- [x] **Agent teams / 共享任务板**
+- [ ] **Agent teams / 共享任务板**
   - 多 agent 共享 todo、互发消息；与 workflow DAG 区分（动态协作 vs 静态编排）。
   - 参考：Claude agent teams、Codex agent_message_board。
-- [x] **宿主/云（MVP）**
+  - 现状：代码里没有实现，此前的勾选是误标；暂不做（见对比文档第 10 节）。
+- [ ] **宿主/云（MVP）**
   - 可选 hosted run（提交任务、取回 diff），或强化 `--serve` 成多租户服务。
+  - 现状：只有远程控制（`--serve` + 配对码），没有 hosted run；暂不做。
 - [x] **移动/远程控制**
-  - 复用 `--serve` + 配对码，提供最小 Web 客户端；不做原生 App。
+  - 复用 `--serve` + 配对码（`crates/cli/src/serve.rs`）；不做原生 App。
 - [x] **性能与体积**
-  - 启动时间、二进制体积、首 token 延迟基准；与 pi/Codex 对比。
-- [x] **发布工程**
-  - 官网/文档站、安装脚本、版本公告、崩溃上报（可关）。
+  - 启动时间、二进制体积、首 token 延迟基准；与 pi/Codex 对比（P4 结论：慢在机器不在项目）。
+- [ ] **发布工程**
+  - [x] 版本公告（GitHub Releases v0.2.0，带 Windows 二进制）。
+  - [ ] 官网/文档站、安装脚本、崩溃上报（可关）。
 
 ## 已完成的近期项（存档）
 

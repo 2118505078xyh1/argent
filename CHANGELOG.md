@@ -8,10 +8,16 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 - **Mouse caret placement in the input area.** A press inside the input
   rows moves the cursor to the clicked cell (CJK cells included); release
   no longer leaks into transcript selection, copy or thinking toggles.
+  Dragging inside the input promotes to an ordinary selection — highlight
+  and copy reuse the transcript machinery.
 - **Cache-warm spend is in the ledger.** The `cacheWarming` keep-alive
   request is billed by the provider but was invisible in the usage
   totals; its tokens now fold into `usage()` (so `usage.jsonl` and cost
-  show them) and `warm_requests()` counts them separately.
+  show them) and `warm_requests()` counts them separately. `argent
+  usage` shows `· N warm`, the JSON carries `warm_requests`, and the
+  `/session` panel appends the count to the Cached line.
+- Telemetry tests no longer share one PID-keyed temp directory (two
+  tests raced each other's `remove_dir_all` and failed randomly).
 
 ## 0.2.0 — 2026-11-17
 

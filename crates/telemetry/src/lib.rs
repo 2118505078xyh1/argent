@@ -189,7 +189,12 @@ mod tests {
 
     #[test]
     fn disabled_writes_nothing() {
-        let dir = std::env::temp_dir().join(format!("argent-telemetry-{}", std::process::id()));
+        // 每个测试独占一个目录：两个测试并行共用同名目录时，
+        // 一边的 remove_dir_all 会删掉另一边刚写的文件。
+        let dir = std::env::temp_dir().join(format!(
+            "argent-telemetry-disabled-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let telemetry = Telemetry::at(dir.join("events.jsonl"), dir.join("crash.log"), false);
         telemetry.record("test", Json::obj()).unwrap();
@@ -200,7 +205,10 @@ mod tests {
 
     #[test]
     fn enabled_appends_events_and_crashes() {
-        let dir = std::env::temp_dir().join(format!("argent-telemetry-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "argent-telemetry-enabled-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let telemetry = Telemetry::at(dir.join("events.jsonl"), dir.join("crash.log"), true);
         telemetry.record("run", Json::obj()).unwrap();

@@ -1,6 +1,6 @@
 # argent 与 pi / Codex / Claude Code / OpenCode / ZCode 对比
 
-- argent 版本：**0.2.0**（本机 `D:/code/mpi/argent`，HEAD `5588803`）
+- argent 版本：**0.2.0**（本机 `D:/code/mpi/argent`，基准 tag `v0.2.0`）
 - 对照版本：pi 1.5.2、Codex CLI 0.169.0、Claude Code 2.1.325、OpenCode 2.3.0、ZCode CLI 0.17.1 / GUI 3.18.2
 - 判定：● 原生完整支持；◐ 部分/需扩展/实验性；○ 无内建
 
@@ -107,21 +107,20 @@
 
 ## 9. argent 的主要差距
 
+0.2.0 后已补齐并从本表移除：会话选择器搜索/排序/scope、缓存 miss 归因
+（`usage --explain`）、prompt cache warmer（含 warm 账本）、hooks 诊断与
+面板、TypeScript SDK（`sdk/typescript`）、远程控制（`--serve` + 配对码）。
+
 | 差距 | 对比对象 | 影响 | 优先级 |
 | --- | --- | --- | --- |
-| 选择器无搜索/排序/scope | pi/Claude/OpenCode | 会话多时难找 | P0 |
-| 无 hosted cloud / 移动端 | Codex/Claude/ZCode | 跨设备、云端长任务缺失 | P2（战略） |
-| 无公开 TS/Python SDK | pi/Claude/OpenCode | 生态嵌入成本高 | P1 |
-| 无 agent teams / 共享任务板 | Claude/Codex | 多 agent 协作弱于 workflow | P2 |
-| 缓存 miss 归因不完整 | pi/OpenCode | 难判断缓存浪费 | P0（本轮做） |
-| 无 prompt cache warmer | pi/OpenCode | 长空闲后缓存失效 | P1 |
-| Hooks UI/诊断弱 | Claude/ZCode | 配错难排查 | P1 |
-| 主题/插件市场生态小 | 全部 | 发现与复用不足 | P2 |
-| TUI 细节（复制、展开、菜单） | 全部 | 日常手感 | P0（持续） |
-| 文档/官网/发布渠道 | 全部 | 上手成本 | P1 |
+| hosted run / 云端长任务 | Codex/Claude/ZCode | 跨设备接力缺失；远程控制已有 | P2（战略，暂不做） |
+| agent teams / 共享任务板 | Claude/Codex | 动态多 agent 协作弱于 workflow 静态编排 | P2 |
+| 生态规模（插件/主题内容） | 全部 | 机制齐全，第三方内容少 | P2 |
+| 官网/文档站 | 全部 | 上手成本；GitHub Releases 已带二进制 | P1 |
+| TUI 手感打磨 | 全部 | 鼠标定位/拖选已补，属持续项 | P0（持续） |
 
 ## 10. 结论
 
 - **能力覆盖**：argent 已经不是“缺功能的半成品”，而是“功能很多、产品化与生态不足”的形态。与 pi 最接近（本地优先、扩展驱动）；比 Codex/Claude 少了云和生态，比 OpenCode 少了共享服务和 Web/Desktop 成熟度，比 ZCode 少了 GUI 打磨与模型计划整合。
-- **近期最值得做**：会话选择器搜索、缓存 miss 统计与 warmer、hooks 诊断、SDK、TUI 手感。
+- **近期最值得做**：官网/文档站、TUI 手感打磨（持续）、生态内容积累。
 - **不建议现在做**：云托管、移动端、agent teams——投入大且与“本地单二进制”定位冲突，先用 workflow/serve 组合替代。
