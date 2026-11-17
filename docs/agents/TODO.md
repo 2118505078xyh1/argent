@@ -24,7 +24,8 @@
   - 输入逐字过滤标题 + 文件名 + cwd；`Tab` 切当前目录/全部；`Ctrl+S` 切最近/名称。
   - 空结果显示提示；`↑↓` 在过滤结果内移动。
   - 测试：`the_session_picker_filters_scopes_and_sorts`。
-  - 仍可补：搜索词高亮。
+  - [x] 搜索词高亮：`highlight_spans` 大小写不敏感命中渲染 accent+bold
+    （`search_hits_are_highlighted_in_the_session_picker`）。
 - [x] **TUI 回归清单自动化**
   - 用户块主题底色、思考块展开/收起、摘要行、复制提示已有覆盖；本轮补用户块 ANSI 快照、
     `/session` 面板、skills/commands 面板快照。
