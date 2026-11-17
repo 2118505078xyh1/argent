@@ -21,7 +21,27 @@ pub(crate) const TOOL_MARK: &str = "● ";
 pub(crate) const USER_MARK: &str = "› ";
 
 /// `/session` 信息面板里，操作项从第几行开始。
+mod events;
+mod model;
+mod render;
+mod run;
+mod session;
+mod worker;
+
+pub use events::{ApprovalRequest, Command, RemoteLink, UiEvent};
+pub use model::{SessionRow, TreeRow};
+use model::{SessionScope, SessionSort};
+pub use run::{run, run_remote, transcript_plain};
+pub use worker::{spawn, Worker};
+
+use model::*;
+use render::*;
+use session::*;
+pub(crate) use worker::run_hook_event;
+
 const SESSION_INFO_ROWS: usize = 8;
+/// 正文最大宽度。超宽终端上给两侧留白，一行 200 列读起来很累。
+const MAX_BODY_WIDTH: usize = 120;
 /// 用户消息块：前景/底色都取自主题，一整条铺满行宽。
 ///
 /// 不能用终端默认前景：浅色主题下默认前景是黑的，铺在深色块上几乎
@@ -51,1681 +71,7 @@ use argent_ui_core::{Entry, Metrics, NoticeKind, Transcript};
 
 use crate::session_ctx::SessionContext;
 
-/// One session row in the picker.
-#[derive(Debug, Clone)]
 /// One line of the session-tree overlay.
-pub struct TreeRow {
-    pub id: String,
-    /// Indentation depth: distance from the root.
-    pub depth: usize,
-    /// One-line summary of the payload.
-    pub label: String,
-    /// Whether the node sits on the currently active path.
-    pub on_path: bool,
-    /// Whether the node is the active leaf.
-    pub leaf: bool,
-    /// Whether the node has more than one child.
-    pub branch: bool,
-}
-
-pub struct SessionRow {
-    pub path: PathBuf,
-    pub title: String,
-    pub cwd: String,
-    pub updated: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SessionScope {
-    Current,
-    All,
-}
-
-impl SessionScope {
-    fn toggle(self) -> SessionScope {
-        match self {
-            SessionScope::Current => SessionScope::All,
-            SessionScope::All => SessionScope::Current,
-        }
-    }
-
-    fn label(self, locale: argent_i18n::Locale) -> &'static str {
-        match self {
-            SessionScope::Current => argent_i18n::t(locale, "tui.sessions.scope_current"),
-            SessionScope::All => argent_i18n::t(locale, "tui.sessions.scope_all"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SessionSort {
-    Recent,
-    Name,
-}
-
-impl SessionSort {
-    fn toggle(self) -> SessionSort {
-        match self {
-            SessionSort::Recent => SessionSort::Name,
-            SessionSort::Name => SessionSort::Recent,
-        }
-    }
-
-    fn label(self, locale: argent_i18n::Locale) -> &'static str {
-        match self {
-            SessionSort::Recent => argent_i18n::t(locale, "tui.sessions.sort_recent"),
-            SessionSort::Name => argent_i18n::t(locale, "tui.sessions.sort_name"),
-        }
-    }
-}
-
-/// A request from the agent thread for a tool decision.
-/// The bash command prefix an approval applies to: two words for
-/// subcommand-driven programs, one word otherwise.
-fn command_prefix_of(command: &str) -> String {
-    let words: Vec<&str> = command.split_whitespace().collect();
-    if words.is_empty() {
-        return String::new();
-    }
-    let program = words[0].trim_matches('"');
-    let multi = matches!(
-        program,
-        "git" | "cargo" | "npm" | "pnpm" | "yarn" | "pip" | "docker" | "kubectl" | "make"
-    );
-    if words.len() >= 2 && multi {
-        format!("{} {}", words[0], words[1])
-    } else {
-        words[0].to_string()
-    }
-}
-
-pub struct ApprovalRequest {
-    pub tool: String,
-    pub args: String,
-    /// For bash: the raw command, so the dialog can offer a
-    /// "this command prefix" choice. `None` for every other tool.
-    pub command: Option<String>,
-    pub reply: Sender<bool>,
-}
-
-/// What the UI asks the worker to do.
-pub enum Command {
-    /// A user prompt, optionally carrying image attachments (`@path` on an
-    /// image file becomes a `Content::Image` data URL).
-    Prompt {
-        text: String,
-        images: Vec<argent_ai::Content>,
-    },
-    Shell(String),
-    SetModel(String),
-    SetThinking(String),
-    NewSession,
-    Fork,
-    Rename(String),
-    OpenSession(PathBuf),
-    ListSessions,
-    ListModels,
-    ListTools,
-    Compact,
-    /// 把最后一条助手回答放进系统剪贴板。
-    CopyLast,
-    /// 报告本会话的花费与上下文占用。
-    Cost,
-    /// 打开会话树导航。
-    Tree,
-    /// 把活跃分支切到某个节点。
-    CheckoutNode(String),
-    /// 从某个节点开新分支（分叉点的路径成为历史）。
-    ForkNode(String),
-    /// 沿当前活跃路径数到第 n 条消息（1 基）分叉。
-    ForkAtMessage(usize),
-    /// 导入外部 JSONL 会话（保留 id/cwd）。
-    Import(String),
-    /// 删除一个会话文件。
-    DeleteSession(std::path::PathBuf),
-    /// 重命名一个会话。
-    RenameSession(std::path::PathBuf, String),
-    /// 回滚最近 N 次运行的 write/edit 改动。
-    Rewind {
-        steps: u64,
-    },
-    ClearHistory,
-    Shutdown,
-}
-
-/// What the worker tells the UI.
-pub enum UiEvent {
-    Ready {
-        model: String,
-        thinking: String,
-        provider: String,
-        protocol: String,
-        cwd: String,
-        session: String,
-        session_path: String,
-    },
-    Loaded(Vec<Entry>),
-    Agent(AgentEvent),
-    TurnDone {
-        reason: FinishReason,
-        usage: Usage,
-        requests: u64,
-        context_used: usize,
-        cost: Option<f64>,
-    },
-    Sessions(Vec<SessionRow>),
-    TreeRows(Vec<TreeRow>),
-    SessionOpened {
-        title: String,
-        path: String,
-        entries: Vec<Entry>,
-    },
-    /// 只改会话标题（首条消息的自动改名）：不重建 transcript，
-    /// 否则刚 push 进去的用户消息会被空条目顶掉。
-    SessionRetitled {
-        title: String,
-        path: String,
-    },
-    Models(Vec<String>),
-    Tools(Vec<(String, String)>),
-    Notice(String),
-    Error(String),
-}
-
-/// A live link to a background session served over HTTP.
-///
-/// The TUI can drive a session it does not own: the same input box, the same
-/// transcript rendering, the same keys -- only the transport differs.
-#[derive(Clone)]
-pub struct RemoteLink {
-    pub base: String,
-    pub auth: String,
-    /// Whether the remote session is running a turn right now.
-    pub running: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl RemoteLink {
-    pub fn new(base: impl Into<String>, auth: impl Into<String>) -> RemoteLink {
-        RemoteLink {
-            base: base.into(),
-            auth: auth.into(),
-            running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
-
-    /// Send a line: into the running turn, or as a new request.
-    fn send_text(&self, text: &str) -> Result<(), String> {
-        let running = self.running.load(std::sync::atomic::Ordering::SeqCst);
-        let path = if running { "/v1/steer" } else { "/v1/prompt" };
-        let mut body = argent_core::json::Json::obj();
-        body.set("text", argent_core::json::Json::string(text.to_string()));
-        self.post(path, &body.dump())
-    }
-
-    /// Stop the turn in progress.
-    fn abort_run(&self) -> Result<(), String> {
-        self.post("/v1/abort", "{}")
-    }
-
-    fn post(&self, path: &str, body: &str) -> Result<(), String> {
-        let request =
-            argent_core::http::Request::post_json(&format!("{}{}", self.base, path), body)
-                .header("authorization", &self.auth);
-        let response = argent_core::http::send(&request)
-            .map_err(|error| format!("{} failed: {}", path, error))?;
-        if !response.is_success() {
-            return Err(format!("{} returned HTTP {}", path, response.status));
-        }
-        Ok(())
-    }
-}
-
-/// The UI's handle to the worker.
-/// A compaction coroutine running on the worker thread, interleaved with
-/// the main conversation at the main run's stream-yield points.
-#[derive(Default)]
-struct CompactionState {
-    /// `None` while nothing is being compacted.
-    coroutine: Option<corosensei::Coroutine<(), (), String>>,
-    /// History revision the draft was computed on.
-    revision: u64,
-    /// A finished upgrade, awaiting the end of the main run.
-    finished: Option<String>,
-}
-
-impl CompactionState {
-    /// Advance the coroutine one scheduling step; store the result.
-    fn advance(&mut self) {
-        let Some(coroutine) = self.coroutine.as_mut() else {
-            return;
-        };
-        match coroutine.resume(()) {
-            corosensei::CoroutineResult::Yield(()) => {}
-            corosensei::CoroutineResult::Return(better) => {
-                self.finished = Some(better);
-                self.coroutine = None;
-            }
-        }
-    }
-
-    /// Write a finished summary back, but only if the conversation has not
-    /// moved on since the draft was computed.
-    fn apply_if_ready(
-        &mut self,
-        agent: &mut argent_agent::Agent,
-        event_tx: &std::sync::mpsc::Sender<UiEvent>,
-    ) {
-        if let Some(better) = self.finished.take() {
-            if agent.history_revision_value() == self.revision {
-                agent.replace_last_summary(&better);
-                let _ = event_tx.send(UiEvent::Notice(
-                    "compaction summary upgraded by the background model".to_string(),
-                ));
-            }
-        }
-    }
-}
-
-pub struct Worker {
-    pub commands: Sender<Command>,
-    pub events: Receiver<UiEvent>,
-    pub abort: AbortHandle,
-    pub steering: Arc<Mutex<VecDeque<String>>>,
-}
-
-/// Start the agent worker. The agent and session are moved into it.
-pub fn spawn(
-    mut agent: Agent,
-    mut session: SessionContext,
-    checkpoints: argent_tools::CheckpointStore,
-    config: argent_core::config::Config,
-    index: SessionIndex,
-    cwd: PathBuf,
-    hooks: HookConfig,
-    locale: argent_i18n::Locale,
-) -> Worker {
-    let (command_tx, command_rx) = mpsc::channel();
-    let (event_tx, event_rx) = mpsc::channel();
-    let abort = agent.abort_handle();
-    let steering = agent.steering_handle();
-    let title = session.title();
-    let path = session.path.display().to_string();
-
-    let ready = UiEvent::Ready {
-        model: agent.model().to_string(),
-        thinking: agent.thinking().unwrap_or("default").to_string(),
-        provider: config.provider.clone(),
-        protocol: config.protocol.clone(),
-        cwd: cwd.display().to_string(),
-        session: title.clone(),
-        session_path: path.clone(),
-    };
-    let initial = Transcript::from_messages(agent.history())
-        .entries()
-        .to_vec();
-    let _ = argent_session::sweep_empty_sessions(
-        &index,
-        &[session.path.clone()],
-        Duration::from_secs(60),
-    );
-    let rows = session_rows(&index);
-
-    let worker_command_tx = command_tx.clone();
-    std::thread::spawn(move || {
-        let command_tx = worker_command_tx;
-        let _ = event_tx.send(ready);
-        if !initial.is_empty() {
-            let _ = event_tx.send(UiEvent::Loaded(initial));
-        }
-        let _ = event_tx.send(UiEvent::Sessions(rows));
-
-        let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
-        // Compaction runs as a coroutine on this same thread: the main run's
-        // model-stream yield point advances it, so compaction never blocks
-        // the conversation. `slot` holds a finished summary awaiting a safe
-        // moment to write back (after the main run ends).
-        // Same thread, coroutine closures included: Rc/RefCell is enough and
-        // keeps the !Send coroutine contained.
-        let compaction: std::rc::Rc<std::cell::RefCell<CompactionState>> =
-            std::rc::Rc::new(std::cell::RefCell::new(CompactionState::default()));
-        // The heuristic title (first prompt line) is replaced once: after the
-        // first run finishes, a background model writes a real one.
-        let mut title_pending: Option<String> = None;
-        let session_ctx = HookContext {
-            cwd: cwd.clone(),
-            ..HookContext::default()
-        };
-        let (_messages, blocked) = run_hook_event(&hooks, HookEvent::SessionStart, &session_ctx);
-        if let Some(reason) = blocked {
-            let _ = event_tx.send(UiEvent::Notice(format!("SessionStart hook: {}", reason)));
-        }
-
-        while let Ok(command) = command_rx.recv() {
-            match command {
-                Command::Shell(command) => {
-                    let call_id = format!(
-                        "shell-{}",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|elapsed| elapsed.as_millis())
-                            .unwrap_or(0)
-                    );
-                    let mut args = argent_core::Json::obj();
-                    args.set("command", argent_core::Json::string(command.clone()));
-                    let call = argent_ai::ToolCall::new(&call_id, "bash", args.dump());
-                    let _ = event_tx.send(UiEvent::Agent(AgentEvent::ToolRequested(call)));
-                    let started = std::time::Instant::now();
-                    let (content, ok) = run_shell(&cwd, &command);
-                    let _ = event_tx.send(UiEvent::Agent(AgentEvent::ToolFinished {
-                        call_id,
-                        name: "bash".to_string(),
-                        content,
-                        is_error: !ok,
-                        duration_ms: started.elapsed().as_millis() as u64,
-                    }));
-                }
-                Command::Prompt { text, images } => {
-                    let submit_ctx = HookContext {
-                        cwd: cwd.clone(),
-                        prompt: Some(text.clone()),
-                        ..HookContext::default()
-                    };
-                    let (messages, blocked) =
-                        run_hook_event(&hooks, HookEvent::UserPromptSubmit, &submit_ctx);
-                    for message in messages {
-                        let _ = event_tx.send(UiEvent::Notice(message));
-                    }
-                    if let Some(reason) = blocked {
-                        let _ = event_tx.send(UiEvent::Notice(format!(
-                            "UserPromptSubmit hook blocked the prompt: {}",
-                            reason
-                        )));
-                        let _ = event_tx.send(UiEvent::TurnDone {
-                            reason: FinishReason::Aborted,
-                            usage: agent.usage(),
-                            requests: agent.requests(),
-                            context_used: argent_agent::estimate_tokens(agent.history())
-                                .max(agent.last_prompt_tokens() as usize),
-                            cost: None,
-                        });
-                        continue;
-                    }
-
-                    // The first message names the task. Rename before the run so the
-                    // title is right while the model is still thinking.
-                    if agent.history().is_empty() {
-                        title_pending = Some(text.clone());
-                        let title = title_from_prompt(&text);
-                        let path = session.path.clone();
-                        if index.rename(&path, &title).is_ok() {
-                            session.close();
-                            match SessionContext::open(path.clone()) {
-                                Ok(opened) => {
-                                    session = opened;
-                                    let _ = event_tx.send(UiEvent::SessionRetitled {
-                                        title: session.title(),
-                                        path: path.display().to_string(),
-                                    });
-                                    let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
-                                }
-                                Err(error) => {
-                                    let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                                }
-                            }
-                        }
-                    }
-
-                    let before = agent.history().len();
-                    // While the main run waits on the model, advance the
-                    // compaction coroutine; while compaction waits on its
-                    // own model call, control returns here.
-                    let compaction_for_hook = std::rc::Rc::clone(&compaction);
-                    let history_guard = unsafe {
-                        argent_ai::cooperative::set_yielder(std::rc::Rc::new(move || {
-                            compaction_for_hook.borrow_mut().advance();
-                        }))
-                    };
-                    let mut sink = ChannelSink::new(event_tx.clone());
-                    let result = if images.is_empty() {
-                        agent.run(&text, &mut sink)
-                    } else {
-                        agent.run_message(
-                            argent_ai::Message::user_with_images(text.clone(), images.clone()),
-                            &mut sink,
-                        )
-                    };
-                    match result {
-                        Ok(reason) => {
-                            let _ = session.record_new(agent.history(), before);
-                            let stop_ctx = HookContext {
-                                cwd: cwd.clone(),
-                                prompt: Some(text.clone()),
-                                ..HookContext::default()
-                            };
-                            let (messages, _) = run_hook_event(&hooks, HookEvent::Stop, &stop_ctx);
-                            for message in messages {
-                                let _ = event_tx.send(UiEvent::Notice(message));
-                            }
-                            let usage = agent.usage();
-                            let requests = agent.requests();
-                            let cost = agent.usage_cost();
-                            let _ = argent_session::usage::record_with_ttft(
-                                &session.path,
-                                agent.model(),
-                                &usage,
-                                requests,
-                                cost,
-                                sink.clock.ms(),
-                            );
-                            let turn_ok = matches!(reason, FinishReason::Complete);
-                            let _ = event_tx.send(UiEvent::TurnDone {
-                                reason,
-                                usage,
-                                requests,
-                                context_used: argent_agent::estimate_tokens(agent.history())
-                                    .max(agent.last_prompt_tokens() as usize),
-                                cost,
-                            });
-                            // The main run ended: a finished compaction summary
-                            // can now be written back (revision-guarded).
-                            compaction
-                                .borrow_mut()
-                                .apply_if_ready(&mut agent, &event_tx);
-                            // Threshold reached and no compaction in flight:
-                            // spawn the compaction coroutine. Its model call
-                            // interleaves with the next run's stream reads.
-                            let in_flight = {
-                                let state = compaction.borrow();
-                                state.coroutine.is_some() || state.finished.is_some()
-                            };
-                            if turn_ok && !in_flight {
-                                let window = argent_session::controller::model_context_window(
-                                    &agent,
-                                    config.max_context_tokens,
-                                );
-                                let reserved = argent_session::effective_reserved(
-                                    window,
-                                    config.reserved_context_tokens,
-                                );
-                                if argent_session::should_compact_real(
-                                    argent_agent::estimate_tokens(agent.history()),
-                                    agent.last_prompt_tokens(),
-                                    window,
-                                    reserved,
-                                ) {
-                                    let history = agent.history().to_vec();
-                                    let revision = agent.history_revision_value();
-                                    if let Some(assistant) = &background {
-                                        let heuristic = argent_session::summarize(&history);
-                                        let assistant = assistant.clone();
-                                        let compaction_state = std::rc::Rc::clone(&compaction);
-                                        let coroutine: corosensei::Coroutine<(), (), String> =
-                                            corosensei::Coroutine::new(move |yielder, _input| {
-                                                // Register this coroutine's own
-                                                // yielder so its model-stream
-                                                // reads suspend back here instead
-                                                // of stalling the main run. The
-                                                // 'static erasure is safe: the
-                                                // yielder's stack lives as long as
-                                                // the suspended coroutine.
-                                                let yielder: &'static corosensei::Yielder<(), ()> =
-                                                    unsafe { &*(yielder as *const _) };
-                                                let _guard = unsafe {
-                                                    argent_ai::cooperative::set_yielder(
-                                                        std::rc::Rc::new(move || {
-                                                            yielder.suspend(())
-                                                        }),
-                                                    )
-                                                };
-                                                assistant
-                                                    .summarize_for(&heuristic)
-                                                    .unwrap_or(heuristic)
-                                            });
-                                        {
-                                            let mut state = compaction_state.borrow_mut();
-                                            state.coroutine = Some(coroutine);
-                                            state.revision = revision;
-                                        };
-                                    }
-                                }
-                            };
-                            drop(history_guard);
-                            // First run of the session: hand the exchange to
-                            // the background model, which answers with a real
-                            // title. Delivered as Command::Rename so the
-                            // worker thread (the only one allowed to reopen
-                            // the session file) applies it.
-                            if let Some(first) = title_pending.take() {
-                                if let Some(assistant) = &background {
-                                    if turn_ok {
-                                        let answer = agent
-                                            .history()
-                                            .iter()
-                                            .rev()
-                                            .find(|m| m.role == argent_ai::Role::Assistant)
-                                            .map(|m| m.text())
-                                            .unwrap_or_default();
-                                        let exchange = format!(
-                                            "user: {}
-assistant: {}",
-                                            first, answer
-                                        );
-                                        let tx = command_tx.clone();
-                                        let assistant = assistant.clone();
-                                        std::thread::spawn(move || {
-                                            if let Some(title) = assistant.title_for(&exchange) {
-                                                let _ = tx.send(Command::Rename(title));
-                                            }
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            // 必须发 TurnDone：只发 Error 的话 UI 的 working
-                            // 永远为 true，下一条 prompt 会进 steering 队列而
-                            // 不是新回合，表现为「发第二条消息没有回复」。
-                            let _ = event_tx.send(UiEvent::TurnDone {
-                                reason: FinishReason::Error(error.to_string()),
-                                usage: agent.usage(),
-                                requests: agent.requests(),
-                                context_used: argent_agent::estimate_tokens(agent.history())
-                                    .max(agent.last_prompt_tokens() as usize),
-                                cost: None,
-                            });
-                        }
-                    }
-                }
-                Command::SetModel(model) => {
-                    agent.set_model(model.clone());
-                    let _ = event_tx.send(UiEvent::Notice(format!(
-                        "{}: {}",
-                        argent_i18n::t(locale, "tui.model"),
-                        model
-                    )));
-                }
-                Command::SetThinking(level) => {
-                    agent.set_thinking(level.clone());
-                    let _ = event_tx.send(UiEvent::Notice(format!(
-                        "{}: {}",
-                        argent_i18n::t(locale, "tui.thinking"),
-                        level
-                    )));
-                }
-                Command::Fork => {
-                    let title = format!("{} (fork)", session.title());
-                    match index.create(&cwd, &title) {
-                        Ok(path) => match SessionContext::open(path.clone()) {
-                            Ok(mut forked) => {
-                                for message in agent.history() {
-                                    let _ = forked.record(message.clone());
-                                }
-                                session.close();
-                                session = forked;
-                                // 新会话有自己的检查点目录。
-                                checkpoints.retarget(&path);
-                                let entries = Transcript::from_messages(agent.history())
-                                    .entries()
-                                    .to_vec();
-                                let _ = event_tx.send(UiEvent::SessionOpened {
-                                    title: session.title(),
-                                    path: path.display().to_string(),
-                                    entries,
-                                });
-                                let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
-                            }
-                            Err(error) => {
-                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                            }
-                        },
-                        Err(error) => {
-                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                        }
-                    }
-                }
-                Command::Rename(title) => match index.rename(&session.path, &title) {
-                    Ok(()) => {
-                        session.close();
-                        match SessionContext::open(session.path.clone()) {
-                            Ok(opened) => {
-                                session = opened;
-                                let entries = Transcript::from_messages(agent.history())
-                                    .entries()
-                                    .to_vec();
-                                let _ = event_tx.send(UiEvent::SessionOpened {
-                                    title: session.title(),
-                                    path: session.path.display().to_string(),
-                                    entries,
-                                });
-                                let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
-                            }
-                            Err(error) => {
-                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                    }
-                },
-                Command::DeleteSession(path) => {
-                    if path == session.path {
-                        let _ = event_tx.send(UiEvent::Error(
-                            "cannot delete the session that is open; switch away first".to_string(),
-                        ));
-                    } else {
-                        match index.delete(&path) {
-                            Ok(()) => {
-                                let _ = event_tx.send(UiEvent::Notice(format!(
-                                    "deleted {}",
-                                    path.file_name()
-                                        .and_then(|name| name.to_str())
-                                        .unwrap_or("session")
-                                )));
-                                let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
-                            }
-                            Err(error) => {
-                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                            }
-                        }
-                    }
-                }
-                Command::RenameSession(path, name) => {
-                    let current = path == session.path;
-                    match index.rename(&path, &name) {
-                        Ok(()) => {
-                            if current {
-                                session.close();
-                                match SessionContext::open(session.path.clone()) {
-                                    Ok(opened) => {
-                                        session = opened;
-                                        let entries = Transcript::from_messages(agent.history())
-                                            .entries()
-                                            .to_vec();
-                                        let _ = event_tx.send(UiEvent::SessionOpened {
-                                            title: session.title(),
-                                            path: session.path.display().to_string(),
-                                            entries,
-                                        });
-                                    }
-                                    Err(error) => {
-                                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                                    }
-                                }
-                            }
-                            let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
-                        }
-                        Err(error) => {
-                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                        }
-                    }
-                }
-                Command::NewSession => {
-                    let previous = session.path.clone();
-                    let previous_empty = argent_session::is_empty_transcript(&previous);
-                    match index.create(&cwd, argent_i18n::t(locale, "tui.new_session")) {
-                        Ok(path) => match SessionContext::open(path.clone()) {
-                            Ok(opened) => {
-                                session.close();
-                                session = opened;
-                                checkpoints.retarget(&path);
-                                refresh_session_cache_key(&path);
-                                argent_session::controller::clear(&mut agent);
-                                if previous_empty {
-                                    let _ = std::fs::remove_file(&previous);
-                                }
-                                let _ = argent_session::sweep_empty_sessions(
-                                    &index,
-                                    std::slice::from_ref(&path),
-                                    Duration::from_secs(60),
-                                );
-                                let _ = event_tx.send(UiEvent::SessionOpened {
-                                    title: session.title(),
-                                    path: path.display().to_string(),
-                                    entries: Vec::new(),
-                                });
-                                let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
-                            }
-                            Err(error) => {
-                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                            }
-                        },
-                        Err(error) => {
-                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                        }
-                    }
-                }
-                Command::OpenSession(path) => match SessionContext::open(path.clone()) {
-                    Ok(opened) => {
-                        session.close();
-                        session = opened;
-                        checkpoints.retarget(&path);
-                        refresh_session_cache_key(&path);
-                        let messages = session.messages();
-                        argent_session::controller::open(&mut agent, messages.clone());
-                        let entries = Transcript::from_messages(&messages).entries().to_vec();
-                        let _ = event_tx.send(UiEvent::SessionOpened {
-                            title: session.title(),
-                            path: path.display().to_string(),
-                            entries,
-                        });
-                    }
-                    Err(error) => {
-                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                    }
-                },
-                Command::Tree => {
-                    let _ = event_tx.send(UiEvent::TreeRows(tree_rows(&session)));
-                }
-                Command::CheckoutNode(id) => {
-                    let previous_leaf = session.tree.active().map(str::to_string);
-                    match session.checkout(&id) {
-                        Ok(mut messages) => {
-                            // Pi-style branch summary: make the messages unique to
-                            // the branch we left visible in the new context.
-                            if let Some(previous) = previous_leaf {
-                                let branch = session.tree.branch_summary_messages(&id, &previous);
-                                if !branch.is_empty() {
-                                    let mut text = String::from(
-                                        "The conversation switched to a different branch. \
-                                     The other branch contained these messages:\n",
-                                    );
-                                    for message in branch.iter().take(40) {
-                                        let role = message.role.as_str();
-                                        let body = message.text();
-                                        let body = if body.len() > 600 {
-                                            &body[..600]
-                                        } else {
-                                            &body
-                                        };
-                                        text.push_str(&format!("\n[{}] {}", role, body));
-                                    }
-                                    if let Some(assistant) = &background {
-                                        if let Some(condensed) = assistant.branch_summary_for(&text)
-                                        {
-                                            text = format!(
-                                                "The conversation switched to a different \
-                                             branch. That branch did:\n{}",
-                                                condensed
-                                            );
-                                        }
-                                    }
-                                    messages.push(argent_ai::Message::system(text));
-                                }
-                            }
-                            argent_session::controller::open(&mut agent, messages.clone());
-                            let entries = Transcript::from_messages(&messages).entries().to_vec();
-                            let _ = event_tx.send(UiEvent::SessionOpened {
-                                title: session.title(),
-                                path: session.path.display().to_string(),
-                                entries,
-                            });
-                            let _ = event_tx
-                                .send(UiEvent::Notice(format!("branch switched to {}", id)));
-                        }
-                        Err(error) => {
-                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                        }
-                    }
-                }
-                Command::ForkNode(id) => match session.fork_at(&id) {
-                    Ok(messages) => {
-                        argent_session::controller::open(&mut agent, messages.clone());
-                        let entries = Transcript::from_messages(&messages).entries().to_vec();
-                        let _ = event_tx.send(UiEvent::SessionOpened {
-                            title: session.title(),
-                            path: session.path.display().to_string(),
-                            entries,
-                        });
-                        let _ = event_tx.send(UiEvent::Notice(format!(
-                            "forked from {}; the next reply starts a new branch",
-                            id
-                        )));
-                    }
-                    Err(error) => {
-                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                    }
-                },
-                Command::ForkAtMessage(n) => {
-                    // 1-based count along the active path, messages only.
-                    let mut seen = 0usize;
-                    let mut target: Option<String> = None;
-                    for node in session.tree.active_path() {
-                        if let argent_session::Entry::Message(_) = &node.payload {
-                            seen += 1;
-                            if seen == n {
-                                target = Some(node.id.clone());
-                                break;
-                            }
-                        }
-                    }
-                    match target {
-                        Some(id) => match session.fork_at(&id) {
-                            Ok(messages) => {
-                                argent_session::controller::open(&mut agent, messages.clone());
-                                let entries =
-                                    Transcript::from_messages(&messages).entries().to_vec();
-                                let _ = event_tx.send(UiEvent::SessionOpened {
-                                    title: session.title(),
-                                    path: session.path.display().to_string(),
-                                    entries,
-                                });
-                                let _ = event_tx.send(UiEvent::Notice(format!(
-                                    "forked at message {}; the next reply starts a new branch",
-                                    n
-                                )));
-                            }
-                            Err(error) => {
-                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                            }
-                        },
-                        None => {
-                            let _ = event_tx.send(UiEvent::Error(format!(
-                                "no message #{} on the active path ({} messages)",
-                                n, seen
-                            )));
-                        }
-                    }
-                }
-                Command::Import(source) => match import_session(&index, &source) {
-                    Ok(path) => match SessionContext::open(path.clone()) {
-                        Ok(opened) => {
-                            session.close();
-                            session = opened;
-                            checkpoints.retarget(&path);
-                            let messages = session.messages();
-                            argent_session::controller::open(&mut agent, messages.clone());
-                            let entries = Transcript::from_messages(&messages).entries().to_vec();
-                            let _ = event_tx.send(UiEvent::SessionOpened {
-                                title: session.title(),
-                                path: path.display().to_string(),
-                                entries,
-                            });
-                            let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
-                        }
-                        Err(error) => {
-                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                        }
-                    },
-                    Err(error) => {
-                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                    }
-                },
-                Command::ListSessions => {
-                    let _ = argent_session::sweep_empty_sessions(
-                        &index,
-                        &[session.path.clone()],
-                        Duration::from_secs(60),
-                    );
-                    let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
-                }
-                Command::ListModels => match agent.models() {
-                    Ok(models) => {
-                        let _ = event_tx.send(UiEvent::Models(
-                            models
-                                .into_iter()
-                                .map(|model| model.id)
-                                .filter(|id| config.model_in_scope(id))
-                                .collect(),
-                        ));
-                    }
-                    Err(error) => {
-                        let _ = event_tx.send(UiEvent::Notice(format!(
-                            "model catalog unavailable: {}",
-                            error
-                        )));
-                    }
-                },
-                Command::ListTools => {
-                    let _ = event_tx.send(UiEvent::Tools(agent.tool_index()));
-                }
-                Command::Compact => {
-                    let window = argent_session::controller::model_context_window(
-                        &agent,
-                        config.max_context_tokens,
-                    );
-                    let reserved =
-                        argent_session::effective_reserved(window, config.reserved_context_tokens);
-                    if argent_session::should_compact_real(
-                        argent_agent::estimate_tokens(agent.history()),
-                        agent.last_prompt_tokens(),
-                        window,
-                        reserved,
-                    ) {
-                        let ctx = HookContext {
-                            cwd: cwd.clone(),
-                            ..HookContext::default()
-                        };
-                        let _ = run_hook_event(&hooks, HookEvent::PreCompact, &ctx);
-                    }
-                    let before_tokens = argent_agent::estimate_tokens(agent.history());
-                    if let Some(summary) = argent_session::controller::compact(
-                        &mut agent,
-                        window,
-                        config.reserved_context_tokens,
-                        config.keep_recent_tokens,
-                    ) {
-                        let after_tokens = argent_agent::estimate_tokens(agent.history());
-                        let _ = session.record_summary(summary.clone());
-                        let entries = Transcript::from_messages(agent.history())
-                            .entries()
-                            .to_vec();
-                        let _ = event_tx.send(UiEvent::Loaded(entries));
-                        let _ = event_tx.send(UiEvent::Notice(format!(
-                            "context compacted: {} -> {} tokens",
-                            before_tokens, after_tokens
-                        )));
-                    } else {
-                        let _ = event_tx.send(UiEvent::Notice(
-                            argent_i18n::t(locale, "tui.nothing_compact").to_string(),
-                        ));
-                    }
-                }
-                Command::Rewind { steps } => {
-                    let (restored, errors) = checkpoints.rewind(steps);
-                    if !errors.is_empty() {
-                        let _ = event_tx.send(UiEvent::Error(format!(
-                            "rewind failed: {}",
-                            errors.join("; ")
-                        )));
-                    } else if restored.is_empty() {
-                        let _ = event_tx.send(UiEvent::Notice("nothing to rewind".to_string()));
-                    } else {
-                        let mut listing = restored
-                            .iter()
-                            .take(20)
-                            .map(|path| format!("- {}", path.display()))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if restored.len() > 20 {
-                            listing.push_str(&format!("\n- … ({} more)", restored.len() - 20));
-                        }
-                        let _ = event_tx.send(UiEvent::Notice(format!(
-                            "rewound {} run(s), restored {} file(s):\n{}",
-                            steps,
-                            restored.len(),
-                            listing
-                        )));
-                    }
-                }
-                Command::Cost => {
-                    let _ = event_tx.send(UiEvent::Notice(crate::cost_report(
-                        &agent,
-                        config.max_context_tokens,
-                    )));
-                }
-                Command::CopyLast => {
-                    let text = agent
-                        .history()
-                        .iter()
-                        .rev()
-                        .find(|m| m.role == argent_ai::Role::Assistant)
-                        .map(|m| m.text())
-                        .filter(|t| !t.is_empty());
-                    match text {
-                        Some(text) => match argent_core::clipboard::copy_text(&text) {
-                            Ok(()) => {
-                                let _ = event_tx.send(UiEvent::Notice(format!(
-                                    "copied {} characters",
-                                    text.chars().count()
-                                )));
-                            }
-                            Err(error) => {
-                                let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                            }
-                        },
-                        None => {
-                            let _ = event_tx.send(UiEvent::Error(
-                                "nothing to copy: no assistant reply yet".to_string(),
-                            ));
-                        }
-                    }
-                }
-                Command::ClearHistory => {
-                    argent_session::controller::clear(&mut agent);
-                    let _ = event_tx.send(UiEvent::Notice("history cleared".to_string()));
-                }
-                Command::Shutdown => break,
-            }
-        }
-        session.close();
-    });
-
-    Worker {
-        commands: command_tx,
-        events: event_rx,
-        abort,
-        steering,
-    }
-}
-
-/// Run one hook event and return its notices plus a blocking reason.
-pub(crate) fn run_hook_event(
-    config: &HookConfig,
-    event: HookEvent,
-    ctx: &HookContext,
-) -> (Vec<String>, Option<String>) {
-    let mut notices = Vec::new();
-    let mut block = None;
-    for hook in config.for_event(event, ctx.tool_name.as_deref()) {
-        let outcome = argent_hooks::run_command(event, hook, ctx);
-        let text = if outcome.stderr.trim().is_empty() {
-            outcome.stdout.trim()
-        } else {
-            outcome.stderr.trim()
-        };
-        if !outcome.success {
-            if !text.is_empty() {
-                notices.push(format!("{} hook: {}", event.name(), clip_hook_text(text)));
-            }
-            if hook.blocks_on_failure() && block.is_none() {
-                block = Some(if text.is_empty() {
-                    format!("{} hook failed", event.name())
-                } else {
-                    clip_hook_text(text)
-                });
-            }
-        } else if !text.is_empty() {
-            notices.push(clip_hook_text(text));
-        }
-    }
-    (notices, block)
-}
-
-fn clip_hook_text(text: &str) -> String {
-    let mut out: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if out.chars().count() > 240 {
-        out = out.chars().take(240).collect();
-        out.push_str("...");
-    }
-    out
-}
-
-/// Run a `!command` entered by the operator. The output is shown as a tool
-/// row and never sent to the model, so the command does not cost tokens.
-fn run_shell(cwd: &Path, command: &str) -> (String, bool) {
-    // Probe the shell, do not just look for a file named bash. On Windows a
-    // bash.exe on PATH can be the WSL app-execution alias, which fails before
-    // running anything when no distribution is installed (GitHub's runners
-    // are exactly like this). `locate_posix_shell` verifies the candidate
-    // actually executes, so the fallback to cmd is taken in that case.
-    let mut spec = if let Some(program) = argent_tools::bash::locate_posix_shell() {
-        let mut spec = argent_core::process::CommandSpec::new(program);
-        spec.args.push("-lc".to_string());
-        spec.args.push(command.to_string());
-        spec
-    } else if cfg!(windows) {
-        let mut spec = argent_core::process::CommandSpec::new("cmd");
-        spec.args.push("/C".to_string());
-        spec.args.push(command.to_string());
-        spec
-    } else {
-        let mut spec = argent_core::process::CommandSpec::new("sh");
-        spec.args.push("-lc".to_string());
-        spec.args.push(command.to_string());
-        spec
-    };
-    spec.cwd = Some(cwd.display().to_string());
-    spec.timeout = Duration::from_secs(120);
-    match argent_core::process::run(&spec) {
-        Ok(output) => {
-            let mut text = output.stdout.trim_end().to_string();
-            if !output.stderr.trim().is_empty() {
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str("[stderr]\n");
-                text.push_str(output.stderr.trim_end());
-            }
-            if text.is_empty() {
-                text = "(no output)".to_string();
-            }
-            text.push_str(&format!(
-                "\n[exit {} in {:.1}s]",
-                output.status,
-                output.duration.as_secs_f32()
-            ));
-            (text, output.success())
-        }
-        Err(error) => (format!("shell failed: {}", error), false),
-    }
-}
-
-/// A small, factual AGENTS.md template. It describes the repository, not the
-/// model's guesses; the operator can edit it afterwards.
-fn project_init_text(cwd: &Path) -> String {
-    let mut out = String::new();
-    out.push_str(
-        "# Project instructions
-
-",
-    );
-    out.push_str(&format!(
-        "Working directory: `{}`
-
-",
-        cwd.display()
-    ));
-    out.push_str(
-        "## Layout
-",
-    );
-    let mut top: Vec<String> = std::fs::read_dir(cwd)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.')
-                || matches!(name.as_str(), "target" | "node_modules" | "dist" | "build")
-            {
-                return None;
-            }
-            let suffix = if entry.path().is_dir() { "/" } else { "" };
-            Some(format!("{}{}", name, suffix))
-        })
-        .collect();
-    top.sort();
-    top.truncate(24);
-    for item in &top {
-        out.push_str(&format!(
-            "- `{}`
-",
-            item
-        ));
-    }
-    out.push_str(
-        "
-## Languages
-",
-    );
-    let mut counts: std::collections::BTreeMap<&'static str, usize> =
-        std::collections::BTreeMap::new();
-    for entry in argent_core::path::walk(cwd, 4).into_iter().take(3_000) {
-        let extension = entry
-            .path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let language = match extension.as_str() {
-            "rs" => "Rust",
-            "ts" | "tsx" => "TypeScript",
-            "js" | "jsx" | "mjs" | "cjs" => "JavaScript",
-            "py" => "Python",
-            "go" => "Go",
-            "java" => "Java",
-            "kt" | "kts" => "Kotlin",
-            "cs" => "C#",
-            "c" | "h" | "cc" | "cpp" | "hpp" => "C/C++",
-            "md" | "markdown" => "Markdown",
-            _ => continue,
-        };
-        *counts.entry(language).or_default() += 1;
-    }
-    let mut languages: Vec<_> = counts.into_iter().collect();
-    languages.sort_by_key(|a| std::cmp::Reverse(a.1));
-    for (language, count) in languages.iter().take(6) {
-        out.push_str(&format!(
-            "- {}: {} files
-",
-            language, count
-        ));
-    }
-    out.push_str(
-        "
-## Build and test
-",
-    );
-    let mut commands = Vec::new();
-    if cwd.join("Cargo.toml").is_file() {
-        commands.push("cargo build");
-        commands.push("cargo test");
-        commands.push("cargo fmt --check");
-        commands.push("cargo clippy --all-targets");
-    }
-    if cwd.join("package.json").is_file() {
-        commands.push("npm install");
-        commands.push("npm test");
-        commands.push("npm run build");
-    }
-    if cwd.join("pyproject.toml").is_file() || cwd.join("requirements.txt").is_file() {
-        commands.push("pytest");
-    }
-    if cwd.join("Makefile").is_file() {
-        commands.push("make");
-    }
-    if commands.is_empty() {
-        out.push_str(
-            "- (add the real build and test commands here)
-",
-        );
-    } else {
-        for command in commands {
-            out.push_str(&format!(
-                "- `{}`
-",
-                command
-            ));
-        }
-    }
-    out.push_str(
-        "
-## Conventions
-",
-    );
-    out.push_str(
-        "- Read a file before editing it.
-",
-    );
-    out.push_str(
-        "- Run the build/tests before reporting success.
-",
-    );
-    out.push_str(
-        "- Keep changes focused; do not refactor unrelated code.
-",
-    );
-    out
-}
-
-/// The title a new task takes from its first prompt.
-fn title_from_prompt(prompt: &str) -> String {
-    let line = prompt.lines().next().unwrap_or("").trim();
-    if line.is_empty() {
-        "新任务".to_string()
-    } else {
-        line.chars().take(60).collect()
-    }
-}
-
-/// Assemble the tree overlay rows for one session.
-fn tree_rows(session: &SessionContext) -> Vec<TreeRow> {
-    let active: Vec<String> = session
-        .tree
-        .active_path()
-        .iter()
-        .map(|node| node.id.clone())
-        .collect();
-    let leaf = session.tree.active().unwrap_or("").to_string();
-    let mut rows = Vec::new();
-    for id in session.tree.ids() {
-        let Some(node) = session.tree.get(id) else {
-            continue;
-        };
-        let depth = session.tree.path_to(id).map(|p| p.len()).unwrap_or(1) - 1;
-        let label = match &node.payload {
-            argent_session::Entry::Message(message) => {
-                let role = match message.role {
-                    argent_ai::Role::User => "user",
-                    argent_ai::Role::Assistant => "assistant",
-                    argent_ai::Role::Tool => "tool",
-                    argent_ai::Role::System => "system",
-                };
-                let text = message.text().replace('\n', " ");
-                let text = clip_to_width(text.trim(), 52);
-                format!("{}: {}", role, text)
-            }
-            argent_session::Entry::Summary(text) => {
-                format!(
-                    "summary: {}",
-                    clip_to_width(text.replace('\n', " ").trim(), 44)
-                )
-            }
-            argent_session::Entry::Header(data) => {
-                format!("header: {}", data.str_or("title", "(untitled)"))
-            }
-            argent_session::Entry::Event(_) => "event".to_string(),
-        };
-        rows.push(TreeRow {
-            id: id.clone(),
-            depth,
-            label,
-            on_path: active.iter().any(|node| node == id),
-            leaf: leaf == *id,
-            branch: session.tree.children(id).len() > 1,
-        });
-    }
-    rows
-}
-
-/// Copy an external session file into the sessions directory, keeping every
-/// id, parent link and the original header (cwd included).
-fn import_session(
-    index: &SessionIndex,
-    source: &str,
-) -> argent_core::error::Result<std::path::PathBuf> {
-    let source_path = std::path::PathBuf::from(source);
-    if !source_path.is_file() {
-        return Err(argent_core::error::Error::io(format!(
-            "no such file: {}",
-            source
-        )));
-    }
-    // Structural validation: every line must be JSON; the tree rebuild also
-    // verifies parent links resolve.
-    let lines = argent_session::SessionStore::read_raw(&source_path)?;
-    argent_session::SessionTree::from_raw(&lines)?;
-    let stamp = argent_session::timestamp_slug();
-    let stem = source_path
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "imported".to_string());
-    let name = argent_session::sanitize(&format!("import-{}-{}", stamp, stem));
-    let destination = index.dir().join(format!("{}.jsonl", name));
-    std::fs::create_dir_all(index.dir()).map_err(|e| {
-        argent_core::error::Error::io(format!("create {} failed: {}", index.dir().display(), e))
-    })?;
-    std::fs::copy(&source_path, &destination)
-        .map_err(|e| argent_core::error::Error::io(format!("copy {} failed: {}", source, e)))?;
-    Ok(destination)
-}
-
-#[cfg(test)]
-mod tree_tests {
-    use super::*;
-    use argent_ai::Message;
-    use argent_session::Entry;
-
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "argent-tree-ui-{}-{}-{}",
-            name,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).expect("create");
-        dir
-    }
-
-    fn seeded_session(dir: &std::path::Path) -> SessionContext {
-        let path = dir.join("tree.jsonl");
-        let mut ctx = SessionContext::open(path).expect("open");
-        ctx.record(Message::user("first question")).expect("record");
-        ctx.record(Message::assistant("first answer"))
-            .expect("record");
-        ctx
-    }
-
-    #[test]
-    fn tree_rows_label_roles_and_mark_the_active_leaf() {
-        let dir = temp_dir("rows");
-        let ctx = seeded_session(&dir);
-        let rows = tree_rows(&ctx);
-        // header? none in this file; three nodes: user, assistant — plus none.
-        assert!(rows
-            .iter()
-            .any(|row| row.label.starts_with("user:") && row.label.contains("first question")));
-        assert!(rows
-            .iter()
-            .any(|row| row.label.starts_with("assistant:") && row.label.contains("first answer")));
-        let leaf_rows: Vec<_> = rows.iter().filter(|row| row.leaf).collect();
-        assert_eq!(leaf_rows.len(), 1, "exactly one leaf");
-        assert!(leaf_rows[0].label.contains("first answer"));
-        assert!(
-            rows.iter().all(|row| row.on_path),
-            "a linear file is all on-path"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_fork_shows_a_branch_marker_and_two_leaves_over_time() {
-        let dir = temp_dir("branch");
-        let mut ctx = seeded_session(&dir);
-        let one = ctx
-            .tree
-            .ids()
-            .iter()
-            .find(|id| {
-                matches!(&ctx.tree.get(id).expect("node").payload, Entry::Message(m)
-                    if m.text() == "first question")
-            })
-            .cloned()
-            .expect("node");
-        ctx.fork_at(&one).expect("fork");
-        ctx.record(Message::assistant("alternative"))
-            .expect("record");
-
-        let rows = tree_rows(&ctx);
-        let branch_rows: Vec<_> = rows.iter().filter(|row| row.branch).collect();
-        assert_eq!(branch_rows.len(), 1, "the fork point");
-        assert!(branch_rows[0].label.contains("first question"));
-        let on_path: Vec<_> = rows.iter().filter(|row| row.on_path).collect();
-        assert_eq!(on_path.len(), 2, "fork point + the new leaf");
-        assert!(on_path.iter().all(|row| {
-            row.label.contains("first question") || row.label.contains("alternative")
-        }));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn import_copies_a_session_and_rejects_garbage() {
-        let dir = temp_dir("import");
-        let index = SessionIndex::new(dir.join("sessions"));
-        // 合法会话文件
-        let source = dir.join("outer.jsonl");
-        let mut ctx = SessionContext::open(source.clone()).expect("open");
-        ctx.record(Message::user("traveller")).expect("record");
-        ctx.close();
-        let destination = import_session(&index, source.to_str().expect("utf8")).expect("import");
-        assert!(destination.is_file());
-        assert_eq!(
-            destination.parent().expect("parent"),
-            index.dir(),
-            "lands in the sessions directory"
-        );
-        let entries = argent_session::SessionStore::read_all(&destination).expect("read");
-        assert!(entries.iter().any(|entry| matches!(
-            entry,
-            Entry::Message(m) if m.text() == "traveller"
-        )));
-        // 坏 JSON 被拒绝
-        let bad = dir.join("bad.jsonl");
-        std::fs::write(&bad, "not json at all").expect("write");
-        assert!(import_session(&index, bad.to_str().expect("utf8")).is_err());
-        // 不存在的文件被拒绝
-        assert!(import_session(&index, dir.join("nope.jsonl").to_str().expect("utf8")).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_tree_overlay_only_offers_rows_that_exist() {
-        let dir = temp_dir("overlay");
-        let ctx = seeded_session(&dir);
-        let rows = tree_rows(&ctx);
-        for row in &rows {
-            assert!(ctx.tree.contains(&row.id), "row id {} must exist", row.id);
-            assert!(ctx.tree.path_to(&row.id).is_ok());
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
-/// /resume 切到另一个会话时，缓存亲和键也跟着换，避免和别的会话
-/// 共用一份 KV 前缀（pi 也是按 session 文件做 cache key）。
-fn refresh_session_cache_key(path: &std::path::Path) {
-    if std::env::var_os("ARGENT_CACHE_KEY_AUTO").is_none() {
-        return;
-    }
-    let key = argent_core::hash::short_hash(path.to_string_lossy().as_bytes(), 24);
-    std::env::set_var("ARGENT_CACHE_KEY", key);
-}
-
-/// Rows for the `/hooks` panel: trust state per document, then each command.
-fn hook_overview(cwd: &Path) -> Vec<(String, String)> {
-    let manager = argent_plugins::PluginManager::for_workspace(cwd);
-    let trust = argent_hooks::HookTrust::at(argent_config::Paths::new(cwd).hook_trust()).ok();
-    let mut rows = Vec::new();
-    for file in crate::workspace_hook_files(&manager, cwd) {
-        if !file.is_file() {
-            continue;
-        }
-        let trusted = match (&trust, argent_hooks::digest_file(&file)) {
-            (Some(trust), Ok(digest)) => trust.is_trusted(&file, &digest),
-            _ => false,
-        };
-        let name = file
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("hooks.json");
-        rows.push((
-            format!(
-                "{}  {}",
-                if trusted { "trusted  " } else { "untrusted" },
-                name
-            ),
-            file.display().to_string(),
-        ));
-        match HookConfig::load(&file) {
-            Ok(config) => {
-                for (event, command) in config.entries() {
-                    rows.push((
-                        format!("  {}", event.name()),
-                        format!(
-                            "{} · {}ms · {}{}",
-                            command.matcher.as_deref().unwrap_or("*"),
-                            command.timeout_ms,
-                            command.command,
-                            if command.async_hook { "  [async]" } else { "" }
-                        ),
-                    ));
-                }
-            }
-            Err(error) => rows.push(("  invalid".to_string(), error.to_string())),
-        }
-    }
-    if rows.is_empty() {
-        rows.push(("no hook documents found".to_string(), String::new()));
-    }
-    rows
-}
-
-fn session_rows(index: &SessionIndex) -> Vec<SessionRow> {
-    index
-        .list()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(path, info)| SessionRow {
-            path,
-            title: info.str_or("title", "(untitled)"),
-            cwd: info.str_or("cwd", ""),
-            updated: argent_session::local_stamp(info.num_or("modified", 0.0) as u64),
-        })
-        .collect()
-}
-
-struct ChannelSink {
-    tx: Sender<UiEvent>,
-    clock: argent_agent::TtftClock,
-}
-
-impl ChannelSink {
-    fn new(tx: Sender<UiEvent>) -> ChannelSink {
-        ChannelSink {
-            tx,
-            clock: argent_agent::TtftClock::new(),
-        }
-    }
-}
-
-impl EventSink for ChannelSink {
-    fn emit(&mut self, event: AgentEvent) {
-        self.clock.observe(&event);
-        let _ = self.tx.send(UiEvent::Agent(event));
-    }
-}
-
-// ---------------------------------------------------------------- app
-
-#[derive(Debug, Clone, Default)]
-struct ReadyInfo {
-    model: String,
-    thinking: String,
-    provider: String,
-    protocol: String,
-    cwd: String,
-    session: String,
-    session_path: String,
-}
-
-enum Overlay {
-    Help,
-    Sessions {
-        index: usize,
-    },
-    /// 会话的二级操作菜单（打开 / 改名 / 删除 / 分支树）。
-    SessionActions {
-        index: usize,
-        selected: usize,
-    },
-    /// pi 风格的会话信息面板（名字 / 路径 / 用量 / 缓存 + 操作菜单）。
-    SessionInfo {
-        selected: usize,
-    },
-    /// 当前会话的改名输入。
-    RenameCurrent {
-        input: String,
-    },
-    /// 单个工具的详情（从 /tools 列表进入）。
-    ToolDetail {
-        index: usize,
-    },
-    Tree {
-        index: usize,
-    },
-    /// 会话改名输入。
-    RenameSession {
-        index: usize,
-        input: String,
-    },
-    Models {
-        index: usize,
-    },
-    Thinking {
-        index: usize,
-    },
-    Tools {
-        index: usize,
-    },
-    /// 只读的 hooks 总览：信任状态、事件、matcher、命令。
-    Hooks {
-        index: usize,
-    },
-    Approval {
-        tool: String,
-        args: String,
-        selected: usize,
-    },
-}
-
-#[derive(Debug, Clone)]
-struct PaletteItem {
-    name: String,
-    description: String,
-}
-
-/// The cached, laid-out transcript body. `Arc` lets every frame share the
-/// laid-out lines without cloning them; a new `Arc` is only built when the
-/// transcript version, width or fold state changes.
-struct BodyCache {
-    width: usize,
-    expand: bool,
-    version: u64,
-    lines: Arc<Vec<Line>>,
-    /// Body 行号列表：思考块的标题行（点这一行可展开/收起）。
-    fold_rows: Vec<(usize, usize)>,
-    /// 最后一条用户消息在 body 里的首行行号。
-    user_row: Option<usize>,
-    /// 构建时有多少条摘要；摘要追加了正文尾部不能复用缓存。
-    summaries: usize,
-    /// 展开集合＋计时长度打包的指纹，任何一个变了都要重建正文。
-    thinking: u64,
-}
-
 struct App {
     locale: argent_i18n::Locale,
     /// Set when the UI drives a background session instead of a local agent.
@@ -2213,11 +559,38 @@ impl App {
             .iter()
             .find(|&&(screen_row, _)| screen_row == row)
         {
-            if !self.expanded_thinking.remove(&ordinal) {
-                self.expanded_thinking.insert(ordinal);
-            }
-            self.dirty = true;
+            self.toggle_thinking_ordinal(ordinal);
         }
+    }
+
+    fn toggle_thinking_ordinal(&mut self, ordinal: usize) {
+        if !self.expanded_thinking.remove(&ordinal) {
+            self.expanded_thinking.insert(ordinal);
+        }
+        self.dirty = true;
+    }
+
+    /// Alt+1..9：只看第 n 个思考块。
+    ///
+    /// 全局展开开着时先收起全部，再展开这一块；再次按同一个数字则收起。
+    fn toggle_thinking_nth(&mut self, nth: usize) {
+        let ordinal = nth.saturating_sub(1);
+        let exists = self
+            .body_fold_rows
+            .iter()
+            .any(|&(_, block)| block == ordinal);
+        if !exists {
+            self.set_status(format!("no thought block {}", nth));
+            return;
+        }
+        if self.expand {
+            self.expand = false;
+            self.expanded_thinking.clear();
+            self.expanded_thinking.insert(ordinal);
+            self.dirty = true;
+            return;
+        }
+        self.toggle_thinking_ordinal(ordinal);
     }
 
     /// 从最近一帧的纯文本里切出选中区间（按终端列，中文占两列）。
@@ -2780,8 +1153,7 @@ impl App {
             return;
         }
         if let Key::Paste(text) = &key {
-            // 换行在单行输入框里不可见，按空格落进去；整块一次插入，
-            // 不逐字符触发补全或提交。
+            // 整块一次插入，不逐字符触发补全或提交；换行保留为真正的换行。
             self.insert_pasted(text);
             self.dirty = true;
             return;
@@ -2797,6 +1169,14 @@ impl App {
                 Ok(_) => {}
                 Err(error) => self.set_status(format!("paste failed: {}", error)),
             }
+            return;
+        }
+        if key == Key::CtrlJ {
+            self.insert_text("\n");
+            return;
+        }
+        if let Key::AltDigit(nth) = key {
+            self.toggle_thinking_nth(nth as usize);
             return;
         }
         match key {
@@ -2979,13 +1359,10 @@ impl App {
 
     /// 粘贴外部文本（终端 bracketed paste 或右键剪贴板）。
     ///
-    /// 输入框只有一行，换行必须压成空格，否则后面那段看起来像消失了。
+    /// CRLF 统一成 LF；换行保留，输入框按多行显示。
     fn insert_pasted(&mut self, text: &str) {
-        let flattened = text
-            .replace("\r\n", "\n")
-            .replace('\r', "\n")
-            .replace('\n', " ");
-        self.insert_text(&flattened);
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        self.insert_text(&normalized);
     }
 
     fn backspace(&mut self) {
@@ -3647,13 +2024,17 @@ impl App {
         };
         let palette_height = palette.as_ref().map(|(_, shown)| *shown).unwrap_or(0);
         let (input_rows, _) = self.input_window(width);
-        let tail = 3 + input_rows.len();
+        // 输入区上方一条细线、下方直接接状态栏，不再用两条线夹住一行。
+        let tail = 2 + input_rows.len();
         let body_height = height
             .saturating_sub(tail)
             .saturating_sub(palette_height)
             .max(1);
 
-        let body = self.transcript_lines(width);
+        // 正文限制最大宽度并居中；输入框和状态栏仍铺满终端。
+        let body_width = width.min(MAX_BODY_WIDTH);
+        let body_pad = width.saturating_sub(body_width) / 2;
+        let body = self.transcript_lines(body_width);
         let total = body.len();
         let max_scroll = total.saturating_sub(body_height);
         self.scroll = self.scroll.min(max_scroll);
@@ -3676,7 +2057,7 @@ impl App {
             .map(|(body_row, ordinal)| ((body_row - start) as u16, ordinal))
             .collect();
 
-        if let Some(overlay) = self.overlay_lines(width) {
+        if let Some(overlay) = self.overlay_lines(body_width) {
             let overlay_height = overlay.len();
             if overlay_height <= body_height {
                 let top = (body_height - overlay_height) / 2;
@@ -3687,7 +2068,7 @@ impl App {
         }
 
         let mut lines = Vec::with_capacity(height);
-        lines.extend(visible);
+        lines.extend(visible.into_iter().map(|line| indent_line(line, body_pad)));
         if let Some((items, shown)) = palette {
             for (index, item) in items.iter().take(shown).enumerate() {
                 let selected = index == self.palette_index.min(shown.saturating_sub(1));
@@ -3707,7 +2088,6 @@ impl App {
                     .push(Span::new(row.text.clone(), Style::plain())),
             );
         }
-        lines.push(separator(width));
         lines.push(self.status_line(width));
 
         // 鼠标拖选：整行反显作为反馈，并留一份纯文本供松开时复制。
@@ -3762,7 +2142,10 @@ impl App {
         let up = self.metrics.session_prompt_tokens;
         let down = self.metrics.session_completion_tokens;
         if up + down > 0 {
-            items.push((4, format!("↑{} ↓{}", compact_count(up), compact_count(down))));
+            items.push((
+                4,
+                format!("↑{} ↓{}", compact_count(up), compact_count(down)),
+            ));
         }
         if let Some(hit) = self.metrics.session_cache_hit_percent() {
             // 首轮冷启动是 0%，也要显示出来，才能看出后面有没有涨。
@@ -3973,11 +2356,10 @@ impl App {
         }
     }
 
-    /// Soft-wrap the input into at most four rows, keeping the cursor visible.
+    /// 把输入折成最多四行并保持光标可见。
     ///
-    /// A single clamped row made anything past ~96 cells invisible while
-    /// typing; wrapping reuses the terminal's own line flow instead of
-    /// horizontal scrolling.
+    /// 显式换行（Ctrl+J / 粘贴）和软换行都算一行；单行横滚会让
+    /// 长输入看不到前面，直接用终端的换行更自然。
     fn input_window(&self, width: usize) -> (Vec<InputRow>, usize) {
         const MAX_ROWS: usize = 4;
         let inner = width.saturating_sub(4).max(1);
@@ -3986,6 +2368,13 @@ impl App {
         let mut start = 0;
         let mut used = 0;
         for (index, ch) in self.input.iter().enumerate() {
+            if *ch == '\n' {
+                rows.push(InputRow { text, start });
+                text = String::new();
+                start = index + 1;
+                used = 0;
+                continue;
+            }
             let cell = char_width(*ch);
             if used > 0 && used + cell > inner {
                 rows.push(InputRow { text, start });
@@ -4014,7 +2403,7 @@ impl App {
 
     /// 终端光标应该停在的位置（ANSI 1 基 row/col）。
     ///
-    /// 输入区占据倒数第 `rows + 2` 行到倒数第 2 行（最后一行是状态栏）。
+    /// 输入区占据倒数第 `rows` 行到倒数第 1 行，最后一行是状态栏。
     fn cursor_screen_position(&self, width: usize, height: usize) -> (usize, usize) {
         let (rows, cursor_row) = self.input_window(width);
         let row_count = rows.len().max(1);
@@ -4025,7 +2414,6 @@ impl App {
             .take(self.cursor.saturating_sub(current.start))
             .collect();
         let terminal_row = height
-            .saturating_sub(1)
             .saturating_sub(row_count)
             .saturating_add(cursor_row)
             .max(1);
@@ -4155,6 +2543,11 @@ impl App {
                 groups.push(Group::Thinking(thinking));
             }
         }
+        // 多于一个思考块时给标题编号，Alt+1..9 才有可指的序号。
+        let thinking_blocks = groups
+            .iter()
+            .filter(|group| matches!(group, Group::Thinking(_)))
+            .count();
         let mut lines = Vec::new();
         for group in groups {
             // 正文、摘要、下一轮用户消息之间都不插空行。
@@ -4182,15 +2575,26 @@ impl App {
                     let accent = Style::fg(crate::theme::current().accent);
                     let mut header = Line::new();
                     if let Some(duration) = self.thinking_durations.get(ordinal) {
+                        let label = if thinking_blocks > 1 {
+                            format!(
+                                "Thought {} · {}",
+                                ordinal + 1,
+                                format_thought_duration(*duration)
+                            )
+                        } else {
+                            format!("Thought · {}", format_thought_duration(*duration))
+                        };
                         header = header
                             .push(Span::new(if expanded { "-" } else { "+" }, accent))
-                            .push(Span::new(
-                                format!("Thought · {}", format_thought_duration(*duration)),
-                                dim,
-                            ));
+                            .push(Span::new(label, dim));
                     } else {
                         // 还在流式思考：只写 Thinking，不把半成品摊在正文里。
-                        header = header.push(Span::new("Thinking", dim));
+                        let label = if thinking_blocks > 1 {
+                            format!("Thinking {}", ordinal + 1)
+                        } else {
+                            "Thinking".to_string()
+                        };
+                        header = header.push(Span::new(label, dim));
                     }
                     // 与 pi 的 MouseRegion 一致：标题和展开后的每一行都可点，
                     // 点任意一行都能把这一块收起/展开。
@@ -4316,6 +2720,8 @@ impl App {
                         argent_i18n::t(self.locale, "tui.help.scroll"),
                     ),
                     ("Ctrl+E", argent_i18n::t(self.locale, "tui.help.ctrl_e")),
+                    ("Ctrl+J", argent_i18n::t(self.locale, "tui.help.newline")),
+                    ("Alt+1…9", argent_i18n::t(self.locale, "tui.help.thoughts")),
                     ("Ctrl+L", argent_i18n::t(self.locale, "tui.help.ctrl_l")),
                     ("", ""),
                     (
@@ -4487,10 +2893,7 @@ impl App {
                     "trusted hooks only run · ↑↓ move · esc close".to_string(),
                     String::new(),
                 ));
-                (
-                    format!("hooks · {} row(s)", self.hook_rows.len()),
-                    content,
-                )
+                (format!("hooks · {} row(s)", self.hook_rows.len()), content)
             }
             Overlay::Tools { .. } => {
                 let mut content: Vec<(String, String)> = self
@@ -4635,797 +3038,10 @@ impl App {
 /// 回答的 markdown 渲染：代码块、行内代码、粗体、标题。
 ///
 /// 只做终端里真正提升可读性的几件事，不追求完整 markdown。
-fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) -> Vec<Line> {
-    let theme = crate::theme::current();
-    // 代码块的前景/底色由主题成对给出：深色主题是深灰块配浅字，
-    // 浅色主题是米灰块配深字，不能写死一档深灰。
-    let code_bg = theme.code_bg;
-    let mut out: Vec<Line> = Vec::new();
-    let mut in_code = false;
-    let mut first_line = true;
-    for raw in text.lines() {
-        let trimmed = raw.trim_end();
-        if trimmed.trim_start().starts_with("```") {
-            in_code = !in_code;
-            continue;
-        }
-        if in_code {
-            // 代码块：整行铺深一档的底色，行尾补空格盖满宽度。
-            let body_width = width.saturating_sub(2);
-            let clipped = clip_to_width(trimmed, body_width);
-            let pad = body_width.saturating_sub(text_width(&clipped));
-            out.push(Line::new().push(Span::new(
-                format!("  {}{}", clipped, " ".repeat(pad)),
-                Style::fg(theme.code_fg).with_bg(code_bg),
-            )));
-            first_line = false;
-            continue;
-        }
-        let (spans, _) = inline_spans(trimmed, theme);
-        let spans: Vec<Span> = if trimmed.starts_with('#') {
-            // Claude 风格：标题只加粗，不用高饱和色抢正文的注意力。
-            let body = trimmed.trim_start_matches('#').trim_start();
-            vec![Span::new(body.to_string(), Style::bold(theme.text))]
-        } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-            // pi: mdListBullet = violet/accent
-            let mut decorated = vec![Span::new("- ", Style::fg(theme.accent))];
-            decorated.extend(spans.into_iter().skip(1));
-            decorated
-        } else if trimmed.starts_with("> ") {
-            vec![Span::new(trimmed.to_string(), Style::dim(theme.dim))]
-        } else {
-            spans
-        };
-        let prefix = if first_line { first } else { rest };
-        out.extend(wrap_spans(spans, width, prefix, rest));
-        first_line = false;
-    }
-    if out.is_empty() {
-        out.push(Line::new().push(Span::new(first.to_string(), Style::plain())));
-    }
-    out
-}
-
-/// 行内样式：`code` 用强调色（pi 的 mdCode=violet），**bold** 加粗，
-/// `[文字](url)` 的文字用第二强调色、URL 用 dim，其余原样。
-fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span>, bool) {
-    let mut spans: Vec<Span> = Vec::new();
-    let mut buf = String::new();
-    let mut chars = text.chars().peekable();
-    let mut saw_style = false;
-    while let Some(ch) = chars.next() {
-        if ch == '[' {
-            // [label](url)：链接文字与 URL 分色，失配时按普通文本处理。
-            let mut label = String::new();
-            let mut matched_label = false;
-            for next in chars.by_ref() {
-                if next == ']' {
-                    matched_label = true;
-                    break;
-                }
-                label.push(next);
-            }
-            if matched_label && chars.peek() == Some(&'(') {
-                chars.next();
-                let mut url = String::new();
-                let mut matched_url = false;
-                for next in chars.by_ref() {
-                    if next == ')' {
-                        matched_url = true;
-                        break;
-                    }
-                    url.push(next);
-                }
-                if matched_url {
-                    if !buf.is_empty() {
-                        spans.push(Span::new(std::mem::take(&mut buf), Style::plain()));
-                    }
-                    spans.push(Span::new(label, Style::fg(theme.secondary)));
-                    if !url.is_empty() {
-                        spans.push(Span::new(format!(" ({})", url), Style::dim(theme.dim)));
-                    }
-                    saw_style = true;
-                    continue;
-                }
-                // 括号没闭合：把已吃掉的字符原样吐回去。
-                buf.push('[');
-                buf.push_str(&label);
-                buf.push_str("](");
-                buf.push_str(&url);
-                continue;
-            }
-            buf.push('[');
-            buf.push_str(&label);
-            if matched_label {
-                buf.push(']');
-            }
-            continue;
-        }
-        if ch == '`' {
-            if !buf.is_empty() {
-                spans.push(Span::new(std::mem::take(&mut buf), Style::plain()));
-            }
-            let mut code = String::new();
-            for next in chars.by_ref() {
-                if next == '`' {
-                    break;
-                }
-                code.push(next);
-            }
-            if !code.is_empty() {
-                spans.push(Span::new(code, Style::fg(theme.accent)));
-                saw_style = true;
-            }
-            continue;
-        }
-        if ch == '*' && chars.peek() == Some(&'*') {
-            chars.next();
-            if !buf.is_empty() {
-                spans.push(Span::new(std::mem::take(&mut buf), Style::plain()));
-            }
-            let mut bold = String::new();
-            let mut closed = false;
-            while let Some(next) = chars.next() {
-                if next == '*' && chars.peek() == Some(&'*') {
-                    chars.next();
-                    closed = true;
-                    break;
-                }
-                bold.push(next);
-            }
-            spans.push(Span::new(
-                bold,
-                if closed {
-                    Style::bold(theme.text)
-                } else {
-                    Style::plain()
-                },
-            ));
-            saw_style = true;
-            continue;
-        }
-        buf.push(ch);
-    }
-    if !buf.is_empty() {
-        spans.push(Span::new(buf, Style::plain()));
-    }
-    (spans, saw_style)
-}
-
-/// 把带样式的片段按宽度折行，续行用 `rest` 前缀。
-fn wrap_spans(spans: Vec<Span>, width: usize, first: &str, rest: &str) -> Vec<Line> {
-    let prefix_width = text_width(first).max(text_width(rest));
-    let body_width = width.saturating_sub(prefix_width).max(1);
-    let mut out: Vec<Line> = Vec::new();
-    let mut current_spans: Vec<Span> = Vec::new();
-    let mut used = 0usize;
-    for span in spans {
-        let mut piece = String::new();
-        for ch in span.text.chars() {
-            let width = text_width(&ch.to_string()).max(1);
-            if used + width > body_width {
-                if !piece.is_empty() {
-                    current_spans.push(Span::new(std::mem::take(&mut piece), span.style));
-                }
-                let mut line = Line::new();
-                line = line.push(Span::new(
-                    if out.is_empty() {
-                        first.to_string()
-                    } else {
-                        rest.to_string()
-                    },
-                    Style::plain(),
-                ));
-                for part in std::mem::take(&mut current_spans) {
-                    line = line.push(part);
-                }
-                out.push(line);
-                used = 0;
-            }
-            piece.push(ch);
-            used += width;
-        }
-        if !piece.is_empty() {
-            current_spans.push(Span::new(piece, span.style));
-        }
-    }
-    let mut line = Line::new().push(Span::new(
-        if out.is_empty() {
-            first.to_string()
-        } else {
-            rest.to_string()
-        },
-        Style::plain(),
-    ));
-    for part in current_spans {
-        line = line.push(part);
-    }
-    out.push(line);
-    out
-}
-
-/// 工具调用行里最有信息量的那个参数值。
-///
-/// 模型给的参数是 JSON；把整段打出来会把对话淹掉，取 path/command 这类
-/// 主键，再截断到一行。
-fn tool_primary_arg(arguments: &str) -> Option<String> {
-    let value = argent_core::json::Json::parse(arguments).ok()?;
-    for key in [
-        "path", "command", "query", "pattern", "url", "name", "uri", "job",
-    ] {
-        if let Some(raw) = value.get(key).and_then(argent_core::json::Json::as_str) {
-            if raw.is_empty() {
-                continue;
-            }
-            let one_line: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-            let clipped = clip_to_width(&one_line, 48);
-            return Some(clipped);
-        }
-    }
-    None
-}
-
-/// 用户消息块的排版：prefix 与正文同一底色，行尾补齐底色，
-/// 整条浅蓝铺满终端宽度。
-fn wrapped_block(
-    text: &str,
-    width: usize,
-    first_prefix: &str,
-    rest_prefix: &str,
-    style: Style,
-) -> Vec<Line> {
-    let mut out = wrapped(text, width, first_prefix, rest_prefix, style);
-    for line in &mut out {
-        let used = line.width();
-        if used < width {
-            line.spans.push(Span::new(" ".repeat(width - used), style));
-        }
-    }
-    out
-}
-
-fn wrapped(
-    text: &str,
-    width: usize,
-    first_prefix: &str,
-    rest_prefix: &str,
-    style: Style,
-) -> Vec<Line> {
-    let prefix_width = text_width(first_prefix).max(text_width(rest_prefix));
-    let body_width = width.saturating_sub(prefix_width).max(1);
-    let mut out = Vec::new();
-    for paragraph in text.split('\n') {
-        for segment in wrap_text(paragraph, body_width) {
-            let prefix = if out.is_empty() {
-                first_prefix
-            } else {
-                rest_prefix
-            };
-            out.push(
-                Line::new()
-                    .push(Span::new(prefix, style))
-                    .push(Span::new(segment, style)),
-            );
-        }
-    }
-    if out.is_empty() {
-        out.push(Line::plain(""));
-    }
-    out
-}
-
-/// `19M` / `1.6M` / `8.2k`：状态行的上传/下载累计。
-/// 思考块时长：500ms / 1.3s / 12s / 1m 05s。
-fn format_thought_duration(d: std::time::Duration) -> String {
-    let ms = d.as_millis();
-    if ms < 1_000 {
-        format!("{}ms", ms)
-    } else if ms < 10_000 {
-        format!("{:.1}s", d.as_secs_f64())
-    } else if ms < 60_000 {
-        format!("{}s", d.as_secs())
-    } else {
-        format!("{}m {}s", d.as_secs() / 60, d.as_secs() % 60)
-    }
-}
-
-/// 按终端列切一段文本（CJK 宽度与 `text_width` 保持一致）。
-fn slice_cells(text: &str, from: usize, to: usize) -> String {
-    let mut out = String::new();
-    let mut col = 0usize;
-    for ch in text.chars() {
-        let width = text_width(&ch.to_string());
-        if col >= from && col < to {
-            out.push(ch);
-        }
-        col += width;
-        if col >= to {
-            break;
-        }
-    }
-    out
-}
-
-fn compact_count(n: u64) -> String {
-    if n < 1000 {
-        return n.to_string();
-    }
-    if n < 1_000_000 {
-        let k = n as f64 / 1000.0;
-        return if k >= 10.0 {
-            format!("{}k", k as u64)
-        } else {
-            format!("{:.1}k", k)
-        };
-    }
-    let m = n as f64 / 1_000_000.0;
-    if m >= 10.0 {
-        format!("{}M", m as u64)
-    } else {
-        format!("{:.1}M", m)
-    }
-}
-
-/// `960k` 或 `1.0M`：上下文窗口显示。
-fn compact_window(max: usize) -> String {
-    if max >= 1_000_000 {
-        format!("{:.1}M", max as f64 / 1_000_000.0)
-    } else {
-        format!("{}k", max / 1000)
-    }
-}
-
-fn separator(width: usize) -> Line {
-    Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
-}
-
-#[derive(Debug, Clone, Default)]
-struct InputRow {
-    text: String,
-    /// Char index in `input` where this row starts.
-    start: usize,
-}
-
-fn input_top(width: usize) -> Line {
-    // 只有一条细线：输入区不贴标签，`›` 已经说明了它是什么。
-    // 与下方分隔线同宽——差两格看起来像两条没对齐的线。
-    Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
-}
-
-fn fill_between(mut left: Line, right: String, width: usize, style: Style) -> Line {
-    let right_width = text_width(&right);
-    let left_width = left.width();
-    let gap = width.saturating_sub(left_width + right_width);
-    left.spans.push(Span::new(" ".repeat(gap), Style::plain()));
-    left.spans.push(Span::new(right, style));
-    left
-}
-
-fn boxed_overlay(
-    title: &str,
-    content: &[(String, String)],
-    width: usize,
-    selected: Option<usize>,
-) -> Vec<Line> {
-    let box_width = width.saturating_sub(4).clamp(24, 80);
-    let inner = box_width.saturating_sub(4);
-    let mut lines = Vec::new();
-    let top = format!(
-        "┌─ {} {}┐",
-        title,
-        "─".repeat(box_width.saturating_sub(text_width(title) + 4))
-    );
-    lines.push(
-        Line::plain(clip_to_width(&top, box_width))
-            .with_style(Style::dim(crate::theme::current().accent)),
-    );
-    for (position, (left, right)) in content.iter().enumerate() {
-        let mut text = if right.is_empty() {
-            left.clone()
-        } else {
-            format!("{:<24} {}", clip_to_width(left, 24), right)
-        };
-        text = clip_to_width(&text, inner);
-        let padding = inner.saturating_sub(text_width(&text));
-        let mut line = Line::new()
-            .push(Span::new("│ ", Style::dim(crate::theme::current().accent)))
-            .push(Span::new(
-                text,
-                if Some(position) == selected {
-                    Style::reverse(crate::theme::current().accent)
-                } else {
-                    Style::plain()
-                },
-            ))
-            .push(Span::new(" ".repeat(padding), Style::plain()))
-            .push(Span::new(" │", Style::dim(crate::theme::current().accent)));
-        if Some(position) == selected {
-            line = line.with_style(Style::reverse(crate::theme::current().accent));
-        }
-        lines.push(line);
-    }
-    lines.push(
-        Line::plain(format!("└{}┘", "─".repeat(box_width.saturating_sub(2))))
-            .with_style(Style::dim(crate::theme::current().accent)),
-    );
-    lines
-}
-
-// ---------------------------------------------------------------- entry
-
-/// Run the full-screen UI. Returns when the operator quits.
-/// Drive a background session over HTTP with the same interface.
-///
-/// The events come from the session's event stream instead of a local agent,
-/// and the input box sends its lines to the session instead of to a worker.
-pub fn run_remote(
-    remote: RemoteLink,
-    title: String,
-    cwd: PathBuf,
-    statusline: Vec<String>,
-    bindings: crate::keybindings::Bindings,
-    events: Receiver<UiEvent>,
-) -> argent_core::Result<i32> {
-    let guard = match RawModeGuard::enable() {
-        Some(guard) => guard,
-        None => {
-            eprintln!("argent: this terminal does not support raw mode");
-            return Ok(1);
-        }
-    };
-    terminal::enter_alternate_screen();
-    terminal::hide_cursor();
-    // 不请求鼠标上报（`?1000h`）：终端自己的拖选、右键复制/粘贴、滚轮
-    // 比 TUI 自绘的选择更可靠，也是用户熟悉的操作。键盘输入仍走控制台
-    // 按键记录，和鼠标模式无关。
-
-    let locale = argent_i18n::Locale::from_env();
-    let (key_tx, key_rx) = mpsc::channel();
-    spawn_input(key_tx);
-    let prompts = crate::prompts::PromptLibrary::discover(
-        &crate::prompts::PromptLibrary::default_roots(&cwd),
-    );
-    let mut app =
-        App::new(Vec::new(), prompts, locale, statusline, bindings).with_remote(remote.clone());
-    app.animate_stream = true;
-    // 状态栏由调用方给的 Ready 事件填好（远端会话没有本地模型信息）。
-    let _ = &title;
-    let initial_size = terminal::size();
-    let mut last_frame: Vec<String> = Vec::new();
-    draw_at(
-        &app.frame(initial_size.cols as usize, initial_size.rows as usize),
-        Some(app.cursor_screen_position(initial_size.cols as usize, initial_size.rows as usize)),
-        &mut last_frame,
-    );
-    // The stand-in worker is the same for every key: its commands go nowhere.
-    let worker = remote_worker();
-    let mut last_size = initial_size;
-
-    while !app.quit {
-        let mut changed = false;
-        loop {
-            match events.try_recv() {
-                Ok(event) => {
-                    if let UiEvent::Agent(argent_agent::AgentEvent::TurnStart { .. }) = &event {
-                        remote
-                            .running
-                            .store(true, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    if let UiEvent::Agent(argent_agent::AgentEvent::Finished { .. }) = &event {
-                        remote
-                            .running
-                            .store(false, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    app.handle_ui(event);
-                    changed = true;
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    app.quit = true;
-                    break;
-                }
-            }
-        }
-        while let Ok(key) = key_rx.try_recv() {
-            app.handle_key(&worker, key);
-            changed = true;
-        }
-        if app.quit {
-            break;
-        }
-        app.pump_stream_text();
-        if changed || app.working {
-            let size = terminal::size();
-            let lines = app.frame(size.cols as usize, size.rows as usize);
-            draw_at(
-                &lines,
-                Some(app.cursor_screen_position(size.cols as usize, size.rows as usize)),
-                &mut last_frame,
-            );
-            last_size = size;
-        } else {
-            // 同 run()：空闲时的 resize 只能靠轮询尺寸发现。
-            let size = terminal::size();
-            if size != last_size {
-                last_size = size;
-                let lines = app.frame(size.cols as usize, size.rows as usize);
-                draw_at(
-                    &lines,
-                    Some(app.cursor_screen_position(size.cols as usize, size.rows as usize)),
-                    &mut last_frame,
-                );
-            }
-        }
-        std::thread::sleep(Duration::from_millis(33));
-    }
-
-    app.flush_stream_text();
-    terminal::show_cursor();
-    terminal::leave_alternate_screen();
-    drop(guard);
-    Ok(0)
-}
-
-/// A worker stand-in for the remote session: its commands go nowhere, the
-/// abort handle is unused (the session is aborted over HTTP).
-fn remote_worker() -> Worker {
-    let (command_tx, _command_rx) = mpsc::channel();
-    let (_event_tx, event_rx) = mpsc::channel();
-    Worker {
-        commands: command_tx,
-        events: event_rx,
-        abort: AbortHandle::new(),
-        steering: Arc::new(Mutex::new(VecDeque::new())),
-    }
-}
-
-pub fn run(
-    agent: Agent,
-    session: SessionContext,
-    config: argent_core::config::Config,
-    index: SessionIndex,
-    commands: Vec<argent_commands::CommandDoc>,
-    prompts: crate::prompts::PromptLibrary,
-    approvals: Receiver<ApprovalRequest>,
-    subagents: Option<Receiver<argent_tools::SubagentEvent>>,
-    checkpoints: argent_tools::CheckpointStore,
-    cwd: PathBuf,
-    hooks: HookConfig,
-) -> argent_core::Result<i32> {
-    let guard = match RawModeGuard::enable() {
-        Some(guard) => guard,
-        None => {
-            eprintln!("argent: this terminal does not support raw mode");
-            return Ok(1);
-        }
-    };
-    terminal::enter_alternate_screen();
-    terminal::hide_cursor();
-    // 同 run()：鼠标交给终端，TUI 不抢拖选和右键菜单。
-
-    let locale = argent_i18n::Locale::from_env();
-    let statusline = config.statusline.clone();
-    let bindings = crate::keybindings::Bindings::load(&cwd)?;
-    // 上下文窗口优先用 provider 目录的实时值（/v1/models 会回报
-    // context_length，本地网关是 960000），网络不可用时再回退
-    // max_context_tokens（默认 128000 只是下限）。
-    let max_context_tokens =
-        argent_session::controller::model_context_window(&agent, config.max_context_tokens);
-    let approval_mode = config.approval_mode;
-    let worker = spawn(
-        agent,
-        session,
-        checkpoints,
-        config,
-        index,
-        cwd.clone(),
-        hooks.clone(),
-        locale,
-    );
-    let (key_tx, key_rx) = mpsc::channel();
-    spawn_input(key_tx);
-    let mut app = App::new(commands, prompts, locale, statusline, bindings);
-    app.animate_stream = true;
-    app.context_max = max_context_tokens;
-    app.approval_mode = approval_mode;
-    let initial_size = terminal::size();
-    let mut last_frame: Vec<String> = Vec::new();
-    draw_at(
-        &app.frame(initial_size.cols as usize, initial_size.rows as usize),
-        Some(app.cursor_screen_position(initial_size.cols as usize, initial_size.rows as usize)),
-        &mut last_frame,
-    );
-    let mut last_sweep = Instant::now();
-    let mut last_size = initial_size;
-
-    while !app.quit {
-        let mut changed = false;
-        loop {
-            match worker.events.try_recv() {
-                Ok(event) => {
-                    app.handle_ui(event);
-                    changed = true;
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    app.quit = true;
-                    break;
-                }
-            }
-        }
-        while let Ok(request) = approvals.try_recv() {
-            app.handle_approval(request);
-            changed = true;
-        }
-        // An Alt+Enter follow-up starts as soon as the previous run ends.
-        while !app.working {
-            let Some(next) = app.follow_ups.pop_front() else {
-                break;
-            };
-            app.transcript.push_user(next.clone());
-            app.working = true;
-            app.queued = app.queued.saturating_add(1);
-            app.scroll = 0;
-            let _ = worker.commands.send(Command::Prompt {
-                text: next,
-                images: Vec::new(),
-            });
-            changed = true;
-        }
-        // 子代理在 worker 线程上跑；进度从独立通道进来，追加成一条提示。
-        if let Some(subagents) = &subagents {
-            while let Ok(event) = subagents.try_recv() {
-                app.handle_ui(UiEvent::Agent(AgentEvent::Notice(event.describe())));
-                changed = true;
-            }
-        }
-        while let Ok(key) = key_rx.try_recv() {
-            app.handle_key(&worker, key);
-            changed = true;
-        }
-        if app.quit {
-            break;
-        }
-        app.pump_stream_text();
-        if changed || app.working || app.status.is_some() {
-            let size = terminal::size();
-            let lines = app.frame(size.cols as usize, size.rows as usize);
-            draw_at(
-                &lines,
-                Some(app.cursor_screen_position(size.cols as usize, size.rows as usize)),
-                &mut last_frame,
-            );
-            last_size = size;
-        } else {
-            // 空闲时没有事件触发重画：最大化/还原只能靠尺寸变化来发现，
-            // 否则要等到下一次按键才重排。
-            let size = terminal::size();
-            if size != last_size {
-                last_size = size;
-                let lines = app.frame(size.cols as usize, size.rows as usize);
-                draw_at(
-                    &lines,
-                    Some(app.cursor_screen_position(size.cols as usize, size.rows as usize)),
-                    &mut last_frame,
-                );
-            }
-        }
-        if last_sweep.elapsed() >= Duration::from_secs(5) {
-            last_sweep = Instant::now();
-            let _ = worker.commands.send(Command::ListSessions);
-        }
-        std::thread::sleep(Duration::from_millis(33));
-    }
-
-    if let Some(pending) = app.pending.take() {
-        let _ = pending.reply.send(false);
-    }
-    let _ = worker.commands.send(Command::Shutdown);
-    let end_ctx = HookContext {
-        cwd: cwd.clone(),
-        ..HookContext::default()
-    };
-    let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
-    app.flush_stream_text();
-    terminal::show_cursor();
-    terminal::leave_alternate_screen();
-    // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
-    if app
-        .transcript
-        .entries()
-        .iter()
-        .any(|entry| !entry.text().is_empty())
-    {
-        println!();
-        for line in transcript_plain(&app.transcript) {
-            println!("{}", line);
-        }
-    }
-    drop(guard);
-    let _ = std::io::stdout().flush();
-    Ok(0)
-}
-
-/// 退出时回显用的纯文本版本（无颜色、无边框）。
-pub fn transcript_plain(transcript: &Transcript) -> Vec<String> {
-    let mut out = Vec::new();
-    for entry in transcript.entries() {
-        match entry {
-            argent_ui_core::Entry::User(text) => {
-                for line in text.lines() {
-                    out.push(format!("{} {}", USER_MARK.trim_end(), line));
-                }
-            }
-            argent_ui_core::Entry::Assistant(text) => {
-                for line in text.lines() {
-                    out.push(format!("{} {}", ASSISTANT_MARK.trim_end(), line));
-                }
-            }
-            argent_ui_core::Entry::Thinking(_) => {}
-            argent_ui_core::Entry::Tool(run) => {
-                out.push(format!(
-                    "{} {}({})",
-                    TOOL_MARK.trim_end(),
-                    run.name,
-                    run.arguments
-                ));
-                out.push(format!(
-                    "  ⎿ {} {}",
-                    run.state.glyph(),
-                    run.state.describe()
-                ));
-            }
-            argent_ui_core::Entry::Notice(_, text) => out.push(format!("! {}", text)),
-        }
-        out.push(String::new());
-    }
-    out
-}
-
-/// Draw a frame and leave the terminal cursor where the input box wants it.
-///
-/// The cursor is hidden while the frame paints (so it does not chase the
-/// redraw across the screen) and shown again at the input position.
-fn draw_at(lines: &[String], cursor: Option<(usize, usize)>, last: &mut Vec<String>) {
-    let mut out = String::new();
-    // 帧间 diff：行数变了（首帧 / resize）才全屏重画；否则只写变化的行。
-    // 每帧重画整屏会让慢终端的 VT 解析跟不上，表现为消息好几百毫秒、
-    // 甚至几秒才出现。
-    if last.len() != lines.len() {
-        // 逐行绝对定位，而不是在行尾写 `\r\n`：最后一行带换行会让终端
-        // 滚一行，整帧上移、第一行被吃掉，输入框上下两条线也会错位。
-        out.push_str("\x1b[?25l\x1b[H");
-        for (index, line) in lines.iter().enumerate() {
-            out.push_str(&format!("\x1b[{};1H", index + 1));
-            out.push_str(line);
-        }
-        out.push_str("\x1b[J");
-        // 原地同步快照：resize_with + clone_from 复用每行已有容量，
-        // 避免每帧重建一整份 Vec<String>（行数变化时才会走到这里）。
-        last.resize_with(lines.len(), String::new);
-        for (slot, line) in last.iter_mut().zip(lines.iter()) {
-            slot.clone_from(line);
-        }
-    } else {
-        for (index, line) in lines.iter().enumerate() {
-            if last[index] != *line {
-                out.push_str(&format!("\x1b[{};1H", index + 1));
-                out.push_str(line);
-                // 只复制变化的行，且 clone_from 复用已有分配。
-                last[index].clone_from(line);
-            }
-        }
-    }
-    if let Some((row, col)) = cursor {
-        out.push_str(&format!("\x1b[{};{}H", row, col));
-    }
-    out.push_str("\x1b[?25h");
-    terminal::write_raw(&out);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use worker::*;
 
     #[test]
     fn console_records_map_to_typing_and_navigation() {
@@ -6059,7 +3675,7 @@ mod tests {
     }
 
     #[test]
-    fn pasted_text_lands_at_the_cursor_with_newlines_flattened() {
+    fn pasted_text_lands_at_the_cursor_and_keeps_newlines() {
         let mut app = App::new(
             Vec::new(),
             crate::prompts::PromptLibrary::new(),
@@ -6071,7 +3687,7 @@ mod tests {
         app.cursor = 1;
         app.insert_pasted("X\r\nY");
         let text: String = app.input.iter().collect();
-        assert_eq!(text, "aX Yb");
+        assert_eq!(text, "aX\nYb");
     }
 
     #[test]
@@ -6188,6 +3804,7 @@ mod tests {
 #[cfg(test)]
 mod remote_tests {
     use super::*;
+    use run::*;
     use std::io::Read;
     use std::net::TcpListener;
 
@@ -6459,6 +4076,7 @@ mod paste_tests {
 #[cfg(test)]
 mod cursor_tests {
     use super::*;
+    use run::*;
 
     fn app() -> App {
         App::new(
@@ -6579,8 +4197,8 @@ mod cursor_tests {
     fn an_empty_input_puts_the_cursor_after_the_prompt_mark() {
         let app = app();
         let (row, col) = app.cursor_screen_position(100, 30);
-        // The input line is the 3rd row from the bottom (separator + status below it).
-        assert_eq!(row, 28);
+        // The input line is the 2nd row from the bottom (status bar below it).
+        assert_eq!(row, 29);
         assert_eq!(col, 3);
     }
 
@@ -7169,7 +4787,7 @@ mod cursor_tests {
         app.input = "a".repeat(200).chars().collect();
         app.cursor = 200;
         let (row, col) = app.cursor_screen_position(100, 30);
-        assert_eq!(row, 28, "three input rows above the separator");
+        assert_eq!(row, 29, "three input rows above the status bar");
         assert_eq!(col, 1 + text_width(USER_MARK) + 8);
         // The frame still has exactly the requested height.
         assert_eq!(app.frame(100, 30).len(), 30);
@@ -7182,7 +4800,66 @@ mod cursor_tests {
         app.cursor = 500;
         let (row, col) = app.cursor_screen_position(60, 24);
         // MAX_ROWS = 4, so the cursor never drops below the fourth input row.
-        assert!((24 - 1 - 4..=22).contains(&row), "row {row}");
+        assert!((24 - 4..=23).contains(&row), "row {row}");
         assert!(col < 60, "col {col}");
+    }
+
+    #[test]
+    fn explicit_newlines_split_the_input_window() {
+        let mut app = app();
+        app.input = "ab\ncd".chars().collect();
+        app.cursor = 4;
+        let (rows, cursor_row) = app.input_window(40);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].text, "ab");
+        assert_eq!(rows[1].text, "cd");
+        assert_eq!(cursor_row, 1);
+        let (row, col) = app.cursor_screen_position(40, 20);
+        assert_eq!(row, 19);
+        assert_eq!(col, 1 + text_width(USER_MARK) + 1);
+    }
+
+    #[test]
+    fn ctrl_j_inserts_a_line_break_instead_of_sending() {
+        let worker = test_worker();
+        let mut app = app();
+        app.insert_text("ab");
+        app.handle_key(&worker, Key::CtrlJ);
+        let text: String = app.input.iter().collect();
+        assert_eq!(text, "ab\n");
+        assert_eq!(app.cursor, 3);
+        assert!(app.transcript.entries().is_empty(), "nothing was sent");
+    }
+
+    #[test]
+    fn alt_digit_folds_a_specific_thought_block() {
+        let worker = test_worker();
+        let mut app = app();
+        for (question, thought) in [("q1", "t1"), ("q2", "t2")] {
+            app.transcript.push_entry(Entry::User(question.to_string()));
+            app.transcript
+                .apply(&argent_agent::AgentEvent::Thinking(thought.to_string()));
+            app.transcript
+                .apply(&argent_agent::AgentEvent::AssistantText(
+                    "answer".to_string(),
+                ));
+        }
+        app.frame(100, 40);
+        assert!(app.body_fold_rows.iter().any(|&(_, ordinal)| ordinal == 1));
+        app.handle_key(&worker, Key::AltDigit(2));
+        assert!(app.expanded_thinking.contains(&1));
+        app.handle_key(&worker, Key::AltDigit(2));
+        assert!(!app.expanded_thinking.contains(&1));
+    }
+
+    #[test]
+    fn the_body_is_centered_on_a_wide_terminal() {
+        let mut app = app();
+        app.transcript.push_entry(Entry::User("hi".to_string()));
+        app.frame(200, 30);
+        let first = &app.frame_text[0];
+        let pad = first.chars().take_while(|ch| *ch == ' ').count();
+        assert_eq!(pad, 40, "body capped at 120 and centered: {first:?}");
+        assert!(first.contains("hi"), "{first:?}");
     }
 }
