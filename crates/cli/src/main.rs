@@ -332,6 +332,16 @@ pub fn run(raw: &[String]) -> Result<i32> {
             }
         }
     };
+    // 会话亲和键：从会话文件路径导出（同一会话重启后不变），让网关把
+    // 每一轮请求送回同一份 KV 前缀。`ARGENT_CACHE_KEY=off` 显式关闭。
+    if std::env::var_os("ARGENT_CACHE_KEY").is_none() {
+        let key = argent_core::hash::short_hash(
+            session_path.to_string_lossy().as_bytes(),
+            24,
+        );
+        std::env::set_var("ARGENT_CACHE_KEY", key);
+    }
+
     // The session file is a tree: every entry names its parent, so a fork
     // keeps the original branch intact.
     let mut session = SessionContext::open(session_path.clone())?;

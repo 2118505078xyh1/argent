@@ -59,6 +59,11 @@ pub struct OpenAiConfig {
     pub stream_usage: bool,
     /// 模型目录，用于按能力裁剪请求（与 Anthropic/Responses 配置一致）。
     pub models: Vec<ModelInfo>,
+    /// 会话亲和键：同一会话每轮请求都带同一个值，网关据此把请求路由到
+    /// 同一后端的同一份 KV 前缀。`ARGENT_CACHE_KEY=off` 可关闭。
+    pub cache_key: Option<String>,
+    /// `prompt_cache_retention`；`ARGENT_CACHE_RETENTION=off` 时不发送。
+    pub cache_retention: Option<String>,
 }
 
 impl OpenAiConfig {
@@ -70,6 +75,21 @@ impl OpenAiConfig {
         let stream_usage = std::env::var("ARGENT_OPENAI_STREAM_USAGE")
             .map(|value| !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"))
             .unwrap_or(true);
+        let disabled = |value: &str| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "" | "0" | "off" | "false" | "none"
+            )
+        };
+        let cache_key = std::env::var("ARGENT_CACHE_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !disabled(value));
+        let cache_retention = std::env::var("ARGENT_CACHE_RETENTION")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !disabled(value))
+            .or_else(|| cache_key.as_ref().map(|_| "24h".to_string()));
         OpenAiConfig {
             base_url: base_url.into(),
             api_key: None,
@@ -78,6 +98,8 @@ impl OpenAiConfig {
             retry: RetryPolicy::from_env(),
             stream_usage,
             models: Vec::new(),
+            cache_key,
+            cache_retention,
         }
     }
 
@@ -107,12 +129,34 @@ impl OpenAiConfig {
         self
     }
 
+    /// Pin requests from one session to one provider-side cache shard.
+    pub fn with_cache_key(mut self, key: impl Into<String>) -> OpenAiConfig {
+        self.cache_key = Some(key.into());
+        if self.cache_retention.is_none() {
+            self.cache_retention = Some("24h".to_string());
+        }
+        self
+    }
+
     fn chat_url(&self) -> String {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 
     fn models_url(&self) -> String {
         format!("{}/models", self.base_url.trim_end_matches('/'))
+    }
+
+    /// Routing gateways use one of these names to keep a session on the same
+    /// backend. Sending all three is harmless and covers the common ones.
+    fn affinity_headers(&self) -> Vec<(&'static str, String)> {
+        match &self.cache_key {
+            None => Vec::new(),
+            Some(key) => vec![
+                ("x-session-id", key.clone()),
+                ("session_id", key.clone()),
+                ("x-session-affinity", key.clone()),
+            ],
+        }
     }
 }
 
@@ -358,6 +402,9 @@ impl OpenAiProvider {
             "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n",
             path, host, port
         );
+        for (name, value) in self.config.affinity_headers() {
+            head.push_str(&format!("{}: {}\r\n", name, value));
+        }
         if let Some(key) = &self.config.api_key {
             head.push_str(&format!("Authorization: Bearer {}\r\n", key));
         }
@@ -409,6 +456,9 @@ impl OpenAiProvider {
             .arg("--data-binary")
             .arg("@-")
             .arg(url);
+        for (name, value) in self.config.affinity_headers() {
+            spec = spec.arg("-H").arg(format!("{}: {}", name, value));
+        }
         if let Some(key) = &self.config.api_key {
             spec = spec.arg("-H").arg(format!("Authorization: Bearer {}", key));
         }
@@ -427,6 +477,9 @@ impl OpenAiProvider {
         let mut request = argent_core::http::Request::get(&url);
         if let Some(key) = &self.config.api_key {
             request = request.header("Authorization", &format!("Bearer {}", key));
+        }
+        for (name, value) in self.config.affinity_headers() {
+            request = request.header(name, &value);
         }
         let response = argent_core::http::send(&request)?;
         if !response.is_success() {
@@ -609,7 +662,15 @@ impl Provider for OpenAiProvider {
         &self,
         request: &ChatRequest,
     ) -> Result<Box<dyn Iterator<Item = Result<StreamEvent>> + Send>> {
-        let body = OpenAiProvider::build_body_for(request, self.config.stream_usage, &self.config.models);
+        let mut body = OpenAiProvider::build_body_for(request, self.config.stream_usage, &self.config.models);
+        if let Some(key) = &self.config.cache_key {
+            // vLLM / routing gateways use this to shard the prefix cache by
+            // session; pure llama.cpp ignores unknown fields. Both are fine.
+            body.set("prompt_cache_key", Json::string(key.clone()));
+            if let Some(retention) = &self.config.cache_retention {
+                body.set("prompt_cache_retention", Json::string(retention.clone()));
+            }
+        }
         let stream = self.open_stream(&body, request.cancel.clone())?;
         Ok(Box::new(sse_iterator(stream)))
     }
@@ -922,9 +983,61 @@ fn parse_usage(event: &SseEvent) -> Option<crate::provider::Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Message;
+    use crate::message::{Message, MessageCache};
     use crate::provider::ChatRequest;
     use std::io::{BufRead, Write};
+
+    #[test]
+    fn session_key_goes_into_body_and_affinity_headers() {
+        let config = OpenAiConfig::new("http://127.0.0.1:1/v1").with_cache_key("sess-42");
+        let provider = OpenAiProvider::new(config);
+        let request = ChatRequest::new("m", vec![Message::user("hi")]);
+        // build the same body chat() sends, without opening a stream
+        let mut body = OpenAiProvider::build_body_for(&request, true, &[]);
+        if let Some(key) = &provider.config.cache_key {
+            body.set("prompt_cache_key", Json::string(key.clone()));
+            if let Some(retention) = &provider.config.cache_retention {
+                body.set("prompt_cache_retention", Json::string(retention.clone()));
+            }
+        }
+        assert_eq!(body.str_or("prompt_cache_key", ""), "sess-42");
+        assert_eq!(body.str_or("prompt_cache_retention", ""), "24h");
+        let headers = provider.config.affinity_headers();
+        assert_eq!(headers.len(), 3);
+        assert!(headers.iter().all(|(_, value)| value == "sess-42"));
+        assert!(headers.iter().any(|(name, _)| *name == "x-session-id"));
+        assert!(headers.iter().any(|(name, _)| *name == "x-session-affinity"));
+
+        let plain = OpenAiConfig::new("http://127.0.0.1:1/v1");
+        assert!(plain.affinity_headers().is_empty());
+        assert!(plain.cache_key.is_none());
+    }
+
+    #[test]
+    fn growing_history_keeps_the_wire_prefix_byte_identical() {
+        let mut history = vec![
+            Message::system("You are argent"),
+            Message::user("first"),
+            Message::assistant("answer"),
+        ];
+        let mut cache = MessageCache::new();
+        let first = cache.sync(None, &history, 0);
+        history.push(Message::user("second"));
+        let second = cache.sync(None, &history, 0);
+        assert_eq!(second.len(), first.len() + 1);
+        for index in 0..first.len() {
+            assert_eq!(first[index], second[index], "message {} changed", index);
+        }
+        // 同一份字节喂给序列化层，逐条消息也必须逐字节一致。
+        let mut request = ChatRequest::new("m", Vec::new()).with_wire_messages(first.clone());
+        let body1 = OpenAiProvider::build_body(&request);
+        request.wire_messages = Some(second);
+        let body2 = OpenAiProvider::build_body(&request);
+        let messages1 = body1.get("messages").unwrap().dump();
+        let messages2 = body2.get("messages").unwrap().dump();
+        assert!(messages2.starts_with(&messages1[..messages1.len() - 1]),
+            "prefix drift between turns:\n{}\n{}", messages1, messages2);
+    }
 
     #[test]
     fn builds_a_minimal_body() {
