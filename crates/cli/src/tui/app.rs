@@ -36,8 +36,9 @@ pub(super) struct App {
     pub(super) pending_text: std::collections::VecDeque<char>,
     /// 自管的鼠标拖选：起点、当前终点（屏幕行列，0 基）。
     pub(super) selection: Option<((u16, u16), (u16, u16))>,
-    /// 按下点落在输入区时的光标位置；松开时据此跳过正文选择逻辑。
-    pub(super) input_press: Option<usize>,
+    /// 按下点落在输入区：(光标位置, 行, 列)。原地松开只移光标；
+    /// 拖动则升级成普通选区（从按下点起，松开复制）。
+    pub(super) input_press: Option<(usize, u16, u16)>,
     /// 每帧记录输入行：(屏幕行号, 行首字符在 `input` 里的下标, 行文本)。
     /// 鼠标点进输入区时据此定位光标。
     pub(super) input_hit_rows: Vec<(u16, usize, String)>,
@@ -384,6 +385,7 @@ impl App {
                 reason,
                 usage,
                 requests,
+                warm_requests,
                 context_used,
                 cost,
             } => {
@@ -392,6 +394,7 @@ impl App {
                 let elapsed = self.metrics.elapsed();
                 let ttft = self.metrics.ttft();
                 self.metrics.finish_turn(usage, requests);
+                self.metrics.note_warm_requests(warm_requests);
                 // 摘要行：模型 · 时长 · tok/s · ttft。没有真调用模型（hook 中止等）不打印。
                 if usage.total_tokens > 0 || ttft.is_some() {
                     if let Some(ready) = &self.ready {
@@ -647,9 +650,9 @@ impl App {
         // 原地松开 = 点击思考块；拖出距离 = 复制选中文字。
         match key {
             Key::MousePress { row, col } => {
-                // 点进输入区：定位光标，不进入正文拖选；松开时只收尾。
+                // 点进输入区：定位光标；原地松开到止，拖动则升级成选区。
                 if let Some(cursor) = self.cursor_at(row, col) {
-                    self.input_press = Some(cursor);
+                    self.input_press = Some((cursor, row, col));
                     self.cursor = cursor;
                     self.dirty = true;
                     return;
@@ -659,14 +662,18 @@ impl App {
                 return;
             }
             Key::MouseDrag { row, col } => {
-                if let Some((start, _)) = self.selection {
+                if let Some((_, press_row, press_col)) = self.input_press.take() {
+                    // 输入区的拖动就是普通选区：高亮与复制走全帧逻辑。
+                    self.selection = Some(((press_row, press_col), (row, col)));
+                    self.dirty = true;
+                } else if let Some((start, _)) = self.selection {
                     self.selection = Some((start, (row, col)));
                     self.dirty = true;
                 }
                 return;
             }
             Key::MouseRelease { row, col } => {
-                // 输入区的按下-松开对：光标已在按下时移动，这里不再触发
+                // 输入区原地松开：光标已在按下时移动，这里不再触发
                 // 正文的选择、复制或思考块切换。
                 if self.input_press.take().is_some() {
                     self.dirty = true;
@@ -3026,12 +3033,17 @@ impl App {
                     ),
                     (
                         format!(
-                            "Cached: {}{} · missed {}",
+                            "Cached: {}{} · missed {}{}",
                             self.metrics.session_cached_tokens,
                             cached_pct,
                             self.metrics
                                 .session_prompt_tokens
-                                .saturating_sub(self.metrics.session_cached_tokens)
+                                .saturating_sub(self.metrics.session_cached_tokens),
+                            if self.metrics.session_warm_requests > 0 {
+                                format!(" · {} warm", self.metrics.session_warm_requests)
+                            } else {
+                                String::new()
+                            }
                         ),
                         String::new(),
                     ),
@@ -4729,6 +4741,7 @@ mod cursor_tests {
                 cached_tokens: 2048,
             },
             requests: 1,
+            warm_requests: 0,
             context_used: 4170,
             cost: None,
         });
@@ -4773,6 +4786,7 @@ mod cursor_tests {
                 cached_tokens: 0,
             },
             requests: 1,
+            warm_requests: 0,
             context_used: 110,
             cost: None,
         });
@@ -4786,6 +4800,7 @@ mod cursor_tests {
                 cached_tokens: 50,
             },
             requests: 1,
+            warm_requests: 0,
             context_used: 130,
             cost: None,
         });
@@ -4832,6 +4847,7 @@ mod cursor_tests {
             reason: FinishReason::Aborted,
             usage: argent_ai::Usage::default(),
             requests: 0,
+            warm_requests: 0,
             context_used: 0,
             cost: None,
         });
@@ -4942,6 +4958,30 @@ mod cursor_tests {
         let len = text.chars().count();
         app.handle_key(&worker, Key::MousePress { row, col: 30 });
         assert_eq!(app.cursor, start + len);
+    }
+
+    #[test]
+    fn dragging_in_the_input_area_copies_the_selected_text() {
+        let worker = test_worker();
+        let mut app = app();
+        app.input = "abcd".chars().collect();
+        app.frame(40, 20);
+        let (row, _, _) = app.input_hit_rows[0].clone();
+        // 文本从第 2 格开始：按下 "b"（col 3），拖到 "c"（col 4）→ 选 "bc"。
+        app.handle_key(&worker, Key::MousePress { row, col: 3 });
+        app.handle_key(&worker, Key::MouseDrag { row, col: 4 });
+        let (start, end) = app.selection.expect("drag promotes to a selection");
+        assert_eq!(app.selected_text(start, end), "bc");
+        app.handle_key(&worker, Key::MouseRelease { row, col: 4 });
+        assert!(app.selection.is_none(), "release clears the selection");
+        assert!(app.input_press.is_none());
+        // 复制路径走到了：剪贴板在测试环境里可能失败，两种状态都算通过。
+        let status = app
+            .status
+            .as_ref()
+            .map(|(text, _)| text.clone())
+            .unwrap_or_default();
+        assert!(status.starts_with("copy"), "{}", status);
     }
 
     #[test]
