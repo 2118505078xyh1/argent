@@ -2763,8 +2763,13 @@ impl App {
             Key::Delete => {
                 if self.cursor < self.input.len() {
                     self.input.remove(self.cursor);
+                    self.dirty = true;
                 }
             }
+            Key::CtrlA => self.cursor = 0,
+            Key::CtrlK => self.kill_to_end(),
+            Key::CtrlU => self.kill_to_start(),
+            Key::CtrlW => self.delete_word_before(),
             Key::Left => self.cursor = self.cursor.saturating_sub(1),
             Key::Right => self.cursor = (self.cursor + 1).min(self.input.len()),
             Key::Home => self.cursor = 0,
@@ -2876,6 +2881,9 @@ impl App {
     }
 
     fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
         for ch in text.chars() {
             self.input.insert(self.cursor, ch);
             self.cursor += 1;
@@ -2900,6 +2908,37 @@ impl App {
             self.input.remove(self.cursor);
             self.dirty = true;
         }
+    }
+
+    fn kill_to_end(&mut self) {
+        if self.cursor < self.input.len() {
+            self.input.truncate(self.cursor);
+            self.dirty = true;
+        }
+    }
+
+    fn kill_to_start(&mut self) {
+        if self.cursor > 0 {
+            self.input.drain(..self.cursor);
+            self.cursor = 0;
+            self.dirty = true;
+        }
+    }
+
+    fn delete_word_before(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let mut start = self.cursor;
+        while start > 0 && self.input[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        while start > 0 && !self.input[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        self.input.drain(start..self.cursor);
+        self.cursor = start;
+        self.dirty = true;
     }
 
     fn history_previous(&mut self) {
@@ -5130,6 +5169,17 @@ mod tests {
             key_from_console_record(Some('\u{12}'), 0x52, true, false),
             None
         );
+        for (vk, key) in [
+            (0x41, Key::CtrlA),
+            (0x4B, Key::CtrlK),
+            (0x55, Key::CtrlU),
+            (0x57, Key::CtrlW),
+        ] {
+            assert_eq!(
+                key_from_console_record(Some('\u{0}'), vk, true, false),
+                Some(key)
+            );
+        }
         // 纯修饰键按下不产生输入。
         assert_eq!(
             key_from_console_record(Some('\u{0}'), 0x11, true, false),
@@ -5156,6 +5206,16 @@ mod tests {
         assert_eq!(next_key(&mut focus), Some(Key::Ignore));
         let mut bytes = VecDeque::from(vec![0x0d]);
         assert_eq!(next_key(&mut bytes), Some(Key::Enter));
+        // 行编辑控制键不再落成不可见字符。
+        for (byte, key) in [
+            (0x01, Key::CtrlA),
+            (0x0b, Key::CtrlK),
+            (0x15, Key::CtrlU),
+            (0x17, Key::CtrlW),
+        ] {
+            let mut bytes = VecDeque::from(vec![byte]);
+            assert_eq!(next_key(&mut bytes), Some(key));
+        }
     }
 
     #[test]
@@ -5683,6 +5743,32 @@ mod tests {
         app.insert_pasted("X\r\nY");
         let text: String = app.input.iter().collect();
         assert_eq!(text, "aX Yb");
+    }
+
+    #[test]
+    fn readline_kills_edit_the_input_line() {
+        let worker = super::cursor_tests::test_worker();
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::En,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.input = "hello world".chars().collect();
+        app.cursor = app.input.len();
+        app.handle_key(&worker, Key::CtrlW);
+        assert_eq!(app.input.iter().collect::<String>(), "hello ");
+        app.handle_key(&worker, Key::CtrlA);
+        assert_eq!(app.cursor, 0);
+        app.handle_key(&worker, Key::CtrlK);
+        assert!(app.input.is_empty(), "ctrl+k kills to the end");
+
+        app.input = "abc def".chars().collect();
+        app.cursor = 3;
+        app.handle_key(&worker, Key::CtrlU);
+        assert_eq!(app.input.iter().collect::<String>(), " def");
+        assert_eq!(app.cursor, 0);
     }
 
     #[test]
