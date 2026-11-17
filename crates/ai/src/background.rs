@@ -63,9 +63,13 @@ impl BackgroundAssistant {
         let raw = self.complete(
             "Summarize the user's first request as a session title: at most \
              30 characters, no quotes, no trailing period, same language as \
-             the request.",
+             the request. Think briefly, then output only the title.",
             first_exchange,
-            120,
+            // Some small models emit a reasoning block before the answer;
+            // a 120-token cap left nothing for the title itself. The extra
+            // room is a ceiling, not a cost — these models stop as soon as
+            // they have written the title.
+            400,
         )?;
         // Titles head session lists; newlines would break the layout.
         let one_line = raw.lines().next().unwrap_or("").trim().to_string();
