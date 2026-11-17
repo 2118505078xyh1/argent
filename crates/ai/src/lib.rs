@@ -11,6 +11,8 @@ pub mod provider;
 pub mod responses;
 pub mod retry;
 
+mod transport;
+
 pub use anthropic::{AnthropicConfig, AnthropicProvider};
 pub use background::BackgroundAssistant;
 pub use capabilities::Capabilities;

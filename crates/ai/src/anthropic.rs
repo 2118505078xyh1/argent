@@ -19,9 +19,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use argent_core::error::{Error, Result};
-use argent_core::http::{self, Head};
+use argent_core::http;
 
 use crate::capabilities::Capabilities;
+use crate::transport::{
+    curl_program, failure_from_head, read_curl_head, split_http_url, CurlStream, OpenFailure,
+};
 use argent_core::json::Json;
 use argent_core::process::CommandSpec;
 use argent_core::sse::{parse_data_lenient, SseDecoder, SseEvent};
@@ -29,7 +32,7 @@ use argent_core::sse::{parse_data_lenient, SseDecoder, SseEvent};
 use crate::message::{Content, Message, ModelInfo, Role, ToolCall};
 use crate::openai::TransportMode;
 use crate::provider::{ChatRequest, Provider, StreamEvent, Usage};
-use crate::retry::{is_retryable_status, parse_retry_after, RetryPolicy};
+use crate::retry::RetryPolicy;
 
 /// The Anthropic API version header value.
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -967,140 +970,6 @@ impl Iterator for AnthropicStream {
             }
         }
     }
-}
-
-/// `curl` on PATH, or the copy bundled with Windows.
-fn curl_program() -> String {
-    argent_core::process::find_program(
-        "curl",
-        &[
-            r"C:\Windows\System32\curl.exe",
-            r"C:\Program Files\Git\mingw64\bin\curl.exe",
-            r"C:\Program Files\Git\bin\curl.exe",
-            "/usr/bin/curl",
-        ],
-    )
-    .unwrap_or_else(|| "curl".to_string())
-}
-
-struct CurlStream {
-    child: argent_core::process::StreamingChild,
-    cancel: Option<Arc<AtomicBool>>,
-    /// Dropped with the stream; stops the watchdog thread.
-    _watch: Option<crate::cancel::CancelGuard>,
-}
-
-impl Read for CurlStream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if crate::cancel::cancelled(self.cancel.as_ref()) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "request aborted",
-            ));
-        }
-        // curl 以非零码退出时，EOF 代表连接失败或中断，不能当成正常结束。
-        self.child
-            .read_checked(buf)
-            .map_err(|error| std::io::Error::new(error.kind(), format!("curl: {}", error)))
-    }
-}
-
-fn split_http_url(url: &str) -> Result<(String, u16, String)> {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .ok_or_else(|| Error::config(format!("unsupported URL scheme in '{}'", url)))?;
-    let (authority, path) = match rest.find('/') {
-        Some(idx) => (&rest[..idx], &rest[idx..]),
-        None => (rest, "/"),
-    };
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() => {
-            (h.to_string(), p.parse::<u16>().unwrap_or(80))
-        }
-        _ => (authority.to_string(), 80),
-    };
-    Ok((host, port, path.to_string()))
-}
-
-#[derive(Debug)]
-struct OpenFailure {
-    error: Error,
-    retryable: bool,
-    retry_after: Option<Duration>,
-}
-
-impl OpenFailure {
-    fn fatal(error: Error) -> OpenFailure {
-        OpenFailure {
-            error,
-            retryable: false,
-            retry_after: None,
-        }
-    }
-
-    fn retry(error: Error) -> OpenFailure {
-        OpenFailure {
-            error,
-            retryable: true,
-            retry_after: None,
-        }
-    }
-}
-
-fn read_curl_head(
-    source: Box<dyn Read + Send>,
-) -> std::result::Result<Box<dyn Read + Send>, OpenFailure> {
-    let mut reader = BufReader::new(source);
-    let head = http::read_head(&mut reader).map_err(OpenFailure::retry)?;
-    if head.status == 200 {
-        return Ok(Box::new(reader));
-    }
-    Err(failure_from_head(&head, &mut reader))
-}
-
-fn failure_from_head(head: &Head, body: &mut dyn Read) -> OpenFailure {
-    let retry_after = head.header("retry-after").and_then(parse_retry_after);
-    if head.status == 0 {
-        return OpenFailure {
-            error: Error::provider(format!(
-                "provider did not answer with HTTP: {}",
-                clip(&head.status_line, 200)
-            )),
-            retryable: true,
-            retry_after,
-        };
-    }
-
-    let mut detail = Vec::new();
-    let mut chunk = [0u8; 1024];
-    while detail.len() < 4096 {
-        match body.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => detail.extend_from_slice(&chunk[..n]),
-            Err(_) => break,
-        }
-    }
-    let text = String::from_utf8_lossy(&detail);
-    let detail = clip(text.trim(), 400);
-    OpenFailure {
-        error: Error::provider(if detail.is_empty() {
-            format!("provider returned HTTP {}", head.status)
-        } else {
-            format!("provider returned HTTP {}: {}", head.status, detail)
-        }),
-        retryable: is_retryable_status(head.status),
-        retry_after,
-    }
-}
-
-fn clip(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(max).collect();
-    out.push('…');
-    out
 }
 
 #[cfg(test)]
