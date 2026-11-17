@@ -1650,6 +1650,8 @@ struct ReadyInfo {
     cwd: String,
     session: String,
     session_path: String,
+    /// Current git branch, computed once when the session opens.
+    git: String,
 }
 
 enum Overlay {
@@ -1809,6 +1811,8 @@ struct App {
     /// The prompt of the run that just failed with an error: pressing Enter
     /// on an empty input re-sends it, so a retry is one keystroke.
     failed_prompt: Option<String>,
+    /// Last error shown to the operator, kept for the `/session` panel.
+    last_error: Option<String>,
     status: Option<(String, Instant)>,
     quit: bool,
     tick: u64,
@@ -1887,6 +1891,7 @@ impl App {
             queued: 0,
             follow_ups: std::collections::VecDeque::new(),
             failed_prompt: None,
+            last_error: None,
             status: None,
             quit: false,
             tick: 0,
@@ -2051,6 +2056,7 @@ impl App {
                     thinking,
                     provider,
                     protocol,
+                    git: git_branch(&cwd),
                     cwd,
                     session,
                     session_path,
@@ -2165,6 +2171,7 @@ impl App {
                 self.transcript.push_notice(NoticeKind::Info, text);
             }
             UiEvent::Error(text) => {
+                self.last_error = Some(clip_to_width(&text, 120).to_string());
                 self.transcript.push_notice(NoticeKind::Error, text);
             }
         }
@@ -2646,7 +2653,7 @@ impl App {
                         self.overlay = Some(Overlay::SessionInfo { selected });
                     }
                     Key::Down => {
-                        selected = (selected + 1).min(4);
+                        selected = (selected + 1).min(5);
                         self.overlay = Some(Overlay::SessionInfo { selected });
                     }
                     Key::Enter => match selected {
@@ -2673,6 +2680,10 @@ impl App {
                         3 => {
                             let _ = worker.commands.send(Command::ListSessions);
                             self.open_session_picker();
+                        }
+                        4 => {
+                            let _ = worker.commands.send(Command::Compact);
+                            self.overlay = None;
                         }
                         _ => self.overlay = None,
                     },
@@ -3806,6 +3817,26 @@ impl App {
                         .map(|ready| ready.cwd.clone())
                         .unwrap_or_default(),
                 )),
+                "git" => items.push((
+                    5,
+                    self.ready
+                        .as_ref()
+                        .map(|ready| ready.git.clone())
+                        .unwrap_or_default(),
+                )),
+                "approval" => items.push((
+                    5,
+                    match self.approval_mode {
+                        ApprovalMode::Always => "approval:always".to_string(),
+                        ApprovalMode::Sensible => "approval:sensible".to_string(),
+                        ApprovalMode::Never => "approval:never".to_string(),
+                    },
+                )),
+                "plan" => {
+                    if self.plan {
+                        items.push((5, "plan".to_string()));
+                    }
+                }
                 _ => {}
             }
         }
@@ -3909,10 +3940,14 @@ impl App {
                 }
             }
             if self.working {
-                left = left.push(Span::new("  ", Style::plain())).push(Span::new(
-                    SPINNER[(self.tick as usize) % SPINNER.len()],
-                    Style::bold(theme.success),
-                ));
+                let spinner = if accessible_mode() {
+                    "*"
+                } else {
+                    SPINNER[(self.tick as usize) % SPINNER.len()]
+                };
+                left = left
+                    .push(Span::new("  ", Style::plain()))
+                    .push(Span::new(spinner, Style::bold(theme.success)));
             } else if self.queued > 0 {
                 left = left.push(Span::new(
                     format!("  {} queued", self.queued),
@@ -4541,20 +4576,46 @@ impl App {
                     Some(cost) => format!("${cost:.3}"),
                     None => "—".to_string(),
                 };
+                let (model, thinking, cwd) = match &self.ready {
+                    Some(ready) => (
+                        ready.model.clone(),
+                        ready.thinking.clone(),
+                        ready.cwd.clone(),
+                    ),
+                    None => ("—".to_string(), "—".to_string(), "—".to_string()),
+                };
+                let context = if self.metrics.context_max > 0 {
+                    format!(
+                        "{:.1}%/{} · {} messages",
+                        self.metrics.context_fraction() * 100.0,
+                        compact_window(self.metrics.context_max),
+                        self.transcript.entries().len()
+                    )
+                } else {
+                    format!("{} messages", self.transcript.entries().len())
+                };
+                let error = self.last_error.clone().unwrap_or_else(|| "—".to_string());
                 let mut content = vec![
                     (format!("Name: {}", name), String::new()),
                     (format!("File: {}", path), String::new()),
                     (
-                        format!("Messages: {}", self.transcript.entries().len()),
+                        format!("Model: {} · {}", model, thinking),
                         String::new(),
                     ),
+                    (format!("Cwd: {}", clip_to_width(&cwd, 64)), String::new()),
+                    (format!("Context: {}", context), String::new()),
                     (
-                        format!("Input: {}", self.metrics.session_prompt_tokens),
+                        format!(
+                            "Tokens: in {} · out {} · cost {}",
+                            self.metrics.session_prompt_tokens,
+                            self.metrics.session_completion_tokens,
+                            cost
+                        ),
                         String::new(),
                     ),
                     (
                         format!(
-                            "Cached: {}{} · missed {}",
+                            "Cache: {}{} · missed {}",
                             self.metrics.session_cached_tokens,
                             cached_pct,
                             self.metrics
@@ -4563,12 +4624,7 @@ impl App {
                         ),
                         String::new(),
                     ),
-                    (
-                        format!("Output: {}", self.metrics.session_completion_tokens),
-                        String::new(),
-                    ),
-                    (format!("Cost: {}", cost), String::new()),
-                    (String::new(), String::new()),
+                    (format!("Last error: {}", error), String::new()),
                 ];
                 debug_assert_eq!(content.len(), SESSION_INFO_ROWS);
                 content.extend(
@@ -4577,6 +4633,7 @@ impl App {
                         "Copy file path",
                         "Browse branches",
                         "Resume another session",
+                        "Compact conversation now",
                         "Close",
                     ]
                     .iter()
@@ -4979,6 +5036,45 @@ fn separator(width: usize) -> Line {
     Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
 }
 
+/// Screen-reader / low-vision mode: no spinner animation, no streamed
+/// typewriter effect. Set `ARGENT_ACCESSIBLE=1`.
+pub(crate) fn accessible_mode() -> bool {
+    matches!(
+        std::env::var("ARGENT_ACCESSIBLE").ok().as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
+}
+
+/// Branch name from `.git/HEAD`; works for worktrees whose `.git` is a file.
+fn git_branch(cwd: &str) -> String {
+    let dot = Path::new(cwd).join(".git");
+    let git_dir = if dot.is_dir() {
+        dot
+    } else if let Ok(text) = std::fs::read_to_string(&dot) {
+        match text.trim().strip_prefix("gitdir:") {
+            Some(rest) => {
+                let path = PathBuf::from(rest.trim());
+                if path.is_absolute() {
+                    path
+                } else {
+                    Path::new(cwd).join(path)
+                }
+            }
+            None => return String::new(),
+        }
+    } else {
+        return String::new();
+    };
+    let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) else {
+        return String::new();
+    };
+    head.trim()
+        .strip_prefix("ref: refs/heads/")
+        .map(str::to_string)
+        .or_else(|| head.get(0..7).map(str::to_string))
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Default)]
 struct InputRow {
     text: String,
@@ -5087,7 +5183,7 @@ pub fn run_remote(
     );
     let mut app =
         App::new(Vec::new(), prompts, locale, statusline, bindings).with_remote(remote.clone());
-    app.animate_stream = true;
+    app.animate_stream = !accessible_mode();
     // 状态栏由调用方给的 Ready 事件填好（远端会话没有本地模型信息）。
     let _ = &title;
     let initial_size = terminal::size();
@@ -5225,7 +5321,7 @@ pub fn run(
     let (key_tx, key_rx) = mpsc::channel();
     spawn_input(key_tx);
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
-    app.animate_stream = true;
+    app.animate_stream = !accessible_mode();
     app.context_max = max_context_tokens;
     app.approval_mode = approval_mode;
     let initial_size = terminal::size();
@@ -5584,6 +5680,7 @@ mod tests {
             cwd: dir.display().to_string(),
             session: "s".to_string(),
             session_path: String::new(),
+            git: String::new(),
         });
         let (prompt, attached, images) = app.expand_attachments("@a.txt summarize this");
         assert!(prompt.contains("attached body"), "{}", prompt);
@@ -5684,6 +5781,7 @@ mod tests {
             cwd: dir.display().to_string(),
             session: String::new(),
             session_path: String::new(),
+            git: String::new(),
         });
         assert_eq!(
             app.bindings.action(&Key::CtrlP),
@@ -5738,6 +5836,7 @@ mod tests {
             cwd: dir.display().to_string(),
             session: "s".to_string(),
             session_path: String::new(),
+            git: String::new(),
         });
         let (_prompt, attached, images) = app.expand_attachments("@pixel.png what is this");
         assert_eq!(attached, vec!["pixel.png".to_string()]);
@@ -5978,6 +6077,7 @@ mod tests {
             cwd: "D:\\code\\mpi\\argent".to_string(),
             session: "demo-session".to_string(),
             session_path: "C:\\Users\\demo\\.argent".to_string(),
+            git: "main".to_string(),
         });
         app.transcript
             .push_user("帮我看看 src/main.rs 里的启动逻辑");
@@ -7173,6 +7273,75 @@ mod cursor_tests {
         assert_eq!(col, 1 + text_width(USER_MARK) + 8);
         // The frame still has exactly the requested height.
         assert_eq!(app.frame(100, 30).len(), 30);
+    }
+
+    #[test]
+    fn git_branch_reads_head_and_worktree_files() {
+        let dir = std::env::temp_dir().join(format!("argent-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git/HEAD"), "ref: refs/heads/feature/x
+").unwrap();
+        assert_eq!(git_branch(dir.to_str().unwrap()), "feature/x");
+        // Worktree: `.git` is a file pointing at the real git dir.
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(
+            work.join(".git"),
+            format!("gitdir: {}
+", dir.join(".git").display()),
+        )
+        .unwrap();
+        assert_eq!(git_branch(work.to_str().unwrap()), "feature/x");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_panel_shows_model_context_and_last_error() {
+        let mut app = app();
+        app.ready = Some(ReadyInfo {
+            model: "spark-4b".to_string(),
+            thinking: "high".to_string(),
+            provider: "local".to_string(),
+            protocol: "openai".to_string(),
+            cwd: "/tmp/project".to_string(),
+            session: "demo".to_string(),
+            session_path: "/tmp/demo.jsonl".to_string(),
+            git: "main".to_string(),
+        });
+        app.metrics = Metrics::new("spark-4b", "high", "/tmp/project");
+        app.metrics.context_max = 16384;
+        app.metrics.context_used = 2048;
+        app.metrics.session_prompt_tokens = 4000;
+        app.metrics.session_cached_tokens = 3000;
+        app.handle_ui(UiEvent::Error("provider exploded loudly".to_string()));
+        app.overlay = Some(Overlay::SessionInfo { selected: 0 });
+        let frame = app.frame(100, 34).join("
+");
+        assert!(frame.contains("Model: spark-4b · high"), "{}", frame);
+        assert!(frame.contains("Context: 12.5%/16k"), "{}", frame);
+        assert!(frame.contains("Last error: provider exploded"), "{}", frame);
+        assert!(frame.contains("Compact conversation now"), "{}", frame);
+        assert!(
+            frame.contains("Cache: 3000 (75%) · missed 1000"),
+            "{}",
+            frame
+        );
+    }
+
+    #[test]
+    fn user_block_snapshot_paints_the_theme_background() {
+        let mut app = app();
+        app.transcript.push_user("snapshot user text");
+        let frame = app.frame(72, 20).join("
+");
+        let bg = crate::theme::current().user_bg;
+        assert!(frame.contains(&bg.bg_code()), "user bg missing: {}", frame);
+        let line = frame
+            .lines()
+            .find(|line| line.contains("snapshot user text"))
+            .expect("user row rendered");
+        assert_eq!(text_width(&strip_ansi(line)), 72);
     }
 
     #[test]
