@@ -2911,9 +2911,11 @@ impl App {
                 compact_window(self.metrics.context_max)
             ));
         }
-        // 两个速度：live 是正在进行的这一轮的瞬时速度，avg 是整段的平均速度。
+        // 两个速度：live 是这一轮的平滑瞬时速度（idle 时不显示），avg 是整段平均。
         let tok_s = argent_i18n::t(self.locale, "tui.tok_s");
-        segments.push(format!("live {:.0} {}", self.metrics.live_rate(), tok_s));
+        if self.metrics.working {
+            segments.push(format!("live {:.0} {}", self.metrics.smoothed_live_rate(), tok_s));
+        }
         segments.push(format!("avg {:.0} {}", self.metrics.average_rate(), tok_s));
         // statusline 配置的附加段接在默认段之后：session / model / thinking / cwd。
         for segment in &self.statusline {
@@ -4962,8 +4964,8 @@ mod cursor_tests {
             .collect();
         assert!(text.contains("19.7%/960k"), "{text}");
         assert!(text.contains("↑19M ↓1.6M"), "{text}");
-        assert!(text.contains("live "), "{text}");
         assert!(text.contains("avg "), "{text}");
+        assert!(!text.contains("live "), "idle shows avg only: {text}");
         // 单行：不允许出现换行。
         assert_eq!(text.matches('\n').count(), 0);
     }

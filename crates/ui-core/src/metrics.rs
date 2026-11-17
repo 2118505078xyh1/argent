@@ -22,6 +22,10 @@ pub struct Metrics {
     last_turn: Option<Duration>,
     first_chunk: Option<Instant>,
     ttft: Option<Duration>,
+    /// EMA-smoothed live rate: the raw reading jumps every frame, which
+    /// makes the status bar unreadable while streaming.
+    rate_ema: f64,
+    rate_at: Option<Instant>,
     /// Characters received this turn, split by script, for a live estimate.
     ascii_chars: usize,
     cjk_chars: usize,
@@ -59,6 +63,8 @@ impl Metrics {
             last_turn: None,
             first_chunk: None,
             ttft: None,
+            rate_ema: 0.0,
+            rate_at: None,
             ascii_chars: 0,
             cjk_chars: 0,
             other_chars: 0,
@@ -79,6 +85,8 @@ impl Metrics {
         self.working = true;
         self.turn_started = Some(Instant::now());
         self.first_chunk = None;
+        self.rate_ema = 0.0;
+        self.rate_at = None;
         self.ttft = None;
         self.ascii_chars = 0;
         self.cjk_chars = 0;
@@ -142,6 +150,25 @@ impl Metrics {
 
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+        // 每个帧推进一次 EMA：τ=0.6s，比帧率平滑，但仍跟得上真实变化。
+        let rate = self.live_rate();
+        let now = Instant::now();
+        let dt = self
+            .rate_at
+            .map(|t| now.duration_since(t).as_secs_f64())
+            .unwrap_or(0.033);
+        self.rate_at = Some(now);
+        let alpha = dt / (dt + 0.6);
+        self.rate_ema = if self.rate_ema == 0.0 {
+            rate
+        } else {
+            self.rate_ema + alpha * (rate - self.rate_ema)
+        };
+    }
+
+    /// The instantaneous rate, low-pass filtered; stable enough for a status bar.
+    pub fn smoothed_live_rate(&self) -> f64 {
+        self.rate_ema
     }
 
     /// Tokens received this turn.
@@ -352,6 +379,22 @@ mod tests {
         m.finish_turn(Usage::default(), 1);
         m.begin_turn();
         assert_eq!(m.tokens_down(), 0);
+    }
+
+    #[test]
+    fn the_live_rate_is_smoothed_by_tick() {
+        let mut m = metrics();
+        m.begin_turn();
+        m.note_text(&"a".repeat(400));
+        // live_rate 只在有首个 chunk 200ms 之后报数；等一帧真时钟。
+        std::thread::sleep(Duration::from_millis(250));
+        for _ in 0..200 {
+            m.note_text(&"a".repeat(400));
+            m.tick();
+        }
+        assert!(m.smoothed_live_rate() > 0.0);
+        // 平滑值不能超过瞬时值太多（同量级）。
+        assert!(m.smoothed_live_rate() <= m.live_rate().max(f64::EPSILON) * 1.5 + 1.0);
     }
 
     #[test]
