@@ -3134,8 +3134,8 @@ impl App {
                     let mut rendered = wrapped(
                         &text,
                         width,
-                        "thinking ",
-                        "           ",
+                        "✻ ",
+                        "  ",
                         Style::dim(crate::theme::current().dim),
                     );
                     let folded = !self.expand && rendered.len() > 4;
@@ -3716,9 +3716,8 @@ pub fn run_remote(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 鼠标：点击锚定行跳回最新消息、点折叠思考行展开。退出时关掉，
-    // 否则终端会一直把点击当转义序列发给程序（连不上东西了）。
-    terminal::enable_mouse();
+    // 不开鼠标上报：框选复制必须能用（Windows Terminal 里 ?1000h 会把
+    // 普通拖拽变成点击事件）。折叠思考是 Ctrl+E，跳回用户消息是 Esc。
 
     let locale = argent_i18n::Locale::from_env();
     let (key_tx, key_rx) = mpsc::channel();
@@ -3807,7 +3806,6 @@ pub fn run_remote(
         std::thread::sleep(Duration::from_millis(33));
     }
 
-    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     drop(guard);
@@ -3849,9 +3847,8 @@ pub fn run(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 鼠标：点击锚定行跳回最新消息、点折叠思考行展开。退出时关掉，
-    // 否则终端会一直把点击当转义序列发给程序（连不上东西了）。
-    terminal::enable_mouse();
+    // 不开鼠标上报：框选复制必须能用（Windows Terminal 里 ?1000h 会把
+    // 普通拖拽变成点击事件）。折叠思考是 Ctrl+E，跳回用户消息是 Esc。
 
     let locale = argent_i18n::Locale::from_env();
     let statusline = config.statusline.clone();
@@ -3968,7 +3965,6 @@ pub fn run(
         ..HookContext::default()
     };
     let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
-    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
@@ -4183,7 +4179,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_is_labelled_with_text_not_a_glyph() {
+    fn thinking_is_labelled_with_the_star_glyph() {
         let mut app = App::new(
             Vec::new(),
             crate::prompts::PromptLibrary::new(),
@@ -4193,12 +4189,11 @@ mod tests {
         );
         app.transcript
             .push_entry(argent_ui_core::Entry::Thinking("reasoning here".to_string()));
-        let frame = app.frame(80, 24).join("\n");
-        assert!(frame.contains("thinking"), "{}", frame);
+        let frame = app.frame(80, 24).join("
+");
+        assert!(frame.contains("✻"), "the original star glyph: {}", frame);
         assert!(frame.contains("reasoning here"), "{}", frame);
-        assert!(!frame.contains("✻"), "the old glyph must be gone: {}", frame);
     }
-
     #[test]
     fn reload_resources_rebinds_keys_from_disk() {
         let dir = std::env::temp_dir().join(format!("argent-tui-reload-{}", std::process::id()));
