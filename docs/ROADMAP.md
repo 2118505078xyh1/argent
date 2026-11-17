@@ -17,7 +17,7 @@ agent 已经可用；剩余工作主要是表面层和较大的插件能力。
 
 ## M1 — 对等表面
 
-1. ~~全屏 TUI~~ **完成**（`crates/cli/src/tui/mod.rs`）：transcript、队列、
+1. ~~全屏 TUI~~ **完成**（`crates/cli/src/tui/app.rs`）：transcript、队列、
    斜杠面板、自定义命令、模型/思考选择器、会话选择器、审批弹窗、指标
    头部、工具输出折叠。
 2. 桌面侧面板宿主：**加载插件 `ui.surfaces`、原生 office 预览和

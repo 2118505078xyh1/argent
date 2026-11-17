@@ -17,7 +17,7 @@
 | ZCode 组件 | argent | 状态 |
 |---|---|---|
 | CLI 分发（`zcode tui/help/version/doctor/login/logout/commands/plugins/skills/hooks/app-server`） | `crates/cli/src/{main,args,commands}.rs` | 完成 |
-| 交互式 TUI | `crates/cli/src/tui/mod.rs`（输入层 `tui/keys.rs`）— transcript、面板、审批弹窗、指标 | 完成 |
+| 交互式 TUI | `crates/cli/src/tui/`（`app.rs` + `mod.rs`，输入层 `tui/keys.rs`）— transcript、面板、审批弹窗、指标 | 完成 |
 | App server / agent server | `crates/cli/src/{acp,rpc}.rs`：`argent acp` 和 `argent app-server` | 完成（ACP v1 子集 + NDJSON） |
 | 分层配置（`~/.zcode/cli/config.json`、`.zcode/config.json`、`zcode.json`） | `crates/config/src/lib.rs` | 完成 |
 | 指令文件（`AGENTS.md`） | `crates/agent/src/context.rs` | 完成 |
