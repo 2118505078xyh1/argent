@@ -285,6 +285,7 @@ fn handle(
                         agent.model(),
                         &agent.usage(),
                         agent.requests(),
+                        agent.warm_requests(),
                         agent.usage_cost(),
                         sink.clock.ms(),
                     );

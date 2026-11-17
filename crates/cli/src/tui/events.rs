@@ -75,6 +75,9 @@ pub enum UiEvent {
         reason: FinishReason,
         usage: Usage,
         requests: u64,
+        /// Cache-warming keep-alive requests this turn; their tokens are
+        /// inside `usage` already.
+        warm_requests: u64,
         context_used: usize,
         cost: Option<f64>,
     },

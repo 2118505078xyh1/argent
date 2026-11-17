@@ -1479,6 +1479,7 @@ fn record_usage(session: &SessionContext, agent: &argent_agent::Agent, ttft_ms: 
         agent.model(),
         &usage,
         requests,
+        agent.warm_requests(),
         cost,
         ttft_ms,
     );

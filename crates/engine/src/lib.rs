@@ -294,6 +294,7 @@ pub fn start_session(
                                 agent.model(),
                                 &usage,
                                 requests,
+                                agent.warm_requests(),
                                 cost,
                                 sink.clock.ms(),
                             );

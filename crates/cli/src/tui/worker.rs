@@ -171,6 +171,7 @@ pub fn spawn(
                             reason: FinishReason::Aborted,
                             usage: agent.usage(),
                             requests: agent.requests(),
+                            warm_requests: agent.warm_requests(),
                             context_used: argent_agent::estimate_tokens(agent.history())
                                 .max(agent.last_prompt_tokens() as usize),
                             cost: None,
@@ -241,6 +242,7 @@ pub fn spawn(
                                 agent.model(),
                                 &usage,
                                 requests,
+                                agent.warm_requests(),
                                 cost,
                                 sink.clock.ms(),
                             );
@@ -249,6 +251,7 @@ pub fn spawn(
                                 reason,
                                 usage,
                                 requests,
+                                warm_requests: agent.warm_requests(),
                                 context_used: argent_agent::estimate_tokens(agent.history())
                                     .max(agent.last_prompt_tokens() as usize),
                                 cost,
@@ -356,6 +359,7 @@ assistant: {}",
                                 reason: FinishReason::Error(error.to_string()),
                                 usage: agent.usage(),
                                 requests: agent.requests(),
+                                warm_requests: agent.warm_requests(),
                                 context_used: argent_agent::estimate_tokens(agent.history())
                                     .max(agent.last_prompt_tokens() as usize),
                                 cost: None,

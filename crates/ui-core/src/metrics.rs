@@ -46,6 +46,9 @@ pub struct Metrics {
     pub session_prompt_tokens: u64,
     pub session_completion_tokens: u64,
     pub session_cached_tokens: u64,
+    /// Cache-warming keep-alive requests; their tokens sit inside the
+    /// session prompt/completion totals already.
+    pub session_warm_requests: u64,
 }
 
 impl Metrics {
@@ -79,6 +82,7 @@ impl Metrics {
             session_prompt_tokens: 0,
             session_completion_tokens: 0,
             session_cached_tokens: 0,
+            session_warm_requests: 0,
         }
     }
 
@@ -131,6 +135,12 @@ impl Metrics {
         self.session_prompt_tokens += usage.prompt_tokens;
         self.session_completion_tokens += usage.completion_tokens;
         self.session_cached_tokens += usage.cached_tokens.min(usage.prompt_tokens);
+    }
+
+    /// Count the turn's cache-warming keep-alive requests. Their token cost
+    /// rides in through [`Self::finish_turn`]; only the count is extra.
+    pub fn note_warm_requests(&mut self, warm_requests: u64) {
+        self.session_warm_requests += warm_requests;
     }
 
     /// Session-wide share of prompt tokens served from cache.

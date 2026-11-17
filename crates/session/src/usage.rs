@@ -23,6 +23,10 @@ pub struct UsageRecord {
     pub completion_tokens: u64,
     pub cached_tokens: u64,
     pub requests: u64,
+    /// Cache-warming keep-alive requests in this turn. Their tokens are
+    /// already inside `prompt_tokens`; the count keeps them attributable.
+    /// `0` for records written before the field existed.
+    pub warm_requests: u64,
     pub cost: Option<f64>,
     /// Time to first streamed chunk, when the frontend measured it.
     pub ttft_ms: Option<u64>,
@@ -48,6 +52,7 @@ pub struct UsageSummary {
     /// Prompt tokens served without cache; the number to shrink.
     pub missed_tokens: u64,
     pub requests: u64,
+    pub warm_requests: u64,
     pub cost: f64,
     pub ttft_samples: u64,
     pub ttft_total_ms: u64,
@@ -108,7 +113,7 @@ pub fn record(
     cost: Option<f64>,
 ) -> Result<()> {
     let path = usage_path();
-    record_with_ttft_at(&path, session, model, usage, requests, cost, None)
+    record_with_ttft_at(&path, session, model, usage, requests, 0, cost, None)
 }
 
 /// The same, with the time to first token measured by an interactive frontend.
@@ -117,6 +122,7 @@ pub fn record_with_ttft(
     model: &str,
     usage: &Usage,
     requests: u64,
+    warm_requests: u64,
     cost: Option<f64>,
     ttft_ms: Option<u64>,
 ) -> Result<()> {
@@ -126,6 +132,7 @@ pub fn record_with_ttft(
         model,
         usage,
         requests,
+        warm_requests,
         cost,
         ttft_ms,
     )
@@ -140,7 +147,7 @@ pub fn record_at(
     requests: u64,
     cost: Option<f64>,
 ) -> Result<()> {
-    record_with_ttft_at(path, session, model, usage, requests, cost, None)
+    record_with_ttft_at(path, session, model, usage, requests, 0, cost, None)
 }
 
 /// Append one turn, optionally with the measured time to first token.
@@ -151,6 +158,7 @@ pub fn record_with_ttft_at(
     model: &str,
     usage: &Usage,
     requests: u64,
+    warm_requests: u64,
     cost: Option<f64>,
     ttft_ms: Option<u64>,
 ) -> Result<()> {
@@ -173,6 +181,9 @@ pub fn record_with_ttft_at(
     line.set("completion", Json::num(usage.completion_tokens as f64));
     line.set("cached", Json::num(usage.cached_tokens as f64));
     line.set("requests", Json::num(requests as f64));
+    if warm_requests > 0 {
+        line.set("warm_requests", Json::num(warm_requests as f64));
+    }
     if let Some(cost) = cost {
         line.set("cost", Json::num(cost));
     }
@@ -217,6 +228,7 @@ pub fn read_at(path: &Path) -> Vec<UsageRecord> {
             completion_tokens: value.num_or("completion", 0.0) as u64,
             cached_tokens: value.num_or("cached", 0.0) as u64,
             requests: value.num_or("requests", 0.0) as u64,
+            warm_requests: value.num_or("warm_requests", 0.0) as u64,
             cost: value.get("cost").and_then(Json::as_f64),
             ttft_ms: value
                 .get("ttft_ms")
@@ -241,6 +253,7 @@ pub fn summary(records: &[UsageRecord], since_epoch: u64) -> UsageSummary {
             summary.ttft_total_ms += ttft;
         }
         summary.requests += record.requests;
+        summary.warm_requests += record.warm_requests;
         summary.cost += record.cost.unwrap_or(0.0);
         add(&mut summary.by_model, &record.model, record);
         let session = if record.session.is_empty() {
@@ -334,6 +347,7 @@ mod tests {
             "m1",
             &usage,
             1,
+            2,
             Some(0.03),
             Some(1_200),
         )
@@ -347,6 +361,7 @@ mod tests {
         // 每轮 prompt 100、cached 60 → 40 missed；三轮共 120。
         assert_eq!(summary.missed_tokens, 120);
         assert_eq!(summary.cache_hit_percent(), 60);
+        assert_eq!(summary.warm_requests, 2);
         assert!((summary.cost - 0.06).abs() < 1e-9);
         assert_eq!(summary.by_model.len(), 2);
         // 只有第三轮带 ttft，平均值不能被无样本的轮次稀释。
@@ -369,6 +384,7 @@ mod tests {
             completion_tokens: 10,
             cached_tokens: 150,
             requests: 1,
+            warm_requests: 0,
             cost: None,
             ttft_ms: None,
         };
@@ -385,6 +401,7 @@ mod tests {
             completion_tokens: 0,
             cached_tokens: cached,
             requests: 1,
+            warm_requests: 0,
             cost: None,
             ttft_ms: None,
         };

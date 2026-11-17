@@ -433,6 +433,9 @@ pub(super) fn usage(args: &[String]) -> Result<i32> {
             Json::num(summary.cache_hit_percent() as f64),
         );
         data.set("requests", Json::num(summary.requests as f64));
+        if summary.warm_requests > 0 {
+            data.set("warm_requests", Json::num(summary.warm_requests as f64));
+        }
         data.set("ttft_samples", Json::num(summary.ttft_samples as f64));
         if let Some(ttft) = summary.avg_ttft_ms() {
             data.set("avg_ttft_ms", Json::num(ttft as f64));
@@ -475,14 +478,20 @@ pub(super) fn usage(args: &[String]) -> Result<i32> {
         .avg_ttft_ms()
         .map(|ms| format!(" · ttft {:.1}s avg", ms as f64 / 1000.0))
         .unwrap_or_default();
+    let warm = if summary.warm_requests > 0 {
+        format!(" · {} warm", summary.warm_requests)
+    } else {
+        String::new()
+    };
     println!(
-        "prompt {} · completion {} · cached {} ({}%) · missed {} · ${:.4}{}",
+        "prompt {} · completion {} · cached {} ({}%) · missed {} · ${:.4}{}{}",
         short_tokens(summary.prompt_tokens),
         short_tokens(summary.completion_tokens),
         short_tokens(summary.cached_tokens),
         hit,
         short_tokens(summary.missed_tokens),
         summary.cost,
+        warm,
         ttft
     );
     if !summary.by_model.is_empty() {
