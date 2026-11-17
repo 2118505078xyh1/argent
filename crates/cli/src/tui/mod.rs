@@ -1557,6 +1557,9 @@ struct App {
     locale: argent_i18n::Locale,
     /// Set when the UI drives a background session instead of a local agent.
     remote: Option<RemoteLink>,
+    /// Configured context window. Kept outside Metrics because UiEvent::Ready
+    /// rebuilds Metrics and must not lose the window size.
+    context_max: usize,
     /// Laid-out transcript body, keyed on width / fold state / transcript
     /// version. Re-wrapping a long transcript every frame is what made the
     /// whole UI feel laggy.
@@ -1629,6 +1632,7 @@ impl App {
     ) -> App {
         App {
             remote: None,
+            context_max: 0,
             body_cache: None,
             body_fold_rows: Vec::new(),
             body_user_row: None,
@@ -1688,7 +1692,9 @@ impl App {
                 session,
                 session_path,
             } => {
-                self.metrics = Metrics::new(model.clone(), thinking.clone(), cwd.clone());
+                let mut fresh = Metrics::new(model.clone(), thinking.clone(), cwd.clone());
+                fresh.context_max = self.context_max;
+                self.metrics = fresh;
                 self.ready = Some(ReadyInfo {
                     model,
                     thinking,
@@ -3869,7 +3875,7 @@ pub fn run(
     let (key_tx, key_rx) = mpsc::channel();
     spawn_input(key_tx);
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
-    app.metrics.context_max = max_context_tokens;
+    app.context_max = max_context_tokens;
     let initial_size = terminal::size();
     let mut last_frame: Vec<String> = Vec::new();
     draw_at(
@@ -5048,6 +5054,22 @@ mod cursor_tests {
             app.transcript.entries().iter().any(|e| matches!(e, Entry::User(t) if t == "你好")),
             "transcript keeps the user entry"
         );
+    }
+
+    #[test]
+    fn the_ready_event_keeps_the_context_window() {
+        let mut app = app();
+        app.context_max = 960_000;
+        app.handle_ui(UiEvent::Ready {
+            model: "m".to_string(),
+            thinking: "auto".to_string(),
+            provider: "local".to_string(),
+            protocol: "chat".to_string(),
+            cwd: "/tmp".to_string(),
+            session: "s".to_string(),
+            session_path: "/tmp/s.jsonl".to_string(),
+        });
+        assert_eq!(app.metrics.context_max, 960_000);
     }
 
     #[test]
