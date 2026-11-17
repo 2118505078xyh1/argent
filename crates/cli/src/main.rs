@@ -244,6 +244,14 @@ pub fn run(raw: &[String]) -> Result<i32> {
     };
 
     let mut config = Config::load(&cli.cwd)?;
+    // 拼错的设置键会被静默忽略——启动时就告诉操作者，别等问题查半天。
+    for (key, source) in &config.unknown_keys {
+        let hint = match argent_core::config::suggest_setting(key) {
+            Some(known) => format!(" — did you mean \"{known}\"?"),
+            None => String::new(),
+        };
+        eprintln!("warning: unknown setting \"{key}\" in {source}{hint}");
+    }
     // `-c key=value` 属于配置层：在 flag 与环境变量之前生效。
     apply_config_overrides(&mut config, &cli.config_overrides)?;
     apply_cli(&mut config, &cli);

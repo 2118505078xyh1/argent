@@ -76,6 +76,11 @@ pub struct Config {
     /// Colour theme name for the interactive UI.
     pub theme: String,
     pub extra: BTreeMap<String, Json>,
+    /// Top-level settings no parse arm recognized, with the file they came
+    /// from. Extension keys read at runtime (`mode`, `sandboxMode`, …) are
+    /// not unknown. Surfaced as a startup warning: a typo like
+    /// `fallbakModel` would otherwise be ignored in silence.
+    pub unknown_keys: Vec<(String, String)>,
 }
 
 /// How risky actions are gated.
@@ -147,6 +152,7 @@ impl Default for Config {
             session_dir: default_session_dir(),
             theme: "dark".to_string(),
             extra: BTreeMap::new(),
+            unknown_keys: Vec::new(),
         }
     }
 }
@@ -454,11 +460,129 @@ pub fn merge_into(config: &mut Config, text: &str, source: &Path) -> Result<()> 
                 }
             }
             other => {
+                // 运行时按需读取的扩展键（沙箱边界、审批模式、后台模型等）
+                // 不进结构体字段，但不是拼写错误。
+                const EXTENSION_KEYS: [&str; 5] = [
+                    "mode",
+                    "sandboxMode",
+                    "addDirs",
+                    "followUpMode",
+                    "cacheWarming",
+                ];
+                if !EXTENSION_KEYS.contains(&other) {
+                    config
+                        .unknown_keys
+                        .push((other.to_string(), source.display().to_string()));
+                }
                 config.extra.insert(other.to_string(), val);
             }
         }
     }
     Ok(())
+}
+
+/// Lowercase and strip `_`/`-` so `fallback_model` compares equal to
+/// `fallbackModel`.
+fn normalize_key(key: &str) -> String {
+    key.chars()
+        .filter(|ch| *ch != '_' && *ch != '-')
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+/// The closest known setting for an unrecognized key, for did-you-mean hints.
+///
+/// Normalized equality, then a small edit distance over the normalized
+/// forms — catches dropped/added letters like `fallbakModel` without
+/// pulling in a fuzzy-matching dependency.
+pub fn suggest_setting(key: &str) -> Option<&'static str> {
+    const KNOWN: &[&str] = &[
+        "addDirs",
+        "apiKey",
+        "apiKeyEnv",
+        "approval",
+        "approvalMode",
+        "autoApproveBash",
+        "autoCompaction",
+        "backgroundIntelligence",
+        "backgroundModel",
+        "baseUrl",
+        "bashTimeoutSecs",
+        "cacheWarming",
+        "compactThresholdTokens",
+        "confirmDelete",
+        "enabledModels",
+        "exclude",
+        "fallbackModel",
+        "followUpMode",
+        "include",
+        "keepRecentTokens",
+        "maxContextTokens",
+        "maxCostUsd",
+        "maxOutputTokens",
+        "maxTotalTokens",
+        "maxWallSeconds",
+        "mode",
+        "model",
+        "plugins",
+        "priceInputPerMtok",
+        "priceOutputPerMtok",
+        "protocol",
+        "provider",
+        "reservedContextTokens",
+        "sandboxMode",
+        "sessionDir",
+        "statusline",
+        "theme",
+        "thinkingLevel",
+        "toolTimeoutSecs",
+        "tools",
+    ];
+    let wanted = normalize_key(key);
+    if wanted.len() < 3 {
+        return None;
+    }
+    // 一个短键容忍一个编辑，长键容忍两个：`modl` 和
+    // `compactThreshodTokns` 都该被接住，而 `zzz` 不该匹配到任何东西。
+    let budget: usize = if wanted.len() < 6 { 1 } else { 2 };
+    KNOWN
+        .iter()
+        .copied()
+        .filter(|known| normalize_key(known).len().abs_diff(wanted.len()) <= budget)
+        .min_by_key(|known| edit_distance(&normalize_key(known), &wanted, budget + 1))
+        .filter(|known| edit_distance(&normalize_key(known), &wanted, budget + 1) <= budget)
+        .or_else(|| {
+            KNOWN.iter().copied().find(|known| {
+                let candidate = normalize_key(known);
+                candidate.starts_with(&wanted) || wanted.starts_with(&candidate)
+            })
+        })
+}
+
+/// Bounded Levenshtein distance: gives up and returns `limit + 1` once the
+/// edit count exceeds `limit`, so long keys stay cheap.
+fn edit_distance(a: &str, b: &str, limit: usize) -> usize {
+    let limit = limit.min(a.len().max(b.len()));
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut current = vec![i + 1];
+        let mut best = usize::MAX;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            let value = (previous[j] + cost)
+                .min(previous[j + 1] + 1)
+                .min(current[j] + 1);
+            best = best.min(value);
+            current.push(value);
+        }
+        if best > limit {
+            return limit + 1;
+        }
+        previous = current;
+    }
+    previous[b.len()].min(limit + 1)
 }
 
 fn string_list(value: &Json) -> Vec<String> {
@@ -546,6 +670,43 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn an_unrecognized_key_is_recorded_with_its_source() {
+        let mut config = Config::default();
+        merge_into(
+            &mut config,
+            r#"{"fallbakModel":"m","theme":"dark"}"#,
+            Path::new("settings.json"),
+        )
+        .unwrap();
+        assert_eq!(config.unknown_keys.len(), 1);
+        assert_eq!(config.unknown_keys[0].0, "fallbakModel");
+        assert_eq!(config.unknown_keys[0].1, "settings.json");
+    }
+
+    #[test]
+    fn runtime_extension_keys_are_not_unknown() {
+        let mut config = Config::default();
+        merge_into(
+            &mut config,
+            r#"{"mode":"default","sandboxMode":"workspace-write","addDirs":["/x"],
+                "followUpMode":"one","cacheWarming":"streaming"}"#,
+            Path::new("settings.json"),
+        )
+        .unwrap();
+        assert!(config.unknown_keys.is_empty(), "{:?}", config.unknown_keys);
+        assert_eq!(config.extra.len(), 5);
+    }
+
+    #[test]
+    fn a_typo_gets_a_did_you_mean_hint() {
+        assert_eq!(suggest_setting("fallbakModel"), Some("fallbackModel"));
+        assert_eq!(suggest_setting("baseurl"), Some("baseUrl"));
+        assert_eq!(suggest_setting("themes"), Some("theme"));
+        assert_eq!(suggest_setting("zzz"), None);
+        assert_eq!(suggest_setting("ab"), None, "too short to guess");
+    }
 
     #[test]
     fn merges_base_url_and_model() {
