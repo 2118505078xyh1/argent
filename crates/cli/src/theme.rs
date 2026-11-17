@@ -41,8 +41,8 @@ impl Theme {
                 accent: Color::Fixed(73),
                 secondary: Color::Fixed(140),
                 text: Color::Fixed(253),
-                // 244 在 234 的底上发虚，状态栏小字看不清；提亮一档。
-                dim: Color::Fixed(249),
+                // 244/249 在纯黑底上还是发虚，状态栏小字看不清；再提亮一档。
+                dim: Color::Fixed(252),
                 success: Color::Fixed(108),
                 warning: Color::Fixed(179),
                 error: Color::Fixed(174),

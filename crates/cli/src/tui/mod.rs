@@ -2952,11 +2952,11 @@ impl App {
             left = left.push(Span::new(hint, Style::dim(theme.dim)));
         } else if let Some(ready) = &self.ready {
             left = left
-                .push(Span::new(ready.model.clone(), Style::plain()))
+                .push(Span::new(ready.model.clone(), Style::dim(theme.dim)))
                 .push(dot.clone())
                 .push(Span::new(
                     ready.provider.clone(),
-                    Style::dim(theme.secondary),
+                    Style::dim(theme.dim),
                 ));
             // cwd 吃掉剩余宽度，过长的路径裁掉。
             let room = width
@@ -3006,7 +3006,7 @@ impl App {
                 .push(Span::new(" 你: ", Style::dim(crate::theme::current().dim)))
                 .push(Span::new(
                     clip_to_width(&text, budget),
-                    Style::dim(crate::theme::current().secondary),
+                    Style::dim(crate::theme::current().dim),
                 )),
         )
     }
