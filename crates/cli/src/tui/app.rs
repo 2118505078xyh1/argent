@@ -36,6 +36,11 @@ pub(super) struct App {
     pub(super) pending_text: std::collections::VecDeque<char>,
     /// 自管的鼠标拖选：起点、当前终点（屏幕行列，0 基）。
     pub(super) selection: Option<((u16, u16), (u16, u16))>,
+    /// 按下点落在输入区时的光标位置；松开时据此跳过正文选择逻辑。
+    pub(super) input_press: Option<usize>,
+    /// 每帧记录输入行：(屏幕行号, 行首字符在 `input` 里的下标, 行文本)。
+    /// 鼠标点进输入区时据此定位光标。
+    pub(super) input_hit_rows: Vec<(u16, usize, String)>,
     /// 输入框撤销 / 重做快照：(文本, 光标)。
     pub(super) undo_stack: Vec<(Vec<char>, usize)>,
     pub(super) redo_stack: Vec<(Vec<char>, usize)>,
@@ -128,6 +133,8 @@ impl App {
             animate_stream: false,
             pending_text: std::collections::VecDeque::new(),
             selection: None,
+            input_press: None,
+            input_hit_rows: Vec::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             frame_text: Vec::new(),
@@ -505,6 +512,26 @@ impl App {
         }
     }
 
+    /// 鼠标点进输入区时的光标落点（`input` 的字符下标）。
+    ///
+    /// 行首固定有两个单元格的标记（`› ` 或两格缩进），点标记上等于行首；
+    /// 点在行尾之后落在行尾；不是输入行返回 `None`。
+    fn cursor_at(&self, row: u16, col: u16) -> Option<usize> {
+        let (_, start, text) = self
+            .input_hit_rows
+            .iter()
+            .find(|&&(screen_row, _, _)| screen_row == row)?;
+        let target = (col as usize).saturating_sub(text_width(USER_MARK));
+        let mut used = 0usize;
+        for (index, ch) in text.chars().enumerate() {
+            if used >= target {
+                return Some(start + index);
+            }
+            used += char_width(ch).max(1);
+        }
+        Some(start + text.chars().count())
+    }
+
     pub(super) fn toggle_thinking_ordinal(&mut self, ordinal: usize) {
         if !self.expanded_thinking.remove(&ordinal) {
             self.expanded_thinking.insert(ordinal);
@@ -620,6 +647,13 @@ impl App {
         // 原地松开 = 点击思考块；拖出距离 = 复制选中文字。
         match key {
             Key::MousePress { row, col } => {
+                // 点进输入区：定位光标，不进入正文拖选；松开时只收尾。
+                if let Some(cursor) = self.cursor_at(row, col) {
+                    self.input_press = Some(cursor);
+                    self.cursor = cursor;
+                    self.dirty = true;
+                    return;
+                }
                 self.selection = Some(((row, col), (row, col)));
                 self.dirty = true;
                 return;
@@ -632,6 +666,12 @@ impl App {
                 return;
             }
             Key::MouseRelease { row, col } => {
+                // 输入区的按下-松开对：光标已在按下时移动，这里不再触发
+                // 正文的选择、复制或思考块切换。
+                if self.input_press.take().is_some() {
+                    self.dirty = true;
+                    return;
+                }
                 let start = self.selection.map(|(first, _)| first).unwrap_or((row, col));
                 self.selection = None;
                 self.dirty = true;
@@ -650,8 +690,12 @@ impl App {
                 }
                 return;
             }
-            Key::MouseClick { row, .. } => {
-                self.toggle_thinking_at(row);
+            Key::MouseClick { row, col } => {
+                if let Some(cursor) = self.cursor_at(row, col) {
+                    self.cursor = cursor;
+                } else {
+                    self.toggle_thinking_at(row);
+                }
                 self.dirty = true;
                 return;
             }
@@ -2066,6 +2110,7 @@ impl App {
             visible.push(Line::plain(""));
         }
         self.frame_body_height = body_height;
+        self.input_hit_rows.clear();
         self.visible_fold_rows = self
             .body_fold_rows
             .iter()
@@ -2094,6 +2139,9 @@ impl App {
         }
         lines.push(input_top(width));
         for (index, row) in input_rows.iter().enumerate() {
+            // 输入行在整帧里的行号：鼠标点进输入区时据此定位光标。
+            self.input_hit_rows
+                .push((lines.len() as u16, row.start, row.text.clone()));
             let mark = if index == 0 && row.start == 0 {
                 USER_MARK
             } else {
@@ -4855,6 +4903,76 @@ mod cursor_tests {
         let (row, col) = app.cursor_screen_position(40, 20);
         assert_eq!(row, 19);
         assert_eq!(col, 1 + text_width(USER_MARK) + 1);
+    }
+
+    #[test]
+    fn pressing_inside_the_input_area_positions_the_cursor() {
+        let worker = test_worker();
+        let mut app = app();
+        app.input = "ab\ncd".chars().collect();
+        app.cursor = 0;
+        app.frame(40, 20);
+        // 16 行正文 + 输入顶线 + 两行输入 + 状态栏。
+        let second = app
+            .input_hit_rows
+            .iter()
+            .find(|&&(_, start, _)| start > 0)
+            .cloned()
+            .expect("second input row");
+        let (row, start, _) = second;
+        assert_eq!(start, 3);
+        // 第二行标记占 2 格，点第 2 格（col=3）落在 "d" 上。
+        app.handle_key(&worker, Key::MousePress { row, col: 3 });
+        assert_eq!(app.cursor, start + 1);
+        assert!(app.selection.is_none(), "input press starts no selection");
+        // 松开只收尾：不复制、不切思考块。
+        app.handle_key(&worker, Key::MouseRelease { row, col: 3 });
+        assert!(app.selection.is_none());
+        assert_eq!(app.cursor, start + 1);
+    }
+
+    #[test]
+    fn a_press_past_the_end_of_an_input_row_lands_at_its_end() {
+        let worker = test_worker();
+        let mut app = app();
+        app.input = "ab\ncd".chars().collect();
+        app.frame(40, 20);
+        let (row, start, text) = app.input_hit_rows[0].clone();
+        assert_eq!(text, "ab");
+        let len = text.chars().count();
+        app.handle_key(&worker, Key::MousePress { row, col: 30 });
+        assert_eq!(app.cursor, start + len);
+    }
+
+    #[test]
+    fn pressing_inside_the_input_area_toggles_no_thinking_block() {
+        let worker = test_worker();
+        let mut app = app();
+        app.transcript
+            .push_entry(Entry::Thinking("先想".to_string()));
+        app.input = "hi".chars().collect();
+        app.frame(40, 20);
+        let (row, _, _) = app.input_hit_rows[0].clone();
+        app.handle_key(&worker, Key::MousePress { row, col: 2 });
+        app.handle_key(&worker, Key::MouseRelease { row, col: 2 });
+        assert!(
+            app.expanded_thinking.is_empty(),
+            "input press must not toggle a thinking block"
+        );
+        // 正文里的思考块点击仍然有效（对照）。
+        let (fold_row, _) = app
+            .visible_fold_rows
+            .first()
+            .copied()
+            .expect("thinking title row");
+        app.handle_key(
+            &worker,
+            Key::MouseClick {
+                row: fold_row,
+                col: 0,
+            },
+        );
+        assert!(!app.expanded_thinking.is_empty());
     }
 
     #[test]
