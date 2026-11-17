@@ -26,6 +26,16 @@ pub struct UsageRecord {
     pub cost: Option<f64>,
 }
 
+impl UsageRecord {
+    /// Prompt tokens the provider had to recompute instead of reading from
+    /// cache. A provider occasionally reports `cached > prompt`; clamp so the
+    /// ledger never shows negative waste.
+    pub fn missed_tokens(&self) -> u64 {
+        self.prompt_tokens
+            .saturating_sub(self.cached_tokens.min(self.prompt_tokens))
+    }
+}
+
 /// Aggregated numbers for a time window.
 #[derive(Debug, Clone, Default)]
 pub struct UsageSummary {
@@ -33,6 +43,8 @@ pub struct UsageSummary {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cached_tokens: u64,
+    /// Prompt tokens served without cache; the number to shrink.
+    pub missed_tokens: u64,
     pub requests: u64,
     pub cost: f64,
     pub by_model: BTreeMap<String, ModelUsage>,
@@ -44,7 +56,30 @@ pub struct ModelUsage {
     pub turns: u64,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub cached_tokens: u64,
+    pub missed_tokens: u64,
     pub cost: f64,
+}
+
+/// Cache hit rate, 0–100, clamped to the prompt tokens actually billed.
+fn hit_percent(cached: u64, prompt: u64) -> u64 {
+    cached
+        .min(prompt)
+        .checked_mul(100)
+        .and_then(|value| value.checked_div(prompt))
+        .unwrap_or(0)
+}
+
+impl UsageSummary {
+    pub fn cache_hit_percent(&self) -> u64 {
+        hit_percent(self.cached_tokens, self.prompt_tokens)
+    }
+}
+
+impl ModelUsage {
+    pub fn cache_hit_percent(&self) -> u64 {
+        hit_percent(self.cached_tokens, self.prompt_tokens)
+    }
 }
 
 /// The default ledger path.
@@ -150,6 +185,7 @@ pub fn summary(records: &[UsageRecord], since_epoch: u64) -> UsageSummary {
         summary.prompt_tokens += record.prompt_tokens;
         summary.completion_tokens += record.completion_tokens;
         summary.cached_tokens += record.cached_tokens;
+        summary.missed_tokens += record.missed_tokens();
         summary.requests += record.requests;
         summary.cost += record.cost.unwrap_or(0.0);
         add(&mut summary.by_model, &record.model, record);
@@ -168,6 +204,8 @@ fn add(into: &mut BTreeMap<String, ModelUsage>, key: &str, record: &UsageRecord)
     entry.turns += 1;
     entry.prompt_tokens += record.prompt_tokens;
     entry.completion_tokens += record.completion_tokens;
+    entry.cached_tokens += record.cached_tokens.min(record.prompt_tokens);
+    entry.missed_tokens += record.missed_tokens();
     entry.cost += record.cost.unwrap_or(0.0);
 }
 
@@ -194,8 +232,30 @@ mod tests {
         assert_eq!(summary.turns, 2);
         assert_eq!(summary.prompt_tokens, 200);
         assert_eq!(summary.cached_tokens, 120);
+        // 每轮 prompt 100、cached 60 → 40 missed；两轮共 80。
+        assert_eq!(summary.missed_tokens, 80);
+        assert_eq!(summary.cache_hit_percent(), 60);
         assert!((summary.cost - 0.03).abs() < 1e-9);
         assert_eq!(summary.by_model.len(), 2);
+        let m1 = &summary.by_model["m1"];
+        assert_eq!(m1.cached_tokens, 60);
+        assert_eq!(m1.missed_tokens, 40);
+        assert_eq!(m1.cache_hit_percent(), 60);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missed_tokens_clamp_when_cached_exceeds_prompt() {
+        let record = UsageRecord {
+            epoch: 1,
+            session: "s".to_string(),
+            model: "m".to_string(),
+            prompt_tokens: 100,
+            completion_tokens: 10,
+            cached_tokens: 150,
+            requests: 1,
+            cost: None,
+        };
+        assert_eq!(record.missed_tokens(), 0);
     }
 }

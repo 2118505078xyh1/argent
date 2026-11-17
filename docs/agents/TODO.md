@@ -1,0 +1,105 @@
+# argent 下一步 TODO
+
+基准：argent 0.2.0，HEAD `5588803`；对照结论见 [argent-comparison.md](argent-comparison.md)。
+
+图例：`[ ]` 待做，`[~]` 进行中，`[x]` 完成。优先级：P0 立刻、P1 近期、P2 战略/大工程。
+
+## 本轮执行
+
+- [x] **P0：缓存浪费（missed tokens）统计**
+  - `argent usage` 汇总：总 missed、命中率、按模型命中率、JSON 字段。
+  - TUI `/session` 信息面板：Cached 行同时显示 missed。
+  - 验收：同一份 usage 账本，命中率 = cached / prompt（capped）；missed = prompt - cached（不为负）；有单测。
+  - 已完成：`UsageSummary/ModelUsage::cache_hit_percent()`、`UsageRecord::missed_tokens()`；`usage` 文本/JSON、`/session` 面板、按模型命中率；2 个新测试。
+
+## P0：手感与日常可用性
+
+- [ ] **会话选择器搜索/过滤**
+  - 输入 `/` 后的列表支持逐字过滤（标题 + 文件名）。
+  - `Tab` 切换 scope：当前目录 / 全部；`Ctrl+S` 切换排序：最近 / 名称。
+  - 空结果显示提示；`↑↓` 在过滤结果内移动。
+  - 参考：pi session picker、Claude `/resume`、OpenCode `/sessions`。
+- [ ] **TUI 回归清单自动化**
+  - 加一组 snapshot 测试：用户块颜色、思考块展开/收起、流式逐字、摘要行、复制提示。
+  - 每次改 TUI 先跑这组，避免“修一个坏一个”。
+- [ ] **输入区编辑能力**
+  - 行内移动（←/→、Ctrl+A/E）、按词移动、撤销/重做、多行粘贴折行。
+  - 与鼠标拖选/复制共存。
+- [ ] **`/session` 面板继续补齐**
+  - 显示 model/thinking/cwd/session id、最后错误、缓存命中、上下文占用。
+  - 操作项与 CLI 能力对齐：rename/tree/compact/export/copy path。
+
+## P0/P1：缓存与成本
+
+- [x] **P0：missed tokens 统计**（本轮）
+- [ ] **P1：`usage.jsonl` 增加 ttft_ms 与首 token 时间**
+  - TUI/无头/ACP/RPC 各入口统一记账；Thinking 首 delta 也算首 token。
+  - `argent usage` 增加平均/中位 TTFT。
+- [ ] **P1：prompt cache warmer**
+  - 空闲接近 TTL 时用 `max_tokens=1` 重发最后请求保活；默认关闭，env 开关。
+  - 经济性门槛：预计节省 > 成本才 warm；记录 warm 次数/成本。
+  - 参考：pi cache-warmer、OpenCode warming。
+- [ ] **P1：缓存诊断**
+  - 每次 miss 归因：idle 超时 / 模型切换 / 前缀漂移 / provider 不支持。
+  - `/cost` 或 `argent usage --explain` 展示。
+
+## P1：扩展与生态
+
+- [ ] **SDK（TypeScript 或 Rust client）**
+  - 基于现有 `--rpc`/`--serve` 生成 typed client；示例：CI 调用、编辑器集成。
+  - 参考：pi SDK、Claude Agent SDK、OpenCode client。
+- [ ] **Hooks 诊断与 UI**
+  - `argent hooks validate/list/run <event>`；错误带文件/行号/matcher。
+  - TUI 权限面板显示已启用 hooks 与信任状态。
+  - 参考：ZCode `diagnosing-hooks`、Claude hooks 诊断。
+- [ ] **Skills/commands 发现可视**
+  - TUI `/skills`、`/commands` 列出名称、来源、优先级、冲突。
+  - 参考：ZCode 的 settings/skills 管理。
+- [ ] **插件市场体验**
+  - `plugins search`、安装前展示 manifest/权限、签名校验结果。
+  - 失败回滚与更新 diff。
+
+## P1：TUI / UI
+
+- [ ] **主题系统**
+  - 增加 theme token 校验、预览、导入/导出；用户主题目录热重载。
+- [ ] **状态栏信息密度**
+  - 可选段：git 分支、审批模式、sandbox、jobs 数、后台会话数。
+- [ ] **可访问性**
+  - 屏幕阅读器模式（扁平文本、无动画）；高对比主题。
+
+## P2：架构与战略
+
+- [ ] **Agent teams / 共享任务板**
+  - 多 agent 共享 todo、互发消息；与 workflow DAG 区分（动态协作 vs 静态编排）。
+  - 参考：Claude agent teams、Codex agent_message_board。
+- [ ] **宿主/云**
+  - 可选 hosted run（提交任务、取回 diff），或强化 `--serve` 成多租户服务。
+- [ ] **移动/远程控制**
+  - 复用 `--serve` + 配对码，提供最小 Web 客户端；不做原生 App。
+- [ ] **性能与体积**
+  - 启动时间、二进制体积、首 token 延迟基准；与 pi/Codex 对比。
+- [ ] **发布工程**
+  - 官网/文档站、安装脚本、版本公告、崩溃上报（可关）。
+
+## 已完成的近期项（存档）
+
+- [x] pi 风格 Markdown 语义配色（标题/链接/行内码/代码块/列表）。
+- [x] 思考块整块可点（标题 + 正文），`Ctrl+E` 全局切换。
+- [x] 鼠标拖选复制（TUI 自管，不再依赖终端 QuickEdit）。
+- [x] 会话操作二级菜单（Open/Rename/Delete/Branch）。
+- [x] `/session` 信息面板 + 操作菜单（pi 对齐）。
+- [x] `/tools` 列表可导航 + 详情页。
+- [x] 首轮 `cache 0%` 显示。
+- [x] 用户消息块使用 pi 推导色 `#1d2e37`（RGB）。
+- [x] 会话切换时更新 `prompt_cache_key`。
+- [x] 流式逐字显示、思考合并、摘要行锚点。
+- [x] 复制/粘贴恢复、输入行颜色、`Thinking` 标签。
+
+## 执行顺序建议
+
+1. 本轮：cache missed 统计。
+2. 下一轮：会话选择器搜索/过滤（P0 手感）+ TTFT 记账。
+3. 再下一轮：cache warmer（默认关）+ 缓存归因。
+4. 之后：SDK / hooks 诊断 / skills 可视。
+5. 战略项等前四项稳定后再评估。

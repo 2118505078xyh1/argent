@@ -7,13 +7,12 @@
 //! The view model (`argent_ui_core::Transcript`) is the same one the desktop uses,
 //! so a new renderer does not have to re-learn how tool calls fold.
 
-
 mod keys;
-pub(crate) use keys::{spawn_input, Key};
-#[cfg(test)]
-pub(crate) use keys::{flush_pending, handle_paste_key, key_from_console_record, PasteMode};
 #[cfg(any(not(windows), test))]
 pub(crate) use keys::next_key;
+#[cfg(test)]
+pub(crate) use keys::{flush_pending, handle_paste_key, key_from_console_record, PasteMode};
+pub(crate) use keys::{spawn_input, Key};
 
 /// 对话角色前缀。助手用空心菱形、工具用实心圆，避免 `⏺` 在
 /// 中文字体里缩成一个难辨认的墨点。
@@ -32,7 +31,6 @@ fn user_style() -> Style {
     Style::fg(USER_FG).with_bg(USER_BG)
 }
 
-
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -42,7 +40,9 @@ use std::time::{Duration, Instant};
 
 use argent_agent::{AbortHandle, Agent, AgentEvent, EventSink, FinishReason};
 use argent_ai::Usage;
-use argent_core::screen::{clip_to_width, text_width, wrap_text, Color, Line, Span, Style, SPINNER};
+use argent_core::screen::{
+    clip_to_width, text_width, wrap_text, Color, Line, Span, Style, SPINNER,
+};
 use argent_core::terminal::{self, RawModeGuard};
 use argent_hooks::{HookConfig, HookContext, HookEvent};
 use argent_session::SessionIndex;
@@ -209,9 +209,7 @@ impl RemoteLink {
 
     /// Send a line: into the running turn, or as a new request.
     fn send_text(&self, text: &str) -> Result<(), String> {
-        let running = self
-            .running
-            .load(std::sync::atomic::Ordering::SeqCst);
+        let running = self.running.load(std::sync::atomic::Ordering::SeqCst);
         let path = if running { "/v1/steer" } else { "/v1/prompt" };
         let mut body = argent_core::json::Json::obj();
         body.set("text", argent_core::json::Json::string(text.to_string()));
@@ -224,8 +222,9 @@ impl RemoteLink {
     }
 
     fn post(&self, path: &str, body: &str) -> Result<(), String> {
-        let request = argent_core::http::Request::post_json(&format!("{}{}", self.base, path), body)
-            .header("authorization", &self.auth);
+        let request =
+            argent_core::http::Request::post_json(&format!("{}{}", self.base, path), body)
+                .header("authorization", &self.auth);
         let response = argent_core::http::send(&request)
             .map_err(|error| format!("{} failed: {}", path, error))?;
         if !response.is_success() {
@@ -424,8 +423,7 @@ pub fn spawn(
                                     let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
                                 }
                                 Err(error) => {
-                                    let _ =
-                                        event_tx.send(UiEvent::Error(error.to_string()));
+                                    let _ = event_tx.send(UiEvent::Error(error.to_string()));
                                 }
                             }
                         }
@@ -482,12 +480,14 @@ pub fn spawn(
                                 usage,
                                 requests,
                                 context_used: argent_agent::estimate_tokens(agent.history())
-                                .max(agent.last_prompt_tokens() as usize),
+                                    .max(agent.last_prompt_tokens() as usize),
                                 cost,
                             });
                             // The main run ended: a finished compaction summary
                             // can now be written back (revision-guarded).
-                            compaction.borrow_mut().apply_if_ready(&mut agent, &event_tx);
+                            compaction
+                                .borrow_mut()
+                                .apply_if_ready(&mut agent, &event_tx);
                             // Threshold reached and no compaction in flight:
                             // spawn the compaction coroutine. Its model call
                             // interleaves with the next run's stream reads.
@@ -513,35 +513,31 @@ pub fn spawn(
                                     let history = agent.history().to_vec();
                                     let revision = agent.history_revision_value();
                                     if let Some(assistant) = &background {
-                                        let heuristic = argent_session::summarize(
-                                            &history,
-                                        );
+                                        let heuristic = argent_session::summarize(&history);
                                         let assistant = assistant.clone();
                                         let compaction_state = std::rc::Rc::clone(&compaction);
                                         let coroutine: corosensei::Coroutine<(), (), String> =
-                                            corosensei::Coroutine::new(
-                                                move |yielder, _input| {
-                                                    // Register this coroutine's own
-                                                    // yielder so its model-stream
-                                                    // reads suspend back here instead
-                                                    // of stalling the main run. The
-                                                    // 'static erasure is safe: the
-                                                    // yielder's stack lives as long as
-                                                    // the suspended coroutine.
-                                                    let yielder: &'static corosensei::Yielder<(), ()> =
-                                                        unsafe { &*(yielder as *const _) };
-                                                    let _guard = unsafe {
-                                                        argent_ai::cooperative::set_yielder(
-                                                            std::rc::Rc::new(move || {
-                                                                yielder.suspend(())
-                                                            }),
-                                                        )
-                                                    };
-                                                    assistant
-                                                        .summarize_for(&heuristic)
-                                                        .unwrap_or(heuristic)
-                                                },
-                                            );
+                                            corosensei::Coroutine::new(move |yielder, _input| {
+                                                // Register this coroutine's own
+                                                // yielder so its model-stream
+                                                // reads suspend back here instead
+                                                // of stalling the main run. The
+                                                // 'static erasure is safe: the
+                                                // yielder's stack lives as long as
+                                                // the suspended coroutine.
+                                                let yielder: &'static corosensei::Yielder<(), ()> =
+                                                    unsafe { &*(yielder as *const _) };
+                                                let _guard = unsafe {
+                                                    argent_ai::cooperative::set_yielder(
+                                                        std::rc::Rc::new(move || {
+                                                            yielder.suspend(())
+                                                        }),
+                                                    )
+                                                };
+                                                assistant
+                                                    .summarize_for(&heuristic)
+                                                    .unwrap_or(heuristic)
+                                            });
                                         {
                                             let mut state = compaction_state.borrow_mut();
                                             state.coroutine = Some(coroutine);
@@ -566,8 +562,11 @@ pub fn spawn(
                                             .find(|m| m.role == argent_ai::Role::Assistant)
                                             .map(|m| m.text())
                                             .unwrap_or_default();
-                                        let exchange = format!("user: {}
-assistant: {}", first, answer);
+                                        let exchange = format!(
+                                            "user: {}
+assistant: {}",
+                                            first, answer
+                                        );
                                         let tx = command_tx.clone();
                                         let assistant = assistant.clone();
                                         std::thread::spawn(move || {
@@ -588,7 +587,7 @@ assistant: {}", first, answer);
                                 usage: agent.usage(),
                                 requests: agent.requests(),
                                 context_used: argent_agent::estimate_tokens(agent.history())
-                                .max(agent.last_prompt_tokens() as usize),
+                                    .max(agent.last_prompt_tokens() as usize),
                                 cost: None,
                             });
                         }
@@ -669,8 +668,7 @@ assistant: {}", first, answer);
                 Command::DeleteSession(path) => {
                     if path == session.path {
                         let _ = event_tx.send(UiEvent::Error(
-                            "cannot delete the session that is open; switch away first"
-                                .to_string(),
+                            "cannot delete the session that is open; switch away first".to_string(),
                         ));
                     } else {
                         match index.delete(&path) {
@@ -681,8 +679,7 @@ assistant: {}", first, answer);
                                         .and_then(|name| name.to_str())
                                         .unwrap_or("session")
                                 )));
-                                let _ =
-                                    event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                                let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
                             }
                             Err(error) => {
                                 let _ = event_tx.send(UiEvent::Error(error.to_string()));
@@ -709,8 +706,7 @@ assistant: {}", first, answer);
                                         });
                                     }
                                     Err(error) => {
-                                        let _ = event_tx
-                                            .send(UiEvent::Error(error.to_string()));
+                                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
                                     }
                                 }
                             }
@@ -781,58 +777,58 @@ assistant: {}", first, answer);
                 Command::CheckoutNode(id) => {
                     let previous_leaf = session.tree.active().map(str::to_string);
                     match session.checkout(&id) {
-                    Ok(mut messages) => {
-                        // Pi-style branch summary: make the messages unique to
-                        // the branch we left visible in the new context.
-                        if let Some(previous) = previous_leaf {
-                            let branch = session.tree.branch_summary_messages(&id, &previous);
-                            if !branch.is_empty() {
-                                let mut text = String::from(
-                                    "The conversation switched to a different branch. \
+                        Ok(mut messages) => {
+                            // Pi-style branch summary: make the messages unique to
+                            // the branch we left visible in the new context.
+                            if let Some(previous) = previous_leaf {
+                                let branch = session.tree.branch_summary_messages(&id, &previous);
+                                if !branch.is_empty() {
+                                    let mut text = String::from(
+                                        "The conversation switched to a different branch. \
                                      The other branch contained these messages:\n",
-                                );
-                                for message in branch.iter().take(40) {
-                                    let role = message.role.as_str();
-                                    let body = message.text();
-                                    let body = if body.len() > 600 { &body[..600] } else { &body };
-                                    text.push_str(&format!("\n[{}] {}", role, body));
-                                }
-                                if let Some(assistant) = &background {
-                                    if let Some(condensed) = assistant.branch_summary_for(&text)
-                                    {
-                                        text = format!(
-                                            "The conversation switched to a different \
-                                             branch. That branch did:\n{}",
-                                            condensed
-                                        );
+                                    );
+                                    for message in branch.iter().take(40) {
+                                        let role = message.role.as_str();
+                                        let body = message.text();
+                                        let body = if body.len() > 600 {
+                                            &body[..600]
+                                        } else {
+                                            &body
+                                        };
+                                        text.push_str(&format!("\n[{}] {}", role, body));
                                     }
+                                    if let Some(assistant) = &background {
+                                        if let Some(condensed) = assistant.branch_summary_for(&text)
+                                        {
+                                            text = format!(
+                                                "The conversation switched to a different \
+                                             branch. That branch did:\n{}",
+                                                condensed
+                                            );
+                                        }
+                                    }
+                                    messages.push(argent_ai::Message::system(text));
                                 }
-                                messages.push(argent_ai::Message::system(text));
                             }
+                            argent_session::controller::open(&mut agent, messages.clone());
+                            let entries = Transcript::from_messages(&messages).entries().to_vec();
+                            let _ = event_tx.send(UiEvent::SessionOpened {
+                                title: session.title(),
+                                path: session.path.display().to_string(),
+                                entries,
+                            });
+                            let _ = event_tx
+                                .send(UiEvent::Notice(format!("branch switched to {}", id)));
                         }
-                        argent_session::controller::open(&mut agent, messages.clone());
-                        let entries =
-                            Transcript::from_messages(&messages).entries().to_vec();
-                        let _ = event_tx.send(UiEvent::SessionOpened {
-                            title: session.title(),
-                            path: session.path.display().to_string(),
-                            entries,
-                        });
-                        let _ = event_tx.send(UiEvent::Notice(format!(
-                            "branch switched to {}",
-                            id
-                        )));
-                    }
-                    Err(error) => {
-                        let _ = event_tx.send(UiEvent::Error(error.to_string()));
-                    }
+                        Err(error) => {
+                            let _ = event_tx.send(UiEvent::Error(error.to_string()));
+                        }
                     }
                 }
                 Command::ForkNode(id) => match session.fork_at(&id) {
                     Ok(messages) => {
                         argent_session::controller::open(&mut agent, messages.clone());
-                        let entries =
-                            Transcript::from_messages(&messages).entries().to_vec();
+                        let entries = Transcript::from_messages(&messages).entries().to_vec();
                         let _ = event_tx.send(UiEvent::SessionOpened {
                             title: session.title(),
                             path: session.path.display().to_string(),
@@ -864,9 +860,8 @@ assistant: {}", first, answer);
                         Some(id) => match session.fork_at(&id) {
                             Ok(messages) => {
                                 argent_session::controller::open(&mut agent, messages.clone());
-                                let entries = Transcript::from_messages(&messages)
-                                    .entries()
-                                    .to_vec();
+                                let entries =
+                                    Transcript::from_messages(&messages).entries().to_vec();
                                 let _ = event_tx.send(UiEvent::SessionOpened {
                                     title: session.title(),
                                     path: session.path.display().to_string(),
@@ -897,15 +892,13 @@ assistant: {}", first, answer);
                             checkpoints.retarget(&path);
                             let messages = session.messages();
                             argent_session::controller::open(&mut agent, messages.clone());
-                            let entries =
-                                Transcript::from_messages(&messages).entries().to_vec();
+                            let entries = Transcript::from_messages(&messages).entries().to_vec();
                             let _ = event_tx.send(UiEvent::SessionOpened {
                                 title: session.title(),
                                 path: path.display().to_string(),
                                 entries,
                             });
-                            let _ =
-                                event_tx.send(UiEvent::Sessions(session_rows(&index)));
+                            let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
                         }
                         Err(error) => {
                             let _ = event_tx.send(UiEvent::Error(error.to_string()));
@@ -948,10 +941,8 @@ assistant: {}", first, answer);
                         &agent,
                         config.max_context_tokens,
                     );
-                    let reserved = argent_session::effective_reserved(
-                        window,
-                        config.reserved_context_tokens,
-                    );
+                    let reserved =
+                        argent_session::effective_reserved(window, config.reserved_context_tokens);
                     if argent_session::should_compact_real(
                         argent_agent::estimate_tokens(agent.history()),
                         agent.last_prompt_tokens(),
@@ -1161,14 +1152,21 @@ fn run_shell(cwd: &Path, command: &str) -> (String, bool) {
 /// model's guesses; the operator can edit it afterwards.
 fn project_init_text(cwd: &Path) -> String {
     let mut out = String::new();
-    out.push_str("# Project instructions
+    out.push_str(
+        "# Project instructions
 
-");
-    out.push_str(&format!("Working directory: `{}`
+",
+    );
+    out.push_str(&format!(
+        "Working directory: `{}`
 
-", cwd.display()));
-    out.push_str("## Layout
-");
+",
+        cwd.display()
+    ));
+    out.push_str(
+        "## Layout
+",
+    );
     let mut top: Vec<String> = std::fs::read_dir(cwd)
         .into_iter()
         .flatten()
@@ -1187,13 +1185,19 @@ fn project_init_text(cwd: &Path) -> String {
     top.sort();
     top.truncate(24);
     for item in &top {
-        out.push_str(&format!("- `{}`
-", item));
+        out.push_str(&format!(
+            "- `{}`
+",
+            item
+        ));
     }
-    out.push_str("
+    out.push_str(
+        "
 ## Languages
-");
-    let mut counts: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
+",
+    );
+    let mut counts: std::collections::BTreeMap<&'static str, usize> =
+        std::collections::BTreeMap::new();
     for entry in argent_core::path::walk(cwd, 4).into_iter().take(3_000) {
         let extension = entry
             .path
@@ -1219,12 +1223,17 @@ fn project_init_text(cwd: &Path) -> String {
     let mut languages: Vec<_> = counts.into_iter().collect();
     languages.sort_by_key(|a| std::cmp::Reverse(a.1));
     for (language, count) in languages.iter().take(6) {
-        out.push_str(&format!("- {}: {} files
-", language, count));
+        out.push_str(&format!(
+            "- {}: {} files
+",
+            language, count
+        ));
     }
-    out.push_str("
+    out.push_str(
+        "
 ## Build and test
-");
+",
+    );
     let mut commands = Vec::new();
     if cwd.join("Cargo.toml").is_file() {
         commands.push("cargo build");
@@ -1244,23 +1253,36 @@ fn project_init_text(cwd: &Path) -> String {
         commands.push("make");
     }
     if commands.is_empty() {
-        out.push_str("- (add the real build and test commands here)
-");
+        out.push_str(
+            "- (add the real build and test commands here)
+",
+        );
     } else {
         for command in commands {
-            out.push_str(&format!("- `{}`
-", command));
+            out.push_str(&format!(
+                "- `{}`
+",
+                command
+            ));
         }
     }
-    out.push_str("
+    out.push_str(
+        "
 ## Conventions
-");
-    out.push_str("- Read a file before editing it.
-");
-    out.push_str("- Run the build/tests before reporting success.
-");
-    out.push_str("- Keep changes focused; do not refactor unrelated code.
-");
+",
+    );
+    out.push_str(
+        "- Read a file before editing it.
+",
+    );
+    out.push_str(
+        "- Run the build/tests before reporting success.
+",
+    );
+    out.push_str(
+        "- Keep changes focused; do not refactor unrelated code.
+",
+    );
     out
 }
 
@@ -1302,7 +1324,10 @@ fn tree_rows(session: &SessionContext) -> Vec<TreeRow> {
                 format!("{}: {}", role, text)
             }
             argent_session::Entry::Summary(text) => {
-                format!("summary: {}", clip_to_width(text.replace('\n', " ").trim(), 44))
+                format!(
+                    "summary: {}",
+                    clip_to_width(text.replace('\n', " ").trim(), 44)
+                )
             }
             argent_session::Entry::Header(data) => {
                 format!("header: {}", data.str_or("title", "(untitled)"))
@@ -1346,21 +1371,12 @@ fn import_session(
     let name = argent_session::sanitize(&format!("import-{}-{}", stamp, stem));
     let destination = index.dir().join(format!("{}.jsonl", name));
     std::fs::create_dir_all(index.dir()).map_err(|e| {
-        argent_core::error::Error::io(format!(
-            "create {} failed: {}",
-            index.dir().display(),
-            e
-        ))
+        argent_core::error::Error::io(format!("create {} failed: {}", index.dir().display(), e))
     })?;
-    std::fs::copy(&source_path, &destination).map_err(|e| {
-        argent_core::error::Error::io(format!(
-            "copy {} failed: {}",
-            source, e
-        ))
-    })?;
+    std::fs::copy(&source_path, &destination)
+        .map_err(|e| argent_core::error::Error::io(format!("copy {} failed: {}", source, e)))?;
     Ok(destination)
 }
-
 
 #[cfg(test)]
 mod tree_tests {
@@ -1386,7 +1402,8 @@ mod tree_tests {
         let path = dir.join("tree.jsonl");
         let mut ctx = SessionContext::open(path).expect("open");
         ctx.record(Message::user("first question")).expect("record");
-        ctx.record(Message::assistant("first answer")).expect("record");
+        ctx.record(Message::assistant("first answer"))
+            .expect("record");
         ctx
     }
 
@@ -1396,14 +1413,19 @@ mod tree_tests {
         let ctx = seeded_session(&dir);
         let rows = tree_rows(&ctx);
         // header? none in this file; three nodes: user, assistant — plus none.
-        assert!(rows.iter().any(|row| row.label.starts_with("user:")
-            && row.label.contains("first question")));
-        assert!(rows.iter().any(|row| row.label.starts_with("assistant:")
-            && row.label.contains("first answer")));
+        assert!(rows
+            .iter()
+            .any(|row| row.label.starts_with("user:") && row.label.contains("first question")));
+        assert!(rows
+            .iter()
+            .any(|row| row.label.starts_with("assistant:") && row.label.contains("first answer")));
         let leaf_rows: Vec<_> = rows.iter().filter(|row| row.leaf).collect();
         assert_eq!(leaf_rows.len(), 1, "exactly one leaf");
         assert!(leaf_rows[0].label.contains("first answer"));
-        assert!(rows.iter().all(|row| row.on_path), "a linear file is all on-path");
+        assert!(
+            rows.iter().all(|row| row.on_path),
+            "a linear file is all on-path"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1422,7 +1444,8 @@ mod tree_tests {
             .cloned()
             .expect("node");
         ctx.fork_at(&one).expect("fork");
-        ctx.record(Message::assistant("alternative")).expect("record");
+        ctx.record(Message::assistant("alternative"))
+            .expect("record");
 
         let rows = tree_rows(&ctx);
         let branch_rows: Vec<_> = rows.iter().filter(|row| row.branch).collect();
@@ -1445,16 +1468,14 @@ mod tree_tests {
         let mut ctx = SessionContext::open(source.clone()).expect("open");
         ctx.record(Message::user("traveller")).expect("record");
         ctx.close();
-        let destination = import_session(&index, source.to_str().expect("utf8"))
-            .expect("import");
+        let destination = import_session(&index, source.to_str().expect("utf8")).expect("import");
         assert!(destination.is_file());
         assert_eq!(
             destination.parent().expect("parent"),
             index.dir(),
             "lands in the sessions directory"
         );
-        let entries =
-            argent_session::SessionStore::read_all(&destination).expect("read");
+        let entries = argent_session::SessionStore::read_all(&destination).expect("read");
         assert!(entries.iter().any(|entry| matches!(
             entry,
             Entry::Message(m) if m.text() == "traveller"
@@ -1856,9 +1877,7 @@ impl App {
                 if let FinishReason::Error(message) = reason {
                     self.transcript.push_notice(NoticeKind::Error, message);
                     // 错误不是终点：状态行明确告诉操作者可以直接重发。
-                    self.set_status(
-                        argent_i18n::t(self.locale, "tui.error_hint").to_string(),
-                    );
+                    self.set_status(argent_i18n::t(self.locale, "tui.error_hint").to_string());
                 } else {
                     // 正常结束：重试候选作废，空输入的 Enter 回到原语义。
                     self.failed_prompt = None;
@@ -1909,9 +1928,10 @@ impl App {
 
     /// 结束进行中的思考块，把"首个 delta → 最后一个 delta"折算成一段时长。
     fn close_thinking_block(&mut self) {
-        if let (Some(start), Some(last)) =
-            (self.thinking_block_started.take(), self.thinking_block_last.take())
-        {
+        if let (Some(start), Some(last)) = (
+            self.thinking_block_started.take(),
+            self.thinking_block_last.take(),
+        ) {
             self.thinking_durations
                 .push(last.saturating_duration_since(start));
         }
@@ -1957,10 +1977,16 @@ impl App {
 
     /// 从最近一帧的纯文本里切出选中区间（按终端列，中文占两列）。
     fn selected_text(&self, start: (u16, u16), end: (u16, u16)) -> String {
-        let (top, bottom) = if start <= end { (start, end) } else { (end, start) };
+        let (top, bottom) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
         let mut out = String::new();
         for row in top.0..=bottom.0 {
-            let Some(line) = self.frame_text.get(row as usize) else { continue };
+            let Some(line) = self.frame_text.get(row as usize) else {
+                continue;
+            };
             let from = if row == top.0 { top.1 as usize } else { 0 };
             let to = if row == bottom.0 {
                 bottom.1 as usize + 1
@@ -2053,7 +2079,9 @@ impl App {
                     let text = self.selected_text(start, (row, col));
                     if !text.trim().is_empty() {
                         match argent_core::clipboard::copy_text(&text) {
-                            Ok(()) => self.set_status(format!("copied {} chars", text.chars().count())),
+                            Ok(()) => {
+                                self.set_status(format!("copied {} chars", text.chars().count()))
+                            }
                             Err(error) => self.set_status(format!("copy failed: {}", error)),
                         }
                     }
@@ -2124,10 +2152,7 @@ impl App {
                     }
                     Key::Enter => {
                         if !self.sessions.is_empty() {
-                            self.overlay = Some(Overlay::SessionActions {
-                                index,
-                                selected: 0,
-                            });
+                            self.overlay = Some(Overlay::SessionActions { index, selected: 0 });
                         }
                     }
                     Key::Char('o') => {
@@ -2167,7 +2192,10 @@ impl App {
                     Key::Esc => {}
                     _ => self.overlay = Some(Overlay::Sessions { index }),
                 },
-                Overlay::SessionActions { index, mut selected } => match key {
+                Overlay::SessionActions {
+                    index,
+                    mut selected,
+                } => match key {
                     Key::Up => {
                         selected = selected.saturating_sub(1);
                         self.overlay = Some(Overlay::SessionActions { index, selected });
@@ -2226,10 +2254,9 @@ impl App {
                         let name = input.trim().to_string();
                         if !name.is_empty() {
                             if let Some(row) = self.sessions.get(index) {
-                                let _ = worker.commands.send(Command::RenameSession(
-                                    row.path.clone(),
-                                    name,
-                                ));
+                                let _ = worker
+                                    .commands
+                                    .send(Command::RenameSession(row.path.clone(), name));
                             }
                         }
                         self.overlay = None;
@@ -2258,17 +2285,13 @@ impl App {
                     }
                     Key::Enter => {
                         if let Some(row) = self.tree_rows.get(index) {
-                            let _ = worker
-                                .commands
-                                .send(Command::CheckoutNode(row.id.clone()));
+                            let _ = worker.commands.send(Command::CheckoutNode(row.id.clone()));
                         }
                         self.overlay = None;
                     }
                     Key::Char('f') => {
                         if let Some(row) = self.tree_rows.get(index) {
-                            let _ = worker
-                                .commands
-                                .send(Command::ForkNode(row.id.clone()));
+                            let _ = worker.commands.send(Command::ForkNode(row.id.clone()));
                         }
                         self.overlay = None;
                     }
@@ -2362,7 +2385,8 @@ impl App {
                             self.overlay = Some(Overlay::RenameCurrent { input });
                         }
                         1 => {
-                            if let Some(path) = self.ready.as_ref().map(|r| r.session_path.clone()) {
+                            if let Some(path) = self.ready.as_ref().map(|r| r.session_path.clone())
+                            {
                                 let _ = argent_core::clipboard::copy_text(&path);
                                 self.set_status(format!("copied {}", path));
                             }
@@ -2516,10 +2540,7 @@ impl App {
                     self.follow_ups.push_back(text.clone());
                     self.transcript.push_user(text);
                     self.scroll = 0;
-                    self.set_status(format!(
-                        "{} queued (alt+up to edit)",
-                        self.follow_ups.len()
-                    ));
+                    self.set_status(format!("{} queued (alt+up to edit)", self.follow_ups.len()));
                     self.input.clear();
                     self.cursor = 0;
                 }
@@ -2584,11 +2605,17 @@ impl App {
             ("cost", "show usage, cost and context for this session"),
             ("plan", "toggle plan mode"),
             ("help", "show keys and commands"),
-            ("fork", "fork the current session; /fork <n> branches at message n"),
+            (
+                "fork",
+                "fork the current session; /fork <n> branches at message n",
+            ),
             ("tree", "browse the session branch tree"),
             ("import", "import a session .jsonl file"),
             ("rename", "rename the current session"),
-            ("sessions", "manage stored sessions (ctrl+r rename, ctrl+d delete)"),
+            (
+                "sessions",
+                "manage stored sessions (ctrl+r rename, ctrl+d delete)",
+            ),
             ("clear", "clear history"),
             ("copy", "copy the last reply to the clipboard"),
             ("tools", "list tool schemas"),
@@ -2831,10 +2858,8 @@ impl App {
             if raw.is_empty() {
                 continue;
             }
-            let path = argent_core::path::resolve(
-                &cwd,
-                &argent_core::path::expand_home(Path::new(raw)),
-            );
+            let path =
+                argent_core::path::resolve(&cwd, &argent_core::path::expand_home(Path::new(raw)));
             if path.is_dir() {
                 let mut entries: Vec<String> = std::fs::read_dir(&path)
                     .into_iter()
@@ -2850,8 +2875,10 @@ impl App {
 [dir: {}]
 {}",
                     path.display(),
-                    entries.join("
-")
+                    entries.join(
+                        "
+"
+                    )
                 ));
                 attached.push(format!("{}/", raw));
                 continue;
@@ -2861,7 +2888,8 @@ impl App {
             if let Some(mime) = Self::image_mime_for_path(&path) {
                 match std::fs::read(&path) {
                     Ok(bytes) if !bytes.is_empty() => {
-                        let url = format!("data:{mime};base64,{}", argent_core::base64::encode(&bytes));
+                        let url =
+                            format!("data:{mime};base64,{}", argent_core::base64::encode(&bytes));
                         images.push(argent_ai::Content::Image { url, detail: None });
                         attached.push(raw.to_string());
                     }
@@ -2876,10 +2904,14 @@ impl App {
                 continue;
             }
             let capped = argent_core::text::truncate(&content, 40_000);
-            context.push_str(&format!("
+            context.push_str(&format!(
+                "
 
 [file: {}]
-{}", path.display(), capped));
+{}",
+                path.display(),
+                capped
+            ));
             attached.push(raw.to_string());
             if context.chars().count() > 80_000 {
                 break;
@@ -2888,8 +2920,15 @@ impl App {
         if attached.is_empty() {
             (text.to_string(), attached, images)
         } else {
-            (format!("{}
-{}", text, context), attached, images)
+            (
+                format!(
+                    "{}
+{}",
+                    text, context
+                ),
+                attached,
+                images,
+            )
         }
     }
 
@@ -3099,11 +3138,7 @@ impl App {
                     self.working = true;
                     self.queued = self.queued.saturating_add(1);
                     self.scroll = 0;
-                    self.set_status(format!(
-                        "{}: {}",
-                        template.name,
-                        template.path.display()
-                    ));
+                    self.set_status(format!("{}: {}", template.name, template.path.display()));
                 } else {
                     self.set_status(format!(
                         "{} {}",
@@ -3174,9 +3209,9 @@ impl App {
             Some(template) => {
                 let expanded = template.expand(args);
                 let _ = worker.commands.send(Command::Prompt {
-                text: expanded.clone(),
-                images: Vec::new(),
-            });
+                    text: expanded.clone(),
+                    images: Vec::new(),
+                });
                 self.transcript.push_user(expanded);
                 self.working = true;
                 self.queued = self.queued.saturating_add(1);
@@ -3356,9 +3391,7 @@ impl App {
         } else if let Some(ready) = &self.ready {
             // cwd · model · thinking —— 顺序是用户要的工作目录在前。
             // 过长的路径吃掉剩余宽度，裁掉尾部。
-            let room = width
-                .saturating_sub(60 + text_width(&right))
-                .max(6);
+            let room = width.saturating_sub(60 + text_width(&right)).max(6);
             left = left
                 .push(Span::new(
                     clip_to_width(&ready.cwd, room),
@@ -3373,12 +3406,10 @@ impl App {
                 ));
             }
             if self.working {
-                left = left
-                    .push(Span::new("  ", Style::plain()))
-                    .push(Span::new(
-                        SPINNER[(self.tick as usize) % SPINNER.len()],
-                        Style::bold(theme.success),
-                    ));
+                left = left.push(Span::new("  ", Style::plain())).push(Span::new(
+                    SPINNER[(self.tick as usize) % SPINNER.len()],
+                    Style::bold(theme.success),
+                ));
             } else if self.queued > 0 {
                 left = left.push(Span::new(
                     format!("  {} queued", self.queued),
@@ -3405,7 +3436,12 @@ impl App {
     }
 
     /// 摘要行的文字：Hy4 flash Free · 14m 21s · 235.2 tok/s · 11.9s ttft
-    fn turn_summary_text(model: &str, elapsed: Duration, completion: u64, ttft: Option<Duration>) -> String {
+    fn turn_summary_text(
+        model: &str,
+        elapsed: Duration,
+        completion: u64,
+        ttft: Option<Duration>,
+    ) -> String {
         let secs = elapsed.as_secs_f64().max(0.001);
         let rate = completion as f64 / secs;
         match ttft {
@@ -3438,7 +3474,10 @@ impl App {
         let inner = width.saturating_sub(4).max(1);
         let start = self.cursor.saturating_sub(inner);
         let visible: Vec<char> = self.input.iter().skip(start).take(inner).copied().collect();
-        let line = Line::new().push(Span::new(USER_MARK, Style::fg(crate::theme::current().accent)));
+        let line = Line::new().push(Span::new(
+            USER_MARK,
+            Style::fg(crate::theme::current().accent),
+        ));
         // 光标交给终端原生光标（位置见 `cursor_screen_position`）：不再画
         // 反显块，深浅色主题下都不会看起来像渲染残留。行尾留一个空格
         // 占位，光标停在它上面。
@@ -3456,7 +3495,9 @@ impl App {
         let row = height.saturating_sub(2).max(1);
         let inner = width.saturating_sub(4).max(1);
         let start = self.cursor.saturating_sub(inner);
-        let text: String = self.input[start..self.cursor.min(self.input.len())].iter().collect();
+        let text: String = self.input[start..self.cursor.min(self.input.len())]
+            .iter()
+            .collect();
         let col = 1 + text_width(USER_MARK) + text_width(&text);
         (row, col.max(1).min(width))
     }
@@ -3480,7 +3521,12 @@ impl App {
         let expand = self.expand;
         let thinking = self.thinking_fingerprint();
         if let Some(cache) = &self.body_cache {
-            if cache.width == width && cache.expand == expand && cache.version == version && cache.summaries == self.turn_summaries.len() && cache.thinking == thinking {
+            if cache.width == width
+                && cache.expand == expand
+                && cache.version == version
+                && cache.summaries == self.turn_summaries.len()
+                && cache.thinking == thinking
+            {
                 self.body_fold_rows = cache.fold_rows.clone();
                 self.body_user_row = cache.user_row;
                 self.body_total = cache.lines.len();
@@ -3505,7 +3551,10 @@ impl App {
         lines
     }
 
-    fn transcript_lines_uncached(&self, width: usize) -> (Vec<Line>, Vec<(usize, usize)>, Option<usize>) {
+    fn transcript_lines_uncached(
+        &self,
+        width: usize,
+    ) -> (Vec<Line>, Vec<(usize, usize)>, Option<usize>) {
         // 流式 delta 是交错到达的（思考→回答→补充思考→继续回答），不合并
         // 的话每个碎片都另起一段，读起来是碎的。相邻同类条目先合成一篇
         // 连续文本再渲染。
@@ -3624,79 +3673,76 @@ impl App {
                     }
                 }
                 Group::Other(entry) => match entry {
-                Entry::Tool(run) => {
-                    // 第一行是"做了什么"：名字 + 主参数（path/command…），
-                    // 不把整段 JSON 甩在对话里。
-                    let primary = tool_primary_arg(&run.arguments)
-                        .map(|value| format!("({})", value))
-                        .unwrap_or_default();
-                    let style = if run.state.is_failed() {
-                        Style::fg(crate::theme::current().error)
-                    } else if run.state.is_running() {
-                        Style::fg(crate::theme::current().warning)
-                    } else {
-                        Style::fg(crate::theme::current().success)
-                    };
-                    lines.push(
-                        Line::new()
-                            .push(Span::new(TOOL_MARK, style))
-                            .push(Span::new(format!("{}{}", run.name, primary), style)),
-                    );
-                    // 第二行是"结果如何"：状态、耗时、行数。
-                    let mut footer = format!("{} {}", run.state.glyph(), run.state.describe());
-                    let output_lines = run.output.lines().count();
-                    if output_lines > 0 {
-                        footer.push_str(&format!(" · {} lines", output_lines));
-                    }
-                    let footer_style = if run.state.is_failed() {
-                        Style::fg(crate::theme::current().error)
-                    } else {
-                        Style::dim(crate::theme::current().dim)
-                    };
-                    lines.push(Line::new().push(Span::new(
-                        format!("  ⎿ {}", footer),
-                        footer_style,
-                    )));
-                    if self.expand && !run.output.is_empty() {
-                        for output in run.output.lines().take(16) {
-                            lines.push(Line::new().push(Span::new(
-                                format!("   {}", clip_to_width(output, width.saturating_sub(4))),
-                                Style::dim(crate::theme::current().dim),
-                            )));
+                    Entry::Tool(run) => {
+                        // 第一行是"做了什么"：名字 + 主参数（path/command…），
+                        // 不把整段 JSON 甩在对话里。
+                        let primary = tool_primary_arg(&run.arguments)
+                            .map(|value| format!("({})", value))
+                            .unwrap_or_default();
+                        let style = if run.state.is_failed() {
+                            Style::fg(crate::theme::current().error)
+                        } else if run.state.is_running() {
+                            Style::fg(crate::theme::current().warning)
+                        } else {
+                            Style::fg(crate::theme::current().success)
+                        };
+                        lines.push(
+                            Line::new()
+                                .push(Span::new(TOOL_MARK, style))
+                                .push(Span::new(format!("{}{}", run.name, primary), style)),
+                        );
+                        // 第二行是"结果如何"：状态、耗时、行数。
+                        let mut footer = format!("{} {}", run.state.glyph(), run.state.describe());
+                        let output_lines = run.output.lines().count();
+                        if output_lines > 0 {
+                            footer.push_str(&format!(" · {} lines", output_lines));
                         }
-                        if run.output.lines().count() > 16 {
-                            lines.push(Line::plain(format!(
-                                "   … {} more lines",
-                                run.output.lines().count() - 16
-                            )));
-                        }
-                    } else if run.state.is_failed() {
-                        // 失败原因不藏在 Ctrl+E 后面：一眼要能看出错在哪。
-                        if let Some(first) = run
-                            .output
-                            .lines()
-                            .find(|line| !line.trim().is_empty())
-                        {
-                            lines.push(Line::new().push(Span::new(
-                                format!(
-                                    "   {}",
-                                    clip_to_width(first, width.saturating_sub(4))
-                                ),
-                                Style::fg(crate::theme::current().error),
-                            )));
+                        let footer_style = if run.state.is_failed() {
+                            Style::fg(crate::theme::current().error)
+                        } else {
+                            Style::dim(crate::theme::current().dim)
+                        };
+                        lines.push(
+                            Line::new().push(Span::new(format!("  ⎿ {}", footer), footer_style)),
+                        );
+                        if self.expand && !run.output.is_empty() {
+                            for output in run.output.lines().take(16) {
+                                lines.push(Line::new().push(Span::new(
+                                    format!(
+                                        "   {}",
+                                        clip_to_width(output, width.saturating_sub(4))
+                                    ),
+                                    Style::dim(crate::theme::current().dim),
+                                )));
+                            }
+                            if run.output.lines().count() > 16 {
+                                lines.push(Line::plain(format!(
+                                    "   … {} more lines",
+                                    run.output.lines().count() - 16
+                                )));
+                            }
+                        } else if run.state.is_failed() {
+                            // 失败原因不藏在 Ctrl+E 后面：一眼要能看出错在哪。
+                            if let Some(first) =
+                                run.output.lines().find(|line| !line.trim().is_empty())
+                            {
+                                lines.push(Line::new().push(Span::new(
+                                    format!("   {}", clip_to_width(first, width.saturating_sub(4))),
+                                    Style::fg(crate::theme::current().error),
+                                )));
+                            }
                         }
                     }
-                }
-                Entry::Notice(kind, text) => {
-                    let style = match kind {
-                        NoticeKind::Info => Style::dim(crate::theme::current().accent),
-                        NoticeKind::Warning => Style::fg(crate::theme::current().warning),
-                        NoticeKind::Error => Style::fg(crate::theme::current().error),
-                    };
-                    lines.extend(wrapped(&text, width, "! ", "  ", style));
-                }
-                _ => {}
-                }
+                    Entry::Notice(kind, text) => {
+                        let style = match kind {
+                            NoticeKind::Info => Style::dim(crate::theme::current().accent),
+                            NoticeKind::Warning => Style::fg(crate::theme::current().warning),
+                            NoticeKind::Error => Style::fg(crate::theme::current().error),
+                        };
+                        lines.extend(wrapped(&text, width, "! ", "  ", style));
+                    }
+                    _ => {}
+                },
             }
             // 轮末立刻释放该锚点的摘要。
             while summary_index < self.turn_summaries.len()
@@ -3732,10 +3778,7 @@ impl App {
                     ("Enter", argent_i18n::t(self.locale, "tui.help.enter")),
                     ("Esc", argent_i18n::t(self.locale, "tui.help.esc")),
                     ("Ctrl+D", argent_i18n::t(self.locale, "tui.help.ctrl_d")),
-                    (
-                        "↑ ↓",
-                        argent_i18n::t(self.locale, "tui.help.history"),
-                    ),
+                    ("↑ ↓", argent_i18n::t(self.locale, "tui.help.history")),
                     (
                         "PgUp / PgDn",
                         argent_i18n::t(self.locale, "tui.help.scroll"),
@@ -3764,10 +3807,7 @@ impl App {
                         argent_i18n::t(self.locale, "tui.help.queue"),
                     ),
                     ("", ""),
-                    (
-                        "/",
-                        argent_i18n::t(self.locale, "tui.help.all_commands"),
-                    ),
+                    ("/", argent_i18n::t(self.locale, "tui.help.all_commands")),
                 ]
                 .into_iter()
                 .map(|(key, description)| (key.to_string(), description.to_string()))
@@ -3777,7 +3817,6 @@ impl App {
                 let mut content: Vec<(String, String)> = self
                     .sessions
                     .iter()
-                    
                     .map(|row| {
                         (
                             row.title.clone(),
@@ -3794,7 +3833,8 @@ impl App {
                     .collect();
                 content.push((String::new(), String::new()));
                 content.push((
-                    "enter actions · o open · ↑↓ move · ctrl+r rename · ctrl+d delete · esc close".to_string(),
+                    "enter actions · o open · ↑↓ move · ctrl+r rename · ctrl+d delete · esc close"
+                        .to_string(),
                     String::new(),
                 ));
                 (
@@ -3808,10 +3848,11 @@ impl App {
                     .get(*index)
                     .map(|row| row.title.clone())
                     .unwrap_or_default();
-                let mut content: Vec<(String, String)> = ["Open / resume", "Rename", "Delete", "Browse branches"]
-                    .iter()
-                    .map(|action| (action.to_string(), String::new()))
-                    .collect();
+                let mut content: Vec<(String, String)> =
+                    ["Open / resume", "Rename", "Delete", "Browse branches"]
+                        .iter()
+                        .map(|action| (action.to_string(), String::new()))
+                        .collect();
                 content.push((String::new(), String::new()));
                 content.push((
                     "↑↓ select · enter confirm · esc back".to_string(),
@@ -3921,15 +3962,22 @@ impl App {
                 let mut content = vec![
                     (format!("Name: {}", name), String::new()),
                     (format!("File: {}", path), String::new()),
-                    (format!("Messages: {}", self.transcript.entries().len()), String::new()),
+                    (
+                        format!("Messages: {}", self.transcript.entries().len()),
+                        String::new(),
+                    ),
                     (
                         format!("Input: {}", self.metrics.session_prompt_tokens),
                         String::new(),
                     ),
                     (
                         format!(
-                            "Cached: {}{}",
-                            self.metrics.session_cached_tokens, cached_pct
+                            "Cached: {}{} · missed {}",
+                            self.metrics.session_cached_tokens,
+                            cached_pct,
+                            self.metrics
+                                .session_prompt_tokens
+                                .saturating_sub(self.metrics.session_cached_tokens)
                         ),
                         String::new(),
                     ),
@@ -4145,7 +4193,11 @@ fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span>, bool) {
             }
             spans.push(Span::new(
                 bold,
-                if closed { Style::bold(theme.text) } else { Style::plain() },
+                if closed {
+                    Style::bold(theme.text)
+                } else {
+                    Style::plain()
+                },
             ));
             saw_style = true;
             continue;
@@ -4175,7 +4227,11 @@ fn wrap_spans(spans: Vec<Span>, width: usize, first: &str, rest: &str) -> Vec<Li
                 }
                 let mut line = Line::new();
                 line = line.push(Span::new(
-                    if out.is_empty() { first.to_string() } else { rest.to_string() },
+                    if out.is_empty() {
+                        first.to_string()
+                    } else {
+                        rest.to_string()
+                    },
                     Style::plain(),
                 ));
                 for part in std::mem::take(&mut current_spans) {
@@ -4192,7 +4248,11 @@ fn wrap_spans(spans: Vec<Span>, width: usize, first: &str, rest: &str) -> Vec<Li
         }
     }
     let mut line = Line::new().push(Span::new(
-        if out.is_empty() { first.to_string() } else { rest.to_string() },
+        if out.is_empty() {
+            first.to_string()
+        } else {
+            rest.to_string()
+        },
         Style::plain(),
     ));
     for part in current_spans {
@@ -4208,7 +4268,9 @@ fn wrap_spans(spans: Vec<Span>, width: usize, first: &str, rest: &str) -> Vec<Li
 /// 主键，再截断到一行。
 fn tool_primary_arg(arguments: &str) -> Option<String> {
     let value = argent_core::json::Json::parse(arguments).ok()?;
-    for key in ["path", "command", "query", "pattern", "url", "name", "uri", "job"] {
+    for key in [
+        "path", "command", "query", "pattern", "url", "name", "uri", "job",
+    ] {
         if let Some(raw) = value.get(key).and_then(argent_core::json::Json::as_str) {
             if raw.is_empty() {
                 continue;
@@ -4364,7 +4426,10 @@ fn boxed_overlay(
         title,
         "─".repeat(box_width.saturating_sub(text_width(title) + 4))
     );
-    lines.push(Line::plain(clip_to_width(&top, box_width)).with_style(Style::dim(crate::theme::current().accent)));
+    lines.push(
+        Line::plain(clip_to_width(&top, box_width))
+            .with_style(Style::dim(crate::theme::current().accent)),
+    );
     let selected = match overlay {
         Some(Overlay::Sessions { index })
         | Some(Overlay::Tree { index })
@@ -4440,8 +4505,8 @@ pub fn run_remote(
     let prompts = crate::prompts::PromptLibrary::discover(
         &crate::prompts::PromptLibrary::default_roots(&cwd),
     );
-    let mut app = App::new(Vec::new(), prompts, locale, statusline, bindings)
-        .with_remote(remote.clone());
+    let mut app =
+        App::new(Vec::new(), prompts, locale, statusline, bindings).with_remote(remote.clone());
     app.animate_stream = true;
     // 状态栏由调用方给的 Ready 事件填好（远端会话没有本地模型信息）。
     let _ = &title;
@@ -4449,10 +4514,7 @@ pub fn run_remote(
     let mut last_frame: Vec<String> = Vec::new();
     draw_at(
         &app.frame(initial_size.cols as usize, initial_size.rows as usize),
-        Some(app.cursor_screen_position(
-            initial_size.cols as usize,
-            initial_size.rows as usize,
-        )),
+        Some(app.cursor_screen_position(initial_size.cols as usize, initial_size.rows as usize)),
         &mut last_frame,
     );
     // The stand-in worker is the same for every key: its commands go nowhere.
@@ -4497,10 +4559,7 @@ pub fn run_remote(
             let lines = app.frame(size.cols as usize, size.rows as usize);
             draw_at(
                 &lines,
-                Some(app.cursor_screen_position(
-                    size.cols as usize,
-                    size.rows as usize,
-                )),
+                Some(app.cursor_screen_position(size.cols as usize, size.rows as usize)),
                 &mut last_frame,
             );
             last_size = size;
@@ -4512,10 +4571,7 @@ pub fn run_remote(
                 let lines = app.frame(size.cols as usize, size.rows as usize);
                 draw_at(
                     &lines,
-                    Some(app.cursor_screen_position(
-                        size.cols as usize,
-                        size.rows as usize,
-                    )),
+                    Some(app.cursor_screen_position(size.cols as usize, size.rows as usize)),
                     &mut last_frame,
                 );
             }
@@ -4575,8 +4631,18 @@ pub fn run(
     // 上下文窗口优先用 provider 目录的实时值（/v1/models 会回报
     // context_length，本地网关是 960000），网络不可用时再回退
     // max_context_tokens（默认 128000 只是下限）。
-    let max_context_tokens = argent_session::controller::model_context_window(&agent, config.max_context_tokens);
-    let worker = spawn(agent, session, checkpoints, config, index, cwd.clone(), hooks.clone(), locale);
+    let max_context_tokens =
+        argent_session::controller::model_context_window(&agent, config.max_context_tokens);
+    let worker = spawn(
+        agent,
+        session,
+        checkpoints,
+        config,
+        index,
+        cwd.clone(),
+        hooks.clone(),
+        locale,
+    );
     let (key_tx, key_rx) = mpsc::channel();
     spawn_input(key_tx);
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
@@ -4586,10 +4652,7 @@ pub fn run(
     let mut last_frame: Vec<String> = Vec::new();
     draw_at(
         &app.frame(initial_size.cols as usize, initial_size.rows as usize),
-        Some(app.cursor_screen_position(
-            initial_size.cols as usize,
-            initial_size.rows as usize,
-        )),
+        Some(app.cursor_screen_position(initial_size.cols as usize, initial_size.rows as usize)),
         &mut last_frame,
     );
     let mut last_sweep = Instant::now();
@@ -4649,10 +4712,7 @@ pub fn run(
             let lines = app.frame(size.cols as usize, size.rows as usize);
             draw_at(
                 &lines,
-                Some(app.cursor_screen_position(
-                    size.cols as usize,
-                    size.rows as usize,
-                )),
+                Some(app.cursor_screen_position(size.cols as usize, size.rows as usize)),
                 &mut last_frame,
             );
             last_size = size;
@@ -4665,10 +4725,7 @@ pub fn run(
                 let lines = app.frame(size.cols as usize, size.rows as usize);
                 draw_at(
                     &lines,
-                    Some(app.cursor_screen_position(
-                        size.cols as usize,
-                        size.rows as usize,
-                    )),
+                    Some(app.cursor_screen_position(size.cols as usize, size.rows as usize)),
                     &mut last_frame,
                 );
             }
@@ -4694,7 +4751,12 @@ pub fn run(
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
-    if app.transcript.entries().iter().any(|entry| !entry.text().is_empty()) {
+    if app
+        .transcript
+        .entries()
+        .iter()
+        .any(|entry| !entry.text().is_empty())
+    {
         println!();
         for line in transcript_plain(&app.transcript) {
             println!("{}", line);
@@ -4722,8 +4784,17 @@ pub fn transcript_plain(transcript: &Transcript) -> Vec<String> {
             }
             argent_ui_core::Entry::Thinking(_) => {}
             argent_ui_core::Entry::Tool(run) => {
-                out.push(format!("{} {}({})", TOOL_MARK.trim_end(), run.name, run.arguments));
-                out.push(format!("  ⎿ {} {}", run.state.glyph(), run.state.describe()));
+                out.push(format!(
+                    "{} {}({})",
+                    TOOL_MARK.trim_end(),
+                    run.name,
+                    run.arguments
+                ));
+                out.push(format!(
+                    "  ⎿ {} {}",
+                    run.state.glyph(),
+                    run.state.describe()
+                ));
             }
             argent_ui_core::Entry::Notice(_, text) => out.push(format!("! {}", text)),
         }
@@ -4857,10 +4928,7 @@ mod tests {
             crate::keybindings::Bindings::default(),
         );
         let text = |line: argent_core::screen::Line| -> String {
-            line.spans
-                .iter()
-                .map(|span| span.text.clone())
-                .collect()
+            line.spans.iter().map(|span| span.text.clone()).collect()
         };
         let first = text(app.status_line(100));
         assert!(!first.contains("Enter 发送"), "{}", first);
@@ -4872,7 +4940,10 @@ mod tests {
     fn the_first_prompt_names_the_task() {
         assert_eq!(title_from_prompt("修复登录 bug\n第二行"), "修复登录 bug");
         assert_eq!(title_from_prompt("   "), "新任务");
-        assert_eq!(title_from_prompt("x".repeat(80).as_str()).chars().count(), 60);
+        assert_eq!(
+            title_from_prompt("x".repeat(80).as_str()).chars().count(),
+            60
+        );
     }
 
     #[test]
@@ -4913,8 +4984,9 @@ mod tests {
             Vec::new(),
             crate::keybindings::Bindings::default(),
         );
-        app.transcript
-            .push_entry(argent_ui_core::Entry::Thinking("reasoning here".to_string()));
+        app.transcript.push_entry(argent_ui_core::Entry::Thinking(
+            "reasoning here".to_string(),
+        ));
         let stripped = |app: &mut App| -> String {
             app.frame(80, 24)
                 .iter()
@@ -4935,21 +5007,40 @@ mod tests {
                     out
                 })
                 .collect::<Vec<_>>()
-                .join("
-")
+                .join(
+                    "
+",
+                )
         };
         let frame = stripped(&mut app);
         assert!(frame.contains("Thinking"), "live marker: {}", frame);
-        assert!(!frame.contains("reasoning here"), "folded by default: {}", frame);
-        app.thinking_durations.push(std::time::Duration::from_millis(500));
+        assert!(
+            !frame.contains("reasoning here"),
+            "folded by default: {}",
+            frame
+        );
+        app.thinking_durations
+            .push(std::time::Duration::from_millis(500));
         app.body_cache = None;
         let frame = stripped(&mut app);
-        assert!(frame.contains("+Thought · 500ms"), "finished marker: {}", frame);
+        assert!(
+            frame.contains("+Thought · 500ms"),
+            "finished marker: {}",
+            frame
+        );
         app.expand = true;
         app.body_cache = None;
         let frame = stripped(&mut app);
-        assert!(frame.contains("-Thought · 500ms"), "global expand: {}", frame);
-        assert!(frame.contains("reasoning here"), "global expand shows the body: {}", frame);
+        assert!(
+            frame.contains("-Thought · 500ms"),
+            "global expand: {}",
+            frame
+        );
+        assert!(
+            frame.contains("reasoning here"),
+            "global expand shows the body: {}",
+            frame
+        );
     }
     #[test]
     fn reload_resources_rebinds_keys_from_disk() {
@@ -5104,14 +5195,15 @@ mod tests {
             commands: command_tx,
             events: event_rx,
             abort: argent_agent::AbortHandle::new(),
-            steering: std::sync::Arc::new(std::sync::Mutex::new(
-                std::collections::VecDeque::new(),
-            )),
+            steering: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         };
 
         // 第一次 Ctrl+D 只要求确认。
         app.handle_key(&worker, Key::CtrlD);
-        assert!(command_rx.try_recv().is_err(), "no delete on the first press");
+        assert!(
+            command_rx.try_recv().is_err(),
+            "no delete on the first press"
+        );
         assert_eq!(app.session_delete_pending, Some(1));
         // 第二次才真的删。
         app.handle_key(&worker, Key::CtrlD);
@@ -5164,21 +5256,24 @@ mod tests {
             session: "demo-session".to_string(),
             session_path: "C:\\Users\\demo\\.argent".to_string(),
         });
-        app.transcript.push_user("帮我看看 src/main.rs 里的启动逻辑");
+        app.transcript
+            .push_user("帮我看看 src/main.rs 里的启动逻辑");
         app.transcript
             .push_entry(Entry::Assistant("我先读一下文件。".to_string()));
-        app.transcript.push_entry(Entry::Tool(argent_ui_core::ToolRun {
-            call_id: "c1".to_string(),
-            name: "read".to_string(),
-            arguments: r#"{"path":"src/main.rs"}"#.to_string(),
-            output: "fn main() { ... }".to_string(),
-            state: argent_ui_core::ToolState::Failed { ms: 23 },
-        }));
+        app.transcript
+            .push_entry(Entry::Tool(argent_ui_core::ToolRun {
+                call_id: "c1".to_string(),
+                name: "read".to_string(),
+                arguments: r#"{"path":"src/main.rs"}"#.to_string(),
+                output: "fn main() { ... }".to_string(),
+                state: argent_ui_core::ToolState::Failed { ms: 23 },
+            }));
         app.transcript.push_entry(Entry::Assistant(
             "main 只做三件事：配置、注册工具、进循环。".to_string(),
         ));
         app.transcript.push_entry(Entry::Assistant(
-            "```rust\nfn main() {\n    run();\n}\n```\n用 `cargo run` 启动，**一次**就好。".to_string(),
+            "```rust\nfn main() {\n    run();\n}\n```\n用 `cargo run` 启动，**一次**就好。"
+                .to_string(),
         ));
 
         let lines = app.frame(100, 24);
@@ -5270,10 +5365,7 @@ mod tests {
         );
         app.input = "/rew".chars().collect();
         app.cursor = app.input.len();
-        assert!(app
-            .palette_items()
-            .iter()
-            .any(|item| item.name == "rewind"));
+        assert!(app.palette_items().iter().any(|item| item.name == "rewind"));
     }
 }
 
@@ -5315,9 +5407,7 @@ mod remote_tests {
             let request = String::from_utf8_lossy(&buffer).to_string();
             let head = request[..head_end.min(request.len())].to_string();
             let body = request[head_end.min(request.len())..].to_string();
-            let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}",
-            );
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}");
             (head, body)
         });
         (port, handle)
@@ -5345,7 +5435,9 @@ mod remote_tests {
     fn a_line_typed_during_a_run_is_steered_in() {
         let (port, server) = recorder();
         let remote = link(port);
-        remote.running.store(true, std::sync::atomic::Ordering::SeqCst);
+        remote
+            .running
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         remote.send_text("wait, do this instead").expect("send");
         let (head, body) = server.join().expect("server");
         assert!(head.starts_with("POST /v1/steer"), "{}", head);
@@ -5529,9 +5621,7 @@ mod paste_tests {
 
     #[test]
     fn a_paste_still_works_after_wheel_events() {
-        let keys = feed(
-            "\u{1b}[A\u{1b}[B\u{1b}[200~text\u{1b}[201~",
-        );
+        let keys = feed("\u{1b}[A\u{1b}[B\u{1b}[200~text\u{1b}[201~");
         assert_eq!(
             keys,
             vec![
@@ -5567,9 +5657,10 @@ mod cursor_tests {
     #[test]
     fn a_failed_tool_shows_the_reason_without_expanding() {
         let mut app = app();
-        app.transcript.apply(&argent_agent::AgentEvent::ToolRequested(
-            argent_ai::ToolCall::new("c1", "bash", r#"{"command":"nope"}"#),
-        ));
+        app.transcript
+            .apply(&argent_agent::AgentEvent::ToolRequested(
+                argent_ai::ToolCall::new("c1", "bash", r#"{"command":"nope"}"#),
+            ));
         app.transcript
             .apply(&argent_agent::AgentEvent::ToolFinished {
                 call_id: "c1".to_string(),
@@ -5694,9 +5785,7 @@ mod cursor_tests {
             commands: command_tx,
             events: event_rx,
             abort: argent_agent::AbortHandle::new(),
-            steering: std::sync::Arc::new(std::sync::Mutex::new(
-                std::collections::VecDeque::new(),
-            )),
+            steering: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         }
     }
 
@@ -5715,7 +5804,10 @@ mod cursor_tests {
             .collect();
         assert!(text.contains("19.7%/960k"), "{text}");
         assert!(text.contains("↑19M ↓1.6M"), "{text}");
-        assert!(!text.contains("tok/s"), "speed lives in the turn summary, not the status bar: {text}");
+        assert!(
+            !text.contains("tok/s"),
+            "speed lives in the turn summary, not the status bar: {text}"
+        );
         // 单行：不允许出现换行。
         assert_eq!(text.matches('\n').count(), 0);
     }
@@ -5725,10 +5817,8 @@ mod cursor_tests {
         let mut app = app();
         app.transcript.push_user("最早的一条提问");
         for i in 0..30 {
-            app.transcript.push_entry(Entry::Assistant(format!(
-                "回答 {i}: {}",
-                "x".repeat(30)
-            )));
+            app.transcript
+                .push_entry(Entry::Assistant(format!("回答 {i}: {}", "x".repeat(30))));
         }
         let _ = app.frame(60, 12);
         let body_has = |app: &mut App| -> bool {
@@ -5748,25 +5838,50 @@ mod cursor_tests {
     fn clicking_the_fold_row_expands_the_thinking_block() {
         let mut app = app();
         app.transcript.push_entry(Entry::Thinking(
-            (0..10).map(|i| format!("思考 {i}")).collect::<Vec<_>>().join("\n"),
+            (0..10)
+                .map(|i| format!("思考 {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ));
         let joined = |app: &mut App| {
-            app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n")
+            app.frame(80, 24)
+                .iter()
+                .map(|l| strip_ansi(l))
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         let collapsed = joined(&mut app);
-        assert!(collapsed.contains("Thinking"), "流式中只显示 Thinking：{}", collapsed);
-        assert!(!collapsed.contains("思考 3"), "折叠态不应露出正文：{}", collapsed);
+        assert!(
+            collapsed.contains("Thinking"),
+            "流式中只显示 Thinking：{}",
+            collapsed
+        );
+        assert!(
+            !collapsed.contains("思考 3"),
+            "折叠态不应露出正文：{}",
+            collapsed
+        );
         assert!(!app.visible_fold_rows.is_empty(), "思考标题行应被记录");
         assert!(!app.expand);
         let worker = test_worker();
         let (row, _) = app.visible_fold_rows[0];
         app.handle_key(&worker, Key::MouseClick { row, col: 0 });
         let expanded = joined(&mut app);
-        assert!(expanded.contains("Thinking"), "展开后仍有标题：{}", expanded);
+        assert!(
+            expanded.contains("Thinking"),
+            "展开后仍有标题：{}",
+            expanded
+        );
         assert!(expanded.contains("思考 3"), "点击后正文可见：{}", expanded);
         // 点展开后的正文行（不是标题）也要能收起——整块可点。
         let (body_row, _) = app.visible_fold_rows.last().copied().expect("content row");
-        app.handle_key(&worker, Key::MouseClick { row: body_row, col: 0 });
+        app.handle_key(
+            &worker,
+            Key::MouseClick {
+                row: body_row,
+                col: 0,
+            },
+        );
         let collapsed = joined(&mut app);
         assert!(!collapsed.contains("思考 3"), "点正文应收起：{}", collapsed);
     }
@@ -5775,15 +5890,27 @@ mod cursor_tests {
     fn thinking_is_grouped_before_the_answer_of_its_turn() {
         let mut app = app();
         app.transcript.push_user("问题");
-        app.transcript.push_entry(Entry::Thinking("先想".to_string()));
-        app.transcript.push_entry(Entry::Assistant("回答".to_string()));
-        app.transcript.push_entry(Entry::Thinking("又想".to_string()));
+        app.transcript
+            .push_entry(Entry::Thinking("先想".to_string()));
+        app.transcript
+            .push_entry(Entry::Assistant("回答".to_string()));
+        app.transcript
+            .push_entry(Entry::Thinking("又想".to_string()));
         app.expand = true;
-        let joined = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
+        let joined = app
+            .frame(80, 24)
+            .iter()
+            .map(|l| strip_ansi(l))
+            .collect::<Vec<_>>()
+            .join("\n");
         let think = joined.find("Thinking").expect("one thinking header");
         let answer = joined.find("回答").expect("answer");
         assert!(think < answer, "思考要整体排在回答之前：{}", joined);
-        assert!(joined.contains("先想") && joined.contains("又想"), "所有思考段都在：{}", joined);
+        assert!(
+            joined.contains("先想") && joined.contains("又想"),
+            "所有思考段都在：{}",
+            joined
+        );
         assert_eq!(joined.matches("Thinking").count(), 1, "思考只显示一个块");
     }
 
@@ -5791,13 +5918,28 @@ mod cursor_tests {
     fn streamed_text_is_revealed_gradually_and_never_lost() {
         let mut app = app();
         app.animate_stream = true;
-        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText("你好世界".to_string())));
-        assert!(!app.frame(80, 24).iter().any(|l| strip_ansi(l).contains("你好世界")));
+        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText(
+            "你好世界".to_string(),
+        )));
+        assert!(!app
+            .frame(80, 24)
+            .iter()
+            .any(|l| strip_ansi(l).contains("你好世界")));
         app.pump_stream_text();
-        let partial = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
+        let partial = app
+            .frame(80, 24)
+            .iter()
+            .map(|l| strip_ansi(l))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(partial.contains("你"), "第一帧应放出一些字：{}", partial);
         app.flush_stream_text();
-        let full = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
+        let full = app
+            .frame(80, 24)
+            .iter()
+            .map(|l| strip_ansi(l))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(full.contains("你好世界"), "flush 后全部落盘：{}", full);
     }
 
@@ -5822,8 +5964,15 @@ mod cursor_tests {
             },
             1,
         );
-        let frame = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("
-");
+        let frame = app
+            .frame(80, 24)
+            .iter()
+            .map(|l| strip_ansi(l))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
         assert!(frame.contains("cache 0%"), "冷启动也要显示 0%：{}", frame);
     }
 
@@ -5842,21 +5991,27 @@ mod cursor_tests {
             commands: command_tx,
             events: event_rx,
             abort: argent_agent::AbortHandle::new(),
-            steering: std::sync::Arc::new(std::sync::Mutex::new(
-                std::collections::VecDeque::new(),
-            )),
+            steering: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         };
         app.input = "/session".chars().collect();
         assert!(
-            app.palette_items().iter().any(|item| item.name == "session"),
+            app.palette_items()
+                .iter()
+                .any(|item| item.name == "session"),
             "/session 必须出现在命令提示里"
         );
         app.submit(&worker);
         // /session 是当前会话面板，↑↓ 在操作项上走。
-        assert!(matches!(app.overlay, Some(Overlay::SessionInfo { selected: 0 })));
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::SessionInfo { selected: 0 })
+        ));
         app.handle_key(&worker, Key::Down);
         app.handle_key(&worker, Key::Down);
-        assert!(matches!(app.overlay, Some(Overlay::SessionInfo { selected: 2 })));
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::SessionInfo { selected: 2 })
+        ));
         // 选到 Resume another session，进入会话列表。
         app.handle_key(&worker, Key::Down);
         app.handle_key(&worker, Key::Enter);
@@ -5880,7 +6035,10 @@ mod cursor_tests {
         app.handle_key(&worker, Key::Enter);
         assert!(matches!(
             app.overlay,
-            Some(Overlay::SessionActions { index: 1, selected: 0 })
+            Some(Overlay::SessionActions {
+                index: 1,
+                selected: 0
+            })
         ));
         app.handle_key(&worker, Key::Down);
         assert!(matches!(
@@ -5888,7 +6046,10 @@ mod cursor_tests {
             Some(Overlay::SessionActions { selected: 1, .. })
         ));
         app.handle_key(&worker, Key::Enter);
-        assert!(matches!(app.overlay, Some(Overlay::RenameSession { index: 1, .. })));
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::RenameSession { index: 1, .. })
+        ));
     }
 
     #[test]
@@ -5903,13 +6064,28 @@ mod cursor_tests {
     #[test]
     fn the_thinking_header_shows_the_stream_duration() {
         let mut app = app();
-        app.handle_ui(UiEvent::Agent(AgentEvent::Thinking("想一个字 ".to_string())));
+        app.handle_ui(UiEvent::Agent(AgentEvent::Thinking(
+            "想一个字 ".to_string(),
+        )));
         std::thread::sleep(std::time::Duration::from_millis(2));
-        app.handle_ui(UiEvent::Agent(AgentEvent::Thinking("再想一个字".to_string())));
+        app.handle_ui(UiEvent::Agent(AgentEvent::Thinking(
+            "再想一个字".to_string(),
+        )));
         app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 1 }));
-        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText("答案".to_string())));
-        let joined = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("Thought · "), "思考块应显示 · 时长：{}", joined);
+        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText(
+            "答案".to_string(),
+        )));
+        let joined = app
+            .frame(80, 24)
+            .iter()
+            .map(|l| strip_ansi(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("Thought · "),
+            "思考块应显示 · 时长：{}",
+            joined
+        );
     }
 
     #[test]
@@ -5922,12 +6098,20 @@ mod cursor_tests {
             title: "你好".to_string(),
             path: "/tmp/renamed.jsonl".to_string(),
         });
-        let plain = app.frame(80, 24).join("
-");
+        let plain = app.frame(80, 24).join(
+            "
+",
+        );
         let stripped: String = strip_ansi(&plain);
-        assert!(stripped.contains("你好"), "user entry must survive: {stripped}");
         assert!(
-            app.transcript.entries().iter().any(|e| matches!(e, Entry::User(t) if t == "你好")),
+            stripped.contains("你好"),
+            "user entry must survive: {stripped}"
+        );
+        assert!(
+            app.transcript
+                .entries()
+                .iter()
+                .any(|e| matches!(e, Entry::User(t) if t == "你好")),
             "transcript keeps the user entry"
         );
     }
@@ -5961,7 +6145,9 @@ mod cursor_tests {
             session_path: "/tmp/s.jsonl".to_string(),
         });
         app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 0 }));
-        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText("hello".to_string())));
+        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText(
+            "hello".to_string(),
+        )));
         app.handle_ui(UiEvent::TurnDone {
             reason: FinishReason::Complete,
             usage: argent_ai::Usage {
@@ -5976,7 +6162,10 @@ mod cursor_tests {
         });
         let plain = app.frame(100, 30).join("\n");
         let stripped: String = strip_ansi(&plain);
-        assert!(stripped.contains("test/flash · "), "model in summary: {stripped}");
+        assert!(
+            stripped.contains("test/flash · "),
+            "model in summary: {stripped}"
+        );
         assert!(stripped.contains("tok/s"), "rate in summary: {stripped}");
         assert!(stripped.contains("ttft"), "ttft in summary: {stripped}");
         assert!(!stripped.contains("live "), "no live segment: {stripped}");
@@ -6029,12 +6218,25 @@ mod cursor_tests {
         let plain = app.frame(80, 40).join("\n");
         let stripped: String = strip_ansi(&plain);
         let idx_first = stripped.find("回答一").expect("first answer present");
-        let idx_s1 = stripped.find("test/flash ·").expect("first summary present");
+        let idx_s1 = stripped
+            .find("test/flash ·")
+            .expect("first summary present");
         let idx_second = stripped.find("问题二").expect("second question present");
-        let idx2 = stripped.rfind("test/flash ·").expect("second summary present");
-        assert!(idx_first < idx_s1, "summary of turn 1 after answer 1: {idx_first} vs {idx_s1}");
-        assert!(idx_s1 < idx_second, "summary of turn 1 before turn 2: {idx_s1} vs {idx_second}");
-        assert!(idx_second < idx2, "summary of turn 2 after turn 2 content: {idx_second} vs {idx2}");
+        let idx2 = stripped
+            .rfind("test/flash ·")
+            .expect("second summary present");
+        assert!(
+            idx_first < idx_s1,
+            "summary of turn 1 after answer 1: {idx_first} vs {idx_s1}"
+        );
+        assert!(
+            idx_s1 < idx_second,
+            "summary of turn 1 before turn 2: {idx_s1} vs {idx_second}"
+        );
+        assert!(
+            idx_second < idx2,
+            "summary of turn 2 after turn 2 content: {idx_second} vs {idx2}"
+        );
         assert_eq!(app.turn_summaries.len(), 2);
     }
 
@@ -6057,7 +6259,10 @@ mod cursor_tests {
             context_used: 0,
             cost: None,
         });
-        assert!(app.turn_summaries.is_empty(), "hook-blocked run prints nothing");
+        assert!(
+            app.turn_summaries.is_empty(),
+            "hook-blocked run prints nothing"
+        );
     }
 
     #[test]

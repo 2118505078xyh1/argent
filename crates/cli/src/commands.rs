@@ -11,7 +11,9 @@ use argent_config::{Paths, Settings};
 use argent_core::error::{Error, Result};
 use argent_core::json::Json;
 use argent_hooks::{digest_file, HookConfig, HookTrust};
-use argent_plugins::{InstallPolicy, MarketplaceStore, PluginManager, PluginManifest, SignaturePolicy};
+use argent_plugins::{
+    InstallPolicy, MarketplaceStore, PluginManager, PluginManifest, SignaturePolicy,
+};
 use argent_provider::ProviderCatalog;
 use argent_tools::{Skill, SkillRegistry};
 
@@ -507,7 +509,9 @@ fn marketplace_command(positional: &[String], args: &[String], _paths: &Paths) -
         }
         "remove" | "rm" => {
             let Some(name) = positional.get(2) else {
-                return Err(Error::config("usage: argent plugins marketplace remove <name>"));
+                return Err(Error::config(
+                    "usage: argent plugins marketplace remove <name>",
+                ));
             };
             if store.remove(name)? {
                 println!("removed marketplace {}", name);
@@ -873,8 +877,9 @@ fn update(args: &[String]) -> Result<i32> {
 
             let target = match flag_value(args, "--bin") {
                 Some(path) => PathBuf::from(path),
-                None => std::env::current_exe()
-                    .map_err(|error| Error::io(format!("locate the running argent failed: {}", error)))?,
+                None => std::env::current_exe().map_err(|error| {
+                    Error::io(format!("locate the running argent failed: {}", error))
+                })?,
             };
             let backup = argent_update::install::swap_binary(&source, &target)?;
             let _ = std::fs::remove_dir_all(&work);
@@ -1009,9 +1014,14 @@ mod search_tests {
 
     #[test]
     fn clip_line_folds_and_truncates() {
-        assert_eq!(clip_line("a
+        assert_eq!(
+            clip_line(
+                "a
 
-  b   c"), "a b c");
+  b   c"
+            ),
+            "a b c"
+        );
         let long = "x".repeat(300);
         let clipped = clip_line(&long);
         assert!(clipped.ends_with("..."));
@@ -1028,7 +1038,10 @@ mod search_tests {
         let archived = archive_session(&index, "archive-me").expect("archive");
         assert!(archived.is_file());
         assert!(!path.exists());
-        assert!(index.list().expect("list").is_empty(), "archived fits no list row");
+        assert!(
+            index.list().expect("list").is_empty(),
+            "archived fits no list row"
+        );
 
         let restored = unarchive_session(&index, "archive-me").expect("unarchive");
         assert!(restored.is_file());
@@ -1358,12 +1371,19 @@ fn replay(args: &[String]) -> Result<i32> {
         })?;
     let text = std::fs::read_to_string(path)
         .map_err(|e| Error::io(format!("read {} failed: {}", path, e)))?;
-    if let Some(name) = args.iter().position(|arg| arg == "--to-eval").and_then(|i| args.get(i + 1)) {
+    if let Some(name) = args
+        .iter()
+        .position(|arg| arg == "--to-eval")
+        .and_then(|i| args.get(i + 1))
+    {
         let scenario = session_to_eval(&text, name)?;
         let path = format!("{}.eval.json", name);
         std::fs::write(&path, scenario.dump_pretty())
             .map_err(|e| Error::io(format!("write {} failed: {}", path, e)))?;
-        println!("eval scenario written to {} (run it with argent eval)", path);
+        println!(
+            "eval scenario written to {} (run it with argent eval)",
+            path
+        );
         return Ok(0);
     }
     for line in replay_lines(&text)? {
@@ -1475,24 +1495,20 @@ fn replay_transcript(text: &str) -> Result<argent_ui_core::Transcript> {
                 // `--mode json` 的会话头与最终结果行不是对话内容。
                 "session" | "result" => continue,
                 "error" => {
-                    transcript.push_notice(
-                        argent_ui_core::NoticeKind::Error,
-                        value.str_or("error", ""),
-                    );
+                    transcript
+                        .push_notice(argent_ui_core::NoticeKind::Error, value.str_or("error", ""));
                     continue;
                 }
                 "event" => {
                     let payload = value.get("data").cloned().unwrap_or_else(|| value.clone());
-                    let event = argent_agent::event_from_json(&payload).ok_or_else(|| {
-                        Error::config("an event line is not a known agent event")
-                    })?;
+                    let event = argent_agent::event_from_json(&payload)
+                        .ok_or_else(|| Error::config("an event line is not a known agent event"))?;
                     transcript.apply(&event);
                 }
                 // 裸事件 JSON（手写日志或别的前端）。
                 _ => {
-                    let event = argent_agent::event_from_json(value).ok_or_else(|| {
-                        Error::config("an event line is not a known agent event")
-                    })?;
+                    let event = argent_agent::event_from_json(value)
+                        .ok_or_else(|| Error::config("an event line is not a known agent event"))?;
                     transcript.apply(&event);
                 }
             }
@@ -1606,9 +1622,9 @@ fn worktree(args: &[String]) -> Result<i32> {
                 command.arg("--force");
             }
             command.arg(path);
-            let status = command.status().map_err(|e| {
-                Error::io(format!("spawn git failed: {}", e))
-            })?;
+            let status = command
+                .status()
+                .map_err(|e| Error::io(format!("spawn git failed: {}", e)))?;
             if !status.success() {
                 return Err(Error::io(format!(
                     "git worktree remove failed for {} (dirty? pass --force)",
@@ -1742,10 +1758,7 @@ fn worktree(args: &[String]) -> Result<i32> {
                 }
                 // 只有已合并的分支才删；`-d` 对未合并分支会拒绝，正好当保险。
                 if candidate.reason == "merged" {
-                    let _ = git_ok(
-                        &candidate.main_repo,
-                        &["branch", "-d", &candidate.branch],
-                    );
+                    let _ = git_ok(&candidate.main_repo, &["branch", "-d", &candidate.branch]);
                 }
                 println!("removed  {} ({})", label, candidate.reason);
                 removed += 1;
@@ -1781,7 +1794,10 @@ fn worktree(args: &[String]) -> Result<i32> {
 
 /// 主仓库的默认分支名：优先 `origin/HEAD`，其次本地 `main` / `master`。
 fn default_branch(repo: &std::path::Path) -> Option<String> {
-    if let Some(out) = git_ok(repo, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+    if let Some(out) = git_ok(
+        repo,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    ) {
         let name = out.trim().trim_start_matches("origin/").to_string();
         if !name.is_empty() {
             return Some(name);
@@ -1790,7 +1806,12 @@ fn default_branch(repo: &std::path::Path) -> Option<String> {
     for name in ["main", "master"] {
         if git_ok(
             repo,
-            &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}", name)],
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{}", name),
+            ],
         )
         .is_some()
         {
@@ -1828,7 +1849,11 @@ fn worktree_origin(worktree: &std::path::Path) -> Option<std::path::PathBuf> {
     let gitdir = line.strip_prefix("gitdir:")?.trim();
     let gitdir = std::path::Path::new(gitdir);
     // <repo>/.git/worktrees/<name> -> <repo>
-    gitdir.parent()?.parent()?.parent().map(|path| path.to_path_buf())
+    gitdir
+        .parent()?
+        .parent()?
+        .parent()
+        .map(|path| path.to_path_buf())
 }
 
 /// 在给定目录跑 git，返回 stdout；非零退出或起不来时返回 None。
@@ -1867,10 +1892,7 @@ fn background_target(args: &[String]) -> Option<String> {
 fn background_logs(args: &[String], follow_default: bool) -> Result<i32> {
     let cwd = cwd_from(args);
     let storage = Paths::new(&cwd).storage().to_path_buf();
-    let follow = follow_default
-        || args
-            .iter()
-            .any(|arg| arg == "--follow" || arg == "-f");
+    let follow = follow_default || args.iter().any(|arg| arg == "--follow" || arg == "-f");
     let id = background_target(args)
         .ok_or_else(|| Error::config("usage: argent logs <id> [--follow]"))?;
     let session = crate::background::load(&storage, &id)?;
@@ -1881,8 +1903,7 @@ fn background_logs(args: &[String], follow_default: bool) -> Result<i32> {
 fn background_stop(args: &[String]) -> Result<i32> {
     let cwd = cwd_from(args);
     let storage = Paths::new(&cwd).storage().to_path_buf();
-    let id = background_target(args)
-        .ok_or_else(|| Error::config("usage: argent stop <id>"))?;
+    let id = background_target(args).ok_or_else(|| Error::config("usage: argent stop <id>"))?;
     let session = crate::background::load(&storage, &id)?;
     crate::background::stop(&session)?;
     println!("stopped {}", id);
@@ -1892,8 +1913,7 @@ fn background_stop(args: &[String]) -> Result<i32> {
 fn background_remove(args: &[String]) -> Result<i32> {
     let cwd = cwd_from(args);
     let storage = Paths::new(&cwd).storage().to_path_buf();
-    let id = background_target(args)
-        .ok_or_else(|| Error::config("usage: argent rm <id>"))?;
+    let id = background_target(args).ok_or_else(|| Error::config("usage: argent rm <id>"))?;
     let session = crate::background::load(&storage, &id)?;
     crate::background::remove(&storage, &session)?;
     println!("removed {}", id);
@@ -2143,6 +2163,11 @@ fn usage(args: &[String]) -> Result<i32> {
         data.set("prompt", Json::num(summary.prompt_tokens as f64));
         data.set("completion", Json::num(summary.completion_tokens as f64));
         data.set("cached", Json::num(summary.cached_tokens as f64));
+        data.set("missed", Json::num(summary.missed_tokens as f64));
+        data.set(
+            "cache_hit_percent",
+            Json::num(summary.cache_hit_percent() as f64),
+        );
         data.set("requests", Json::num(summary.requests as f64));
         data.set("cost", Json::num(summary.cost));
         let mut models = Json::obj();
@@ -2151,6 +2176,8 @@ fn usage(args: &[String]) -> Result<i32> {
             entry.set("turns", Json::num(item.turns as f64));
             entry.set("prompt", Json::num(item.prompt_tokens as f64));
             entry.set("completion", Json::num(item.completion_tokens as f64));
+            entry.set("cached", Json::num(item.cached_tokens as f64));
+            entry.set("missed", Json::num(item.missed_tokens as f64));
             entry.set("cost", Json::num(item.cost));
             models.set(name, entry);
         }
@@ -2171,35 +2198,38 @@ fn usage(args: &[String]) -> Result<i32> {
     } else {
         format!("since {}", argent_session::local_stamp(since))
     };
-    let hit = summary
-        .cached_tokens
-        .min(summary.prompt_tokens)
-        .checked_mul(100)
-        .and_then(|v| v.checked_div(summary.prompt_tokens))
-        .unwrap_or(0);
+    let hit = summary.cache_hit_percent();
     println!(
         "usage: {} turn(s), {} request(s), {}",
         summary.turns, summary.requests, since_label
     );
     println!(
-        "prompt {} · completion {} · cached {} ({}%) · ${:.4}",
+        "prompt {} · completion {} · cached {} ({}%) · missed {} · ${:.4}",
         short_tokens(summary.prompt_tokens),
         short_tokens(summary.completion_tokens),
         short_tokens(summary.cached_tokens),
         hit,
+        short_tokens(summary.missed_tokens),
         summary.cost
     );
     if !summary.by_model.is_empty() {
         println!("by model:");
         let mut models: Vec<_> = summary.by_model.iter().collect();
-        models.sort_by(|a, b| b.1.cost.partial_cmp(&a.1.cost).unwrap_or(std::cmp::Ordering::Equal));
+        models.sort_by(|a, b| {
+            b.1.cost
+                .partial_cmp(&a.1.cost)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         for (name, item) in models.iter().take(10) {
+            let model_hit = item.cache_hit_percent();
             println!(
-                "  {:<36} {:>4} turns  {:>8} in  {:>8} out  ${:.4}",
+                "  {:<36} {:>4} turns  {:>8} in  {:>8} out  cache {:>3}%  missed {:>8}  ${:.4}",
                 clip(name, 36),
                 item.turns,
                 short_tokens(item.prompt_tokens),
                 short_tokens(item.completion_tokens),
+                model_hit,
+                short_tokens(item.missed_tokens),
                 item.cost
             );
         }
@@ -2207,7 +2237,11 @@ fn usage(args: &[String]) -> Result<i32> {
     if !summary.by_session.is_empty() {
         println!("by session:");
         let mut sessions: Vec<_> = summary.by_session.iter().collect();
-        sessions.sort_by(|a, b| b.1.cost.partial_cmp(&a.1.cost).unwrap_or(std::cmp::Ordering::Equal));
+        sessions.sort_by(|a, b| {
+            b.1.cost
+                .partial_cmp(&a.1.cost)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         for (path, item) in sessions.iter().take(10) {
             println!(
                 "  {:<58} {:>4} turns  ${:.4}",
@@ -2501,7 +2535,9 @@ fn profiles(args: &[String]) -> Result<i32> {
     let settings = Settings::load(&cwd)?;
     let registry = argent_profiles::ProfileRegistry::load(&cwd, &settings)?;
     if registry.is_empty() {
-        println!("no profiles; add .argent/profiles/<name>.md or a 'profiles' block in argent.json");
+        println!(
+            "no profiles; add .argent/profiles/<name>.md or a 'profiles' block in argent.json"
+        );
         return Ok(0);
     }
     for profile in registry.list() {
@@ -2879,7 +2915,11 @@ mod tests {
         let zsh = completion_script("zsh").expect("script");
         assert!(zsh.contains("prune"), "worktree prune missing");
         let fish = completion_script("fish").expect("script");
-        assert!(fish.contains("__fish_seen_subcommand_from sessions"), "fish: {}", fish);
+        assert!(
+            fish.contains("__fish_seen_subcommand_from sessions"),
+            "fish: {}",
+            fish
+        );
     }
 
     #[test]
@@ -2923,7 +2963,7 @@ mod tests {
             "stop",
             "rm",
             "doctor",
-    "bug",
+            "bug",
             "help",
             "version",
         ] {
@@ -2999,14 +3039,20 @@ mod tests {
             "\n"
         );
         let lines = replay_lines(events).expect("event log");
-        assert!(lines.join("\n").contains("hello from events"), "{:?}", lines);
+        assert!(
+            lines.join("\n").contains("hello from events"),
+            "{:?}",
+            lines
+        );
 
         // 会话文件：kind 行，经过消息 → transcript。
         let dir = std::env::temp_dir().join(format!("argent-replay-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("dir");
-        let entries = [argent_session::Entry::Message(argent_ai::Message::user("hello from session")),
-            argent_session::Entry::Message(argent_ai::Message::assistant("the answer"))];
+        let entries = [
+            argent_session::Entry::Message(argent_ai::Message::user("hello from session")),
+            argent_session::Entry::Message(argent_ai::Message::assistant("the answer")),
+        ];
         let text: String = entries
             .iter()
             .map(|entry| entry.to_json().dump() + "\n")
