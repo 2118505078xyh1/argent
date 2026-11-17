@@ -3903,11 +3903,7 @@ impl App {
                         ApprovalMode::Never => "approval:never".to_string(),
                     },
                 )),
-                "plan" => {
-                    if self.plan {
-                        items.push((5, "plan".to_string()));
-                    }
-                }
+                "plan" if self.plan => items.push((5, "plan".to_string())),
                 _ => {}
             }
         }
