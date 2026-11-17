@@ -317,6 +317,14 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 - 提示词缓存预热：`cacheWarming: "off" | "streaming"`，streaming 在每次运行结束后发一个最小请求续期缓存（Anthropic）；默认 off
 - 后台小模型助手（opt-in）：`backgroundIntelligence: true` 后，会话标题、压缩摘要、分支切换摘要由 `backgroundModel`（默认主模型）生成，失败自动回退到原有启发式，任何后台调用失败都不会影响运行
 - 模型范围：`enabledModels` 限制模型选择器与循环范围（支持 `*` 通配，匹配可含 `provider/` 前缀）；为空表示全部
+- MCP 服务器：`mcpServers` 配置外部工具，形状与 Claude Code / Codex CLI 相同，直接复制过来就能用。每个服务器启动一个 stdio 进程，其工具以 `mcp_<服务器>_<工具>` 注册进注册表，`tool_search` 按需提升；某台服务器起不来只打一行提示，不影响运行
+  ```json
+  {
+    "mcpServers": {
+      "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-fs", "/tmp"] }
+    }
+  }
+  ```
 - 分支摘要：`/tree` 切换分支时会把目标分支独有的消息作为摘要注入上下文，避免丢失另一条分支做过的事
 - profiles：`.argent/profiles/<name>.md` 固定模型/工具/预算，`--profile reviewer`
 
