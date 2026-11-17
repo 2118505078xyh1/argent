@@ -1092,8 +1092,13 @@ fn clip_hook_text(text: &str) -> String {
 /// Run a `!command` entered by the operator. The output is shown as a tool
 /// row and never sent to the model, so the command does not cost tokens.
 fn run_shell(cwd: &Path, command: &str) -> (String, bool) {
-    let mut spec = if argent_core::process::find_program("bash", &[]).is_some() {
-        let mut spec = argent_core::process::CommandSpec::new("bash");
+    // Probe the shell, do not just look for a file named bash. On Windows a
+    // bash.exe on PATH can be the WSL app-execution alias, which fails before
+    // running anything when no distribution is installed (GitHub's runners
+    // are exactly like this). `locate_posix_shell` verifies the candidate
+    // actually executes, so the fallback to cmd is taken in that case.
+    let mut spec = if let Some(program) = argent_tools::bash::locate_posix_shell() {
+        let mut spec = argent_core::process::CommandSpec::new(program);
         spec.args.push("-lc".to_string());
         spec.args.push(command.to_string());
         spec

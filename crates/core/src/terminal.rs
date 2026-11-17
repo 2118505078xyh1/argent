@@ -99,10 +99,41 @@ pub struct RawModeGuard {
 
 impl RawModeGuard {
     /// Put the terminal into raw mode. Returns `None` when stdin is not a TTY.
+    #[cfg(windows)]
     pub fn enable() -> Option<RawModeGuard> {
         Self::probe_raw_mode()
             .ok()
             .map(|original| RawModeGuard { original })
+    }
+
+    /// Put the terminal into raw mode. Returns `None` when stdin is not a TTY.
+    #[cfg(not(windows))]
+    pub fn enable() -> Option<RawModeGuard> {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            return None;
+        }
+        let saved = crate::process::run(
+            &crate::process::CommandSpec::new("stty")
+                .arg("-g")
+                .timeout(std::time::Duration::from_secs(2)),
+        )
+        .ok()
+        .filter(|out| out.success())
+        .map(|out| out.stdout.trim().to_string())?;
+        let applied = crate::process::run(
+            &crate::process::CommandSpec::new("stty")
+                .arg("raw")
+                .arg("-echo")
+                .timeout(std::time::Duration::from_secs(2)),
+        )
+        .map(|out| out.success())
+        .unwrap_or(false);
+        if applied {
+            Some(RawModeGuard { saved })
+        } else {
+            None
+        }
     }
 
     /// Put the terminal in raw mode, reporting which step failed.
@@ -180,32 +211,6 @@ impl RawModeGuard {
         }
     }
 
-    #[cfg(not(windows))]
-    pub fn probe_raw_mode() -> std::result::Result<u32, (String, u32)> {
-        if !std::io::stdin().is_terminal() {
-            return Err(("stdin is not a terminal".to_string(), 0));
-        }
-        let saved = crate::process::run(
-            &crate::process::CommandSpec::new("stty")
-                .arg("-g")
-                .timeout(std::time::Duration::from_secs(2)),
-        )
-        .map(|output| output.stdout.trim().to_string())
-        .unwrap_or_default();
-        let applied = crate::process::run(
-            &crate::process::CommandSpec::new("stty")
-                .arg("raw")
-                .arg("-echo")
-                .timeout(std::time::Duration::from_secs(2)),
-        )
-        .map(|output| output.success())
-        .unwrap_or(false);
-        if !applied {
-            return Err(("stty raw failed".to_string(), 0));
-        }
-        let _ = saved;
-        Ok(0)
-    }
 }
 
 impl Drop for RawModeGuard {

@@ -992,7 +992,7 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
-    use super::Result;
+    use super::{Error, Result};
     use std::process::Child;
 
     /// On Unix the process group is the confinement mechanism today; there is

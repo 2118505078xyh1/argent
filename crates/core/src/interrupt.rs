@@ -117,7 +117,7 @@ pub fn install() -> bool {
         }
 
         unsafe {
-            signal(SIGINT, handler as usize);
+            signal(SIGINT, handler as *const () as usize);
         }
         true
     }

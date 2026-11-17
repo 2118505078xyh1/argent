@@ -144,14 +144,16 @@ pub fn locate_posix_shell() -> Option<String> {
 }
 
 /// Whether this executable is a working POSIX shell, not just a file on PATH.
+///
+/// On Windows, `bash.exe` may be the WSL app-execution alias. Under that stub
+/// `bash -c "exit 0"` returns success even with no distribution installed —
+/// the stub never runs the command at all — so the probe needs real output.
 fn shell_runs(path: &str) -> bool {
     std::process::Command::new(path)
-        .args(["-c", "exit 0"])
+        .args(["-c", "printf argent-shell-probe"])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
+        .output()
+        .map(|out| out.status.success() && out.stdout == b"argent-shell-probe")
         .unwrap_or(false)
 }
 
