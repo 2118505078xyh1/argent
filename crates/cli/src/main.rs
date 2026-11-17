@@ -1414,6 +1414,7 @@ fn run_repl(
                 hooks,
                 cwd,
                 &prompt,
+                session,
                 Some(upgrade_sink.clone()),
             ) {
                 ReplAction::Continue => continue,
@@ -1507,6 +1508,7 @@ fn repl_command(
     hooks: &HookConfig,
     cwd: &Path,
     line: &str,
+    session: &mut SessionContext,
     upgrade_sink: Option<UpgradeSink>,
 ) -> ReplAction {
     let mut parts = line.split_whitespace();
@@ -1521,6 +1523,11 @@ fn repl_command(
                  /clear           clear the conversation\n\
                  /compact         compact the conversation now\n\
                  /rewind [n]      undo the last n run(s)' file changes\n\
+                 /session         show current session info\n\
+                 /sessions        list local sessions\n\
+                 /resume <n|name> switch to another session\n\
+                 /reload          reload keybindings/templates/theme\n\
+                 /changelog       show this version's changes\n\
                  /tools           list the tools in the schema\n\
                  /provider        show the active provider\n\
                  /exit            quit"
@@ -1550,6 +1557,90 @@ fn repl_command(
         }
         "/cost" => {
             println!("{}", cost_report(agent, config.max_context_tokens));
+        }
+        "/reload" => {
+            // REPL has no keybindings/templates of its own; re-read the shared
+            // config so theme and statusline changes take effect.
+            match Config::load(cwd) {
+                Ok(fresh) => {
+                    crate::theme::install(crate::theme::load(&fresh.theme, cwd));
+                    config.statusline = fresh.statusline;
+                    println!("reloaded: theme, statusline");
+                }
+                Err(error) => println!("reload failed: {}", error),
+            }
+        }
+        "/changelog" => {
+            println!("{}", changelog_for_current_version());
+        }
+        "/session" => {
+            // Pi's `/session`: verify the current session file, id, message
+            // count, token usage and cost.
+            println!("{}", session_info(session, agent, config));
+        }
+        "/sessions" => {
+            // List local sessions for this working directory, newest first.
+            let index = SessionIndex::new(config.session_dir.clone());
+            match index.list() {
+                Ok(rows) if rows.is_empty() => println!("no saved sessions yet"),
+                Ok(rows) => {
+                    println!("{} session(s) in {}:", rows.len(), config.session_dir.display());
+                    for (position, (path, header)) in rows.iter().take(50).enumerate() {
+                        let name = header.str_or("title", "");
+                        let name = if name.is_empty() {
+                            path.file_stem()
+                                .map(|stem| stem.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "?".to_string())
+                        } else {
+                            name
+                        };
+                        let marker = if path == &session.path { "*" } else { " " };
+                        println!("{}{:>2}. {}  {}", marker, position + 1, name, path.display());
+                    }
+                }
+                Err(error) => println!("cannot list sessions: {}", error),
+            }
+        }
+        "/resume" => {
+            let index = SessionIndex::new(config.session_dir.clone());
+            let rows = match index.list() {
+                Ok(rows) => rows,
+                Err(error) => {
+                    println!("cannot list sessions: {}", error);
+                    return ReplAction::Continue;
+                }
+            };
+            if argument.is_empty() {
+                println!("usage: /resume <number or name>  (see /sessions)");
+                return ReplAction::Continue;
+            }
+            let target = argument.parse::<usize>().ok().and_then(|number| {
+                if number >= 1 && number <= rows.len() {
+                    Some(rows[number - 1].0.clone())
+                } else {
+                    None
+                }
+            }).or_else(|| {
+                rows.iter()
+                    .find(|(path, header)| {
+                        header.str_or("title", "") == argument
+                            || path.to_string_lossy().contains(&argument)
+                    })
+                    .map(|(path, _)| path.clone())
+            });
+            match target {
+                Some(path) => match SessionContext::open(path) {
+                    Ok(opened) => {
+                        session.close();
+                        let messages = opened.messages();
+                        argent_session::controller::open(agent, messages);
+                        *session = opened;
+                        println!("switched to: {}", session.path.display());
+                    }
+                    Err(error) => println!("cannot open session: {}", error),
+                },
+                None => println!("no session matches '{}'", argument),
+            }
         }
         "/bug" => {
             match crate::mainx::bug_report::write_report(config, cwd) {
@@ -1987,6 +2078,73 @@ fn compact_if_needed(
 
 
 /// 本会话的花费与上下文占用，供 `/cost` 与 TUI 共用。
+/// Pi-style `/session` report: the file, title, message count and usage.
+pub(crate) fn session_header(session: &SessionContext) -> String {
+    let messages = session
+        .tree
+        .active_path()
+        .iter()
+        .filter(|node| matches!(node.payload, argent_session::Entry::Message(_)))
+        .count();
+    format!(
+        "session file : {}\ntitle        : {}\nmessages     : {}",
+        session.path.display(),
+        session.title(),
+        messages
+    )
+}
+
+pub(crate) fn session_info(
+    session: &SessionContext,
+    agent: &Agent,
+    config: &Config,
+) -> String {
+    format!(
+        "{}\n{}",
+        session_header(session),
+        cost_report(agent, config.max_context_tokens)
+    )
+}
+
+/// The current version's changelog section, trimmed to a screenful.
+/// Shared by the TUI's `/changelog` and the REPL's `/changelog`.
+pub(crate) fn changelog_for_current_version() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let text = std::fs::read_to_string("CHANGELOG.md")
+        .ok()
+        .or_else(|| {
+            // The binary may be launched from another directory.
+            let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+            std::fs::read_to_string(manifest.join("../../CHANGELOG.md")).ok()
+        });
+    let Some(text) = text else {
+        return format!("argent {version}: no CHANGELOG.md found");
+    };
+    let mut section = Vec::new();
+    let mut in_section = false;
+    for line in text.lines() {
+        if line.starts_with("## ") {
+            if in_section {
+                break;
+            }
+            in_section = line.contains(version);
+            continue;
+        }
+        if in_section && !section.is_empty() && section.len() >= 60 {
+            section.push("… (see CHANGELOG.md for the full entry)".to_string());
+            break;
+        }
+        if in_section && !line.trim().is_empty() {
+            section.push(line.to_string());
+        }
+    }
+    if section.is_empty() {
+        format!("argent {version}: no changelog entry for this version")
+    } else {
+        format!("argent {version} changelog:\n{}", section.join("\n"))
+    }
+}
+
 pub(crate) fn cost_report(agent: &Agent, max_context: usize) -> String {
     let usage = agent.usage();
     let context = argent_agent::estimate_tokens(agent.history());
@@ -2347,6 +2505,26 @@ pub fn probe_chat(config: &Config, prompt: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_header_reports_file_title_and_message_count() {
+        let dir = std::env::temp_dir().join(format!("argent-repl-session-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("demo.jsonl");
+        let lines = [
+            r#"{"kind":"header","data":{"title":"demo chat","id":"s-1"}}"#,
+            r#"{"kind":"message","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#,
+            r#"{"kind":"message","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
+        ];
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let session = crate::session_ctx::SessionContext::open(path.clone()).unwrap();
+        let header = super::session_header(&session);
+        assert!(header.contains("demo chat"), "{}", header);
+        assert!(header.contains("messages     : 2"), "{}", header);
+        assert!(header.contains(&path.display().to_string()), "{}", header);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]

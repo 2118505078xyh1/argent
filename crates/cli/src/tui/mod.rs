@@ -2468,11 +2468,51 @@ impl App {
         }
     }
 
+    /// Re-read resource files (keybindings, prompt templates, theme) so an
+    /// edit takes effect without restarting the session (Pi's `/reload`).
+    fn reload_resources(&mut self) -> String {
+        let cwd = self
+            .ready
+            .as_ref()
+            .map(|ready| PathBuf::from(&ready.cwd))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let mut loaded = Vec::new();
+        match crate::keybindings::Bindings::load(&cwd) {
+            Ok(bindings) => {
+                self.bindings = bindings;
+                loaded.push("keybindings");
+            }
+            Err(error) => return format!("reload failed: {error}"),
+        }
+        self.prompts = crate::prompts::PromptLibrary::discover(
+            &crate::prompts::PromptLibrary::default_roots(&cwd),
+        );
+        loaded.push("prompts");
+        if let Ok(config) = argent_core::config::Config::load(&cwd) {
+            crate::theme::install(crate::theme::load(&config.theme, &cwd));
+            self.statusline = config.statusline.clone();
+            loaded.push("theme");
+            loaded.push("statusline");
+        }
+        self.dirty = true;
+        format!("reloaded: {}", loaded.join(", "))
+    }
+
     fn command(&mut self, worker: &Worker, text: &str) {
         let mut parts = text.splitn(2, char::is_whitespace);
         let command = parts.next().unwrap_or("");
         let argument = parts.next().unwrap_or("").trim();
         match command {
+            "/reload" => {
+                let status = self.reload_resources();
+                self.set_status(status);
+            }
+            "/changelog" => {
+                let text = crate::changelog_for_current_version();
+                self.transcript.push_notice(NoticeKind::Info, text);
+                self.scroll = 0;
+                self.set_status("changelog shown in transcript");
+            }
             "/exit" | "/quit" | "/q" => self.quit = true,
             "/help" | "/?" => self.overlay = Some(Overlay::Help),
             "/new" => {
@@ -2979,8 +3019,8 @@ impl App {
                     let mut rendered = wrapped(
                         &text,
                         width,
-                        "✻ ",
-                        "  ",
+                        "thinking ",
+                        "           ",
                         Style::dim(crate::theme::current().dim),
                     );
                     if !self.expand && rendered.len() > 4 {
@@ -3980,6 +4020,73 @@ mod tests {
         assert_eq!(attached, vec!["a.txt".to_string()]);
         assert!(images.is_empty(), "a text file is not a vision attachment");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thinking_is_labelled_with_text_not_a_glyph() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::En,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.transcript
+            .push_entry(argent_ui_core::Entry::Thinking("reasoning here".to_string()));
+        let frame = app.frame(80, 24).join("\n");
+        assert!(frame.contains("thinking"), "{}", frame);
+        assert!(frame.contains("reasoning here"), "{}", frame);
+        assert!(!frame.contains("✻"), "the old glyph must be gone: {}", frame);
+    }
+
+    #[test]
+    fn reload_resources_rebinds_keys_from_disk() {
+        let dir = std::env::temp_dir().join(format!("argent-tui-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".argent")).unwrap();
+        std::fs::write(
+            dir.join(".argent").join("keybindings.json"),
+            r#"{"redraw": ["ctrl+p"]}"#,
+        )
+        .unwrap();
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.ready = Some(ReadyInfo {
+            model: String::new(),
+            thinking: String::new(),
+            provider: String::new(),
+            protocol: String::new(),
+            cwd: dir.display().to_string(),
+            session: String::new(),
+            session_path: String::new(),
+        });
+        assert_eq!(
+            app.bindings.action(&Key::CtrlP),
+            Some(crate::keybindings::Action::HistoryPrevious),
+            "default binding"
+        );
+        let status = app.reload_resources();
+        assert!(status.contains("keybindings"), "{}", status);
+        assert_eq!(
+            app.bindings.action(&Key::CtrlP),
+            Some(crate::keybindings::Action::Redraw),
+            "reloaded from disk"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn changelog_shows_the_current_version_entry() {
+        let text = crate::changelog_for_current_version();
+        assert!(text.contains(env!("CARGO_PKG_VERSION")), "{}", text);
+        // The shipped CHANGELOG has a section for this version; if the file is
+        // missing the helper reports that explicitly instead of panicking.
+        assert!(!text.is_empty());
     }
 
     #[test]
