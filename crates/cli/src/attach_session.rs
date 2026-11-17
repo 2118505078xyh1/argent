@@ -171,7 +171,7 @@ fn attach_tui(session: &BackgroundSession, base: &str, auth: &str, cwd: &str) ->
         cwd: cwd.to_string(),
         session: session.id.clone(),
         session_path: String::new(),
-    
+
         approval: "sensible".to_string(),
     });
 

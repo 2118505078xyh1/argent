@@ -4648,7 +4648,7 @@ mod cursor_tests {
             cwd: "/tmp".to_string(),
             session: "s".to_string(),
             session_path: "/tmp/s.jsonl".to_string(),
-        
+
             approval: "sensible".to_string(),
         });
         assert_eq!(app.metrics.context_max, 960_000);
@@ -4665,7 +4665,7 @@ mod cursor_tests {
             cwd: "/tmp".to_string(),
             session: "s".to_string(),
             session_path: "/tmp/s.jsonl".to_string(),
-        
+
             approval: "sensible".to_string(),
         });
         app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 0 }));
@@ -4708,7 +4708,7 @@ mod cursor_tests {
             cwd: "/tmp".to_string(),
             session: "s".to_string(),
             session_path: "/tmp/s.jsonl".to_string(),
-        
+
             approval: "sensible".to_string(),
         });
         let turn = |app: &mut App, q: &str, a: &str| {
@@ -4777,7 +4777,7 @@ mod cursor_tests {
             cwd: "/tmp".to_string(),
             session: "s".to_string(),
             session_path: "/tmp/s.jsonl".to_string(),
-        
+
             approval: "sensible".to_string(),
         });
         app.handle_ui(UiEvent::TurnDone {

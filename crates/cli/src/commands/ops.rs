@@ -26,9 +26,12 @@ pub(super) fn themes(args: &[String]) -> Result<i32> {
     let user_dir = paths.storage().join("themes");
     let project_dir = cwd.join(".argent").join("themes");
     let locate = |name: &str| -> Option<PathBuf> {
-        [project_dir.join(format!("{name}.json")), user_dir.join(format!("{name}.json"))]
-            .into_iter()
-            .find(|path| path.is_file())
+        [
+            project_dir.join(format!("{name}.json")),
+            user_dir.join(format!("{name}.json")),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
     };
 
     match action {
@@ -84,7 +87,9 @@ pub(super) fn themes(args: &[String]) -> Result<i32> {
         }
         "export" => {
             let Some(name) = positional.get(1) else {
-                return Err(Error::config("usage: argent themes export <name> [--output FILE]"));
+                return Err(Error::config(
+                    "usage: argent themes export <name> [--output FILE]",
+                ));
             };
             let theme = crate::theme::load(name, &cwd);
             let mut data = Json::obj();
@@ -107,9 +112,15 @@ pub(super) fn themes(args: &[String]) -> Result<i32> {
             let text = data.dump_pretty();
             match flag_value(args, "--output") {
                 Some(path) => {
-                    std::fs::write(path, format!("{}
-", text))
-                        .map_err(|error| Error::io(format!("write {} failed: {}", path, error)))?;
+                    std::fs::write(
+                        path,
+                        format!(
+                            "{}
+",
+                            text
+                        ),
+                    )
+                    .map_err(|error| Error::io(format!("write {} failed: {}", path, error)))?;
                     println!("exported {} to {}", theme.name, path);
                 }
                 None => println!("{}", text),
@@ -218,9 +229,15 @@ pub(super) fn board(args: &[String]) -> Result<i32> {
         }
     }
     let save = |doc: &Json| -> Result<()> {
-        std::fs::write(&path, format!("{}
-", doc.dump_pretty()))
-            .map_err(|error| Error::io(format!("write {} failed: {}", path.display(), error)))
+        std::fs::write(
+            &path,
+            format!(
+                "{}
+",
+                doc.dump_pretty()
+            ),
+        )
+        .map_err(|error| Error::io(format!("write {} failed: {}", path.display(), error)))
     };
 
     match action {
@@ -273,7 +290,10 @@ pub(super) fn board(args: &[String]) -> Result<i32> {
             Ok(0)
         }
         "claim" => {
-            let Some(id) = positional.get(1).and_then(|value| value.parse::<i64>().ok()) else {
+            let Some(id) = positional
+                .get(1)
+                .and_then(|value| value.parse::<i64>().ok())
+            else {
                 return Err(Error::config("usage: argent board claim <id> [--as AGENT]"));
             };
             let agent = flag_value(args, "--as").unwrap_or("agent").to_string();
@@ -289,7 +309,10 @@ pub(super) fn board(args: &[String]) -> Result<i32> {
             Ok(0)
         }
         "done" => {
-            let Some(id) = positional.get(1).and_then(|value| value.parse::<i64>().ok()) else {
+            let Some(id) = positional
+                .get(1)
+                .and_then(|value| value.parse::<i64>().ok())
+            else {
                 return Err(Error::config("usage: argent board done <id>"));
             };
             let tasks = array_mut(&mut doc, "tasks");
@@ -304,7 +327,9 @@ pub(super) fn board(args: &[String]) -> Result<i32> {
         }
         "message" => {
             if positional.len() < 4 {
-                return Err(Error::config("usage: argent board message <from> <to> <text...>"));
+                return Err(Error::config(
+                    "usage: argent board message <from> <to> <text...>",
+                ));
             }
             let from = positional[1];
             let to = positional[2];
@@ -314,8 +339,7 @@ pub(super) fn board(args: &[String]) -> Result<i32> {
             message.set("to", Json::string(to.to_string()));
             message.set("text", Json::string(text));
             message.set("epoch", Json::num(now() as f64));
-            array_mut(&mut doc, "messages")
-                .push(message);
+            array_mut(&mut doc, "messages").push(message);
             save(&doc)?;
             println!("message queued for {}", to);
             Ok(0)
@@ -325,7 +349,10 @@ pub(super) fn board(args: &[String]) -> Result<i32> {
                 return Err(Error::config("usage: argent board inbox <agent>"));
             };
             let messages = doc.get("messages").and_then(Json::as_array).unwrap_or(&[]);
-            for message in messages.iter().filter(|message| message.str_or("to", "") == *agent) {
+            for message in messages
+                .iter()
+                .filter(|message| message.str_or("to", "") == *agent)
+            {
                 println!(
                     "{} ← {}: {}",
                     argent_session::local_stamp(message.num_or("epoch", 0.0) as u64),
@@ -731,7 +758,11 @@ mod tests {
 
         let mut message = workspace().to_vec();
         message.insert(0, "message".to_string());
-        message.extend(["alice".to_string(), "bob".to_string(), "need review".to_string()]);
+        message.extend([
+            "alice".to_string(),
+            "bob".to_string(),
+            "need review".to_string(),
+        ]);
         assert_eq!(board(&message).expect("message"), 0);
 
         let mut inbox = workspace().to_vec();
@@ -793,8 +824,11 @@ mod tests {
         .expect("import");
         assert_eq!(code, 0);
 
-        std::fs::write(themes_dir.join("custom.json"), r#"{"accent":"not-a-color"}"#)
-            .expect("write bad theme");
+        std::fs::write(
+            themes_dir.join("custom.json"),
+            r#"{"accent":"not-a-color"}"#,
+        )
+        .expect("write bad theme");
         assert!(themes(&args("validate", &[])).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

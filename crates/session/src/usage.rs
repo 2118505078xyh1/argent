@@ -299,9 +299,7 @@ pub fn attribute(records: &[UsageRecord]) -> CacheAttribution {
             match previous.get(record.session.as_str()) {
                 None => out.cold_start += missed,
                 Some(prev) if prev.model != record.model => out.model_changed += missed,
-                Some(prev) if record.epoch.saturating_sub(prev.epoch) > 300 => {
-                    out.idle += missed
-                }
+                Some(prev) if record.epoch.saturating_sub(prev.epoch) > 300 => out.idle += missed,
                 // A complete miss with the same model is either a provider
                 // that does not cache or a prefix the cache could not match.
                 Some(_) if record.cached_tokens == 0 => out.provider_cold += missed,
@@ -391,12 +389,12 @@ mod tests {
             ttft_ms: None,
         };
         let records = vec![
-            record(1_000, "a", "m1", 0),   // cold start: 100
-            record(1_010, "a", "m1", 90),  // prefix drift: 10
-            record(1_900, "a", "m1", 90),  // idle: 10
-            record(1_910, "a", "m2", 90),  // model change: 10
-            record(1_920, "a", "m2", 0),   // provider/prefix cold: 100
-            record(1_930, "b", "m2", 0),   // another cold start: 100
+            record(1_000, "a", "m1", 0),  // cold start: 100
+            record(1_010, "a", "m1", 90), // prefix drift: 10
+            record(1_900, "a", "m1", 90), // idle: 10
+            record(1_910, "a", "m2", 90), // model change: 10
+            record(1_920, "a", "m2", 0),  // provider/prefix cold: 100
+            record(1_930, "b", "m2", 0),  // another cold start: 100
         ];
         let out = attribute(&records);
         assert_eq!(out.cold_start, 200);

@@ -228,7 +228,11 @@ impl ServerRef {
         let query_token = request
             .path
             .split_once('?')
-            .and_then(|(_, query)| query.split('&').find_map(|pair| pair.strip_prefix("token=")))
+            .and_then(|(_, query)| {
+                query
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix("token="))
+            })
             .unwrap_or("");
         if constant_time_eq(presented.as_bytes(), expected.as_bytes())
             || constant_time_eq(query_token.as_bytes(), expected.as_bytes())

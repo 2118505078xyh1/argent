@@ -253,7 +253,11 @@ pub fn load(name: &str, cwd: &Path) -> Theme {
 
 /// 可用主题名：内置 + 两个目录里的文件名。
 pub fn names(cwd: &Path) -> Vec<String> {
-    let mut out = vec!["dark".to_string(), "light".to_string(), "contrast".to_string()];
+    let mut out = vec![
+        "dark".to_string(),
+        "light".to_string(),
+        "contrast".to_string(),
+    ];
     let paths = argent_config::Paths::new(cwd);
     for root in [
         paths.storage().join("themes"),
