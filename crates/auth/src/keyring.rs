@@ -286,7 +286,6 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::split_target;
-    use super::SecretBackend;
     use argent_core::error::{Error, Result};
     use argent_core::process::{self, CommandSpec};
 

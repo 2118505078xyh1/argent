@@ -3,6 +3,8 @@
 
 #[cfg(any(not(windows), test))]
 use std::collections::VecDeque;
+#[cfg(not(windows))]
+use std::io::Read;
 use std::sync::mpsc::Sender;
 
 // ---------------------------------------------------------------- keys

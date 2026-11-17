@@ -68,13 +68,14 @@ impl JobManager {
         self.next_id += 1;
         let id = format!("job{}", self.next_id);
         let (shell, args) = shell_for_platform();
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let job = Job::start(
             &id,
             command,
             cwd,
             &self.log_dir,
-            shell,
-            &args,
+            &shell,
+            &arg_refs,
             self.max_log_bytes,
         )?;
         self.jobs.insert(id.clone(), job);
@@ -171,16 +172,19 @@ impl Drop for JobManager {
 /// The fallback matches the `bash` tool: when no POSIX shell answers its probe,
 /// commands run under PowerShell rather than `cmd`. The agent writes one kind
 /// of command line, so the two tools must not disagree about what it means.
-fn shell_for_platform() -> (&'static str, Vec<&'static str>) {
+fn shell_for_platform() -> (String, Vec<String>) {
     if cfg!(windows) {
-        // Prefer bash when it is installed: job commands are usually POSIX.
-        if argent_tools::locate_posix_shell().is_some() {
-            ("bash", vec!["-lc"])
+        // Use the verified path, not a hardcoded "bash": a bash.exe on PATH
+        // can be the WSL app-execution alias with no distribution installed,
+        // which exits before running the command. `locate_posix_shell` only
+        // returns a shell that really executed a probe.
+        if let Some(shell) = argent_tools::locate_posix_shell() {
+            (shell, vec!["-lc".to_string()])
         } else {
-            ("powershell", vec!["-NoProfile", "-Command"])
+            ("powershell".to_string(), vec!["-NoProfile".to_string(), "-Command".to_string()])
         }
     } else {
-        ("sh", vec!["-lc"])
+        ("sh".to_string(), vec!["-lc".to_string()])
     }
 }
 
