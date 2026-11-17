@@ -103,10 +103,13 @@ impl Style {
         }
     }
 
+    /// 次要文字：直接使用给定颜色，不再额外发 SGR faint。
+    ///
+    /// 颜色由主题挑好（Claude 的 muted 灰、链接灰）；SGR 2 在各终端上
+    /// 衰减幅度不同，叠上去会让主题色失去可预测性，小字也容易发虚。
     pub fn dim(color: Color) -> Style {
         Style {
             fg: Some(color),
-            dim: true,
             ..Style::default()
         }
     }

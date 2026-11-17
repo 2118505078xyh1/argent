@@ -1,7 +1,8 @@
 //! 配色主题。
 //!
 //! 主题是一张颜色表，渲染层按语义取值（accent/dim/error…），不认具体颜色。
-//! 内置 `dark` 与 `light`；用户主题放在 `~/.argent/themes/<name>.json`
+//! 内置 `dark` 与 `light`（Claude Code 风格：近黑/奶油底、陶土橙强调色）；
+//! 用户主题放在 `~/.argent/themes/<name>.json`
 //! （项目级 `.argent/themes/<name>.json` 优先），只覆盖写到的字段。
 
 use std::path::Path;
@@ -26,38 +27,55 @@ pub struct Theme {
     pub success: Color,
     pub warning: Color,
     pub error: Color,
+    /// 用户消息块的前景与底色。
+    ///
+    /// 不能用 `Color::Default`：浅色终端里默认前景是黑的，铺在深色块上
+    /// 几乎看不见。两块颜色必须成对由主题给出。
+    pub user_fg: Color,
+    pub user_bg: Color,
+    /// 代码块的前景与底色，同样必须成对。
+    pub code_fg: Color,
+    pub code_bg: Color,
 }
 
 impl Theme {
     /// 内置主题。
     pub fn builtin(name: &str) -> Option<Theme> {
         match name {
+            // Claude Code 的深色配色：近黑底、白字、陶土橙强调色。
+            // 强调色只做提示符、列表符号、行内码，正文保持白色，
+            // 长时间阅读不会像高饱和主题那样累。
             "dark" => Some(Theme {
                 name: "dark".to_string(),
-                // 纯黑：和终端的默认底色一致，块状元素（代码块、选中行）
-                // 的深浅层次才不会发灰。
-                background: Color::Fixed(16),
-                // 低饱和蓝绿：比基础青色柔和，长时间看也不刺眼。
-                accent: Color::Fixed(73),
-                secondary: Color::Fixed(140),
-                text: Color::Fixed(253),
-                // 244/249 在纯黑底上还是发虚，状态栏小字看不清；再提亮一档。
-                dim: Color::Fixed(252),
-                success: Color::Fixed(108),
-                warning: Color::Fixed(179),
-                error: Color::Fixed(174),
+                background: Color::Rgb(0x1a, 0x1a, 0x1a),
+                accent: Color::Rgb(0xd7, 0x77, 0x57),
+                secondary: Color::Rgb(0xb1, 0xb9, 0xf9),
+                text: Color::Rgb(0xff, 0xff, 0xff),
+                // 中性灰：状态栏和思考正文退到背景里，但仍能看清。
+                dim: Color::Rgb(0x88, 0x88, 0x88),
+                success: Color::Rgb(0x4e, 0xba, 0x65),
+                warning: Color::Rgb(0xff, 0xc1, 0x07),
+                error: Color::Rgb(0xff, 0x6b, 0x80),
+                user_fg: Color::Rgb(0xff, 0xff, 0xff),
+                user_bg: Color::Rgb(0x37, 0x37, 0x37),
+                code_fg: Color::Rgb(0xf0, 0xf0, 0xf0),
+                code_bg: Color::Rgb(0x26, 0x26, 0x26),
             }),
-            // 浅色背景上基础色太亮：换 256 色里的深色档。
+            // Claude 的浅色配色：奶油纸底、深墨字，橙色压暗一档保证对比度。
             "light" => Some(Theme {
                 name: "light".to_string(),
-                background: Color::Fixed(255),
-                accent: Color::Fixed(25),
-                secondary: Color::Fixed(96),
-                text: Color::Fixed(235),
-                dim: Color::Fixed(240),
-                success: Color::Fixed(28),
-                warning: Color::Fixed(136),
-                error: Color::Fixed(160),
+                background: Color::Rgb(0xfa, 0xf9, 0xf5),
+                accent: Color::Rgb(0xc1, 0x5f, 0x3c),
+                secondary: Color::Rgb(0x6f, 0x5d, 0xa8),
+                text: Color::Rgb(0x1f, 0x1e, 0x1d),
+                dim: Color::Rgb(0x6b, 0x6a, 0x63),
+                success: Color::Rgb(0x2e, 0x7d, 0x32),
+                warning: Color::Rgb(0x9a, 0x67, 0x00),
+                error: Color::Rgb(0xb3, 0x26, 0x1e),
+                user_fg: Color::Rgb(0x1f, 0x1e, 0x1d),
+                user_bg: Color::Rgb(0xf0, 0xee, 0xe6),
+                code_fg: Color::Rgb(0x1f, 0x1e, 0x1d),
+                code_bg: Color::Rgb(0xee, 0xec, 0xe3),
             }),
             _ => None,
         }
@@ -97,6 +115,18 @@ impl Theme {
         }
         if let Some(color) = pick("error")? {
             self.error = color;
+        }
+        if let Some(color) = pick("user_fg")? {
+            self.user_fg = color;
+        }
+        if let Some(color) = pick("user_bg")? {
+            self.user_bg = color;
+        }
+        if let Some(color) = pick("code_fg")? {
+            self.code_fg = color;
+        }
+        if let Some(color) = pick("code_bg")? {
+            self.code_bg = color;
         }
         Ok(self)
     }
@@ -255,11 +285,78 @@ mod tests {
     #[test]
     fn an_overlay_changes_only_named_fields() {
         let theme = Theme::builtin("dark").expect("dark");
+        let expected_user_bg = theme.user_bg;
         let value = argent_core::json::Json::parse(r#"{"accent":"red","dim":"39"}"#).expect("json");
         let overlaid = theme.overlaid(&value).expect("overlay");
         assert!(matches!(overlaid.accent, Color::Red));
         assert!(matches!(overlaid.dim, Color::Fixed(39)));
-        // 未提及的字段保持内置值（dark 的 success 是为黑底挑的柔和绿）。
-        assert!(matches!(overlaid.success, Color::Fixed(108)));
+        // 未提及的字段保持内置值（dark 的 success 是 Claude 的柔和绿）。
+        assert_eq!(overlaid.success, Color::Rgb(0x4e, 0xba, 0x65));
+        assert_eq!(overlaid.user_bg, expected_user_bg);
+    }
+
+    #[test]
+    fn user_and_code_blocks_overlay_as_a_pair() {
+        let theme = Theme::builtin("light").expect("light");
+        let value = argent_core::json::Json::parse(
+            r##"{"user_fg":"#111111","user_bg":"#eeeeee","code_fg":"#222222","code_bg":"#dddddd"}"##,
+        )
+        .expect("json");
+        let overlaid = theme.overlaid(&value).expect("overlay");
+        assert!(matches!(overlaid.user_fg, Color::Fixed(_)));
+        assert!(matches!(overlaid.user_bg, Color::Fixed(_)));
+        assert!(matches!(overlaid.code_fg, Color::Fixed(_)));
+        assert!(matches!(overlaid.code_bg, Color::Fixed(_)));
+    }
+
+    /// 相对亮度（WCAG）：两套内置主题的用户块与代码块都必须看得清。
+    ///
+    /// 只算 RGB：内置主题全部是 RGB，256 色会落到终端调色板上，
+    /// 对比度无法在编译期确定。
+    fn contrast(fg: Color, bg: Color) -> Option<f32> {
+        let (Color::Rgb(fr, fg_, fb), Color::Rgb(br, bg_, bb)) = (fg, bg) else {
+            return None;
+        };
+        let channel = |value: u8| {
+            let v = value as f32 / 255.0;
+            if v <= 0.039_28 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let luminance = |r: u8, g: u8, b: u8| {
+            0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+        };
+        let (high, low) = {
+            let fg_l = luminance(fr, fg_, fb);
+            let bg_l = luminance(br, bg_, bb);
+            if fg_l >= bg_l {
+                (fg_l, bg_l)
+            } else {
+                (bg_l, fg_l)
+            }
+        };
+        Some((high + 0.05) / (low + 0.05))
+    }
+
+    #[test]
+    fn builtin_theme_blocks_keep_readable_contrast() {
+        for name in ["dark", "light"] {
+            let theme = Theme::builtin(name).expect(name);
+            for (label, fg, bg) in [
+                ("user block", theme.user_fg, theme.user_bg),
+                ("code block", theme.code_fg, theme.code_bg),
+            ] {
+                let ratio = contrast(fg, bg).expect("builtin blocks are RGB");
+                assert!(
+                    ratio >= 4.5,
+                    "{} {} contrast {:.1} is below 4.5",
+                    name,
+                    label,
+                    ratio
+                );
+            }
+        }
     }
 }

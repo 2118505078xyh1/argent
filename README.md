@@ -314,7 +314,8 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 }
 ```
 
-- 主题：`themes/<name>.json` 覆盖语义色（accent/dim/error…），`--theme light`
+- 主题：内置 `dark`/`light` 为 Claude Code 风格（近黑或奶油底、陶土橙强调色）；
+  `themes/<name>.json` 可覆盖语义色（accent/dim/error/user_bg/code_bg…），`--theme light` 切换
 - 键位：`keybindings.json` 重绑 quit/abort/redraw/expand/history 六个动作
 - 状态栏：`statusline` 决定分段与顺序
 - 关闭自动压缩：`autoCompaction: false` 或 `--no-auto-compact`
@@ -322,6 +323,7 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 - 提示词缓存预热：`cacheWarming: "off" | "streaming"`，streaming 在每次运行结束后发一个最小请求续期缓存（Anthropic）；默认 off
 - 后台小模型助手（opt-in）：`backgroundIntelligence: true` 后，会话标题、压缩摘要、分支切换摘要由 `backgroundModel`（默认主模型）生成，失败自动回退到原有启发式，任何后台调用失败都不会影响运行
 - 模型范围：`enabledModels` 限制模型选择器与循环范围（支持 `*` 通配，匹配可含 `provider/` 前缀）；为空表示全部
+- 备用模型：`fallbackModel`（或 CLI 参数 `--fallback-model`）在主模型连续瞬时失败（429/5xx/超时，空流重试耗尽）时自动换用该模型重跑本轮；400/密钥错误不切换。对所有运行路径生效，默认关闭
 - MCP 服务器：`mcpServers` 配置外部工具，形状与 Claude Code / Codex CLI 相同，直接复制过来就能用。每个服务器启动一个 stdio 进程，其工具以 `mcp__<server>__<tool>` 注册进注册表，`tool_search` 按需提升；某台服务器起不来只打一行提示，不影响运行
   ```json
   {
@@ -612,8 +614,16 @@ crates/
   update     Ed25519 签名 manifest、校验下载与安装/回滚
   i18n       中英文案目录与 locale 选择
   cli        `argent` 二进制
+  ui-core    前端无关的 view model：transcript、指标、用户意图
+  engine     窗口前端背后的 worker：会话、命令、事件、审批
   native     iced 原生桌面窗口（tiny-skia，无 WebView）
-  ...        memory、device、lsp、jobs、ast、pty、ui-core、engine
+  plugin     原生 C ABI 插件加载器（与 plugins 不同，树外工具）
+  memory     跨会话记忆存储
+  device     浏览器 / 桌面自动化
+  lsp        Language Server 客户端（Content-Length 帧）
+  ast        token 级结构化搜索，不跑完整 parser
+  pty        交互式长跑进程
+  jobs       跨轮次的背景任务
 ```
 
 依赖图和各 crate 职责见

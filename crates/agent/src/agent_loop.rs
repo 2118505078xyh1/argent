@@ -193,6 +193,12 @@ pub struct AgentConfig {
     pub follow_up_mode: FollowUpMode,
     /// Prompt-cache keep-alive policy.
     pub cache_warming: CacheWarming,
+    /// A backup model tried when the primary keeps returning empty streams.
+    ///
+    /// Same endpoint, different model id: the primary's full retry budget
+    /// runs first, then one fresh budget on the fallback before the turn
+    /// fails. `None` disables the chain.
+    pub fallback_model: Option<String>,
 }
 
 impl std::fmt::Debug for AgentConfig {
@@ -233,6 +239,7 @@ impl AgentConfig {
             on_run_start: None,
             follow_up_mode: FollowUpMode::default(),
             cache_warming: CacheWarming::default(),
+            fallback_model: None,
         }
     }
 }
@@ -1080,6 +1087,9 @@ impl Agent {
             // operator already read.
             let attempts = self.config.stream_retries.max(1);
             let mut attempt = 0u32;
+            // One fallback shot per run: the primary burns its full retry
+            // budget first, then the backup gets a fresh one.
+            let mut fallback_spent = false;
             let (assistant, failure) = loop {
                 attempt += 1;
                 self.requests += 1;
@@ -1115,6 +1125,32 @@ impl Agent {
                         )));
                         std::thread::sleep(retry_pause(attempt));
                         continue;
+                    }
+                    StreamFailure::Empty(message)
+                        if !fallback_spent
+                            && is_transient_model_error(message)
+                            && self
+                                .config
+                                .fallback_model
+                                .as_deref()
+                                .is_some_and(|m| m != request.model) =>
+                    {
+                        // The primary is out of retries, and the error is the
+                        // kind another model can survive (rate limit, gateway,
+                        // timeout — not a 400 or a rejected key). Switch with a
+                        // fresh budget; a Notice keeps the operator informed.
+                        if let Some(fallback) = self.config.fallback_model.clone() {
+                            fallback_spent = true;
+                            request.model = fallback;
+                            attempt = 0;
+                            sink.emit(AgentEvent::Notice(format!(
+                                "primary model keeps returning empty streams ({}), \
+                                 falling back to {}",
+                                message, request.model
+                            )));
+                            continue;
+                        }
+                        break (assistant, failure);
                     }
                     _ => break (assistant, failure),
                 }
@@ -2999,6 +3035,215 @@ mod tests {
             agent.history().last().map(|message| message.text()),
             Some("done".to_string())
         );
+    }
+
+    // ---- Fallback 模型链：主模型空流耗尽重试后切备用模型 ----
+
+    /// 主模型（`primary`）每次都返回空流；备用模型（其他名字）正常完成。
+    /// 按请求里的 model 名分流，验证 agent 真的换了模型。
+    struct FallbackProvider {
+        primary: String,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl Provider for FallbackProvider {
+        fn name(&self) -> &str {
+            "fallback-test"
+        }
+
+        fn models(&self) -> Result<Vec<ModelInfo>> {
+            Ok(Vec::new())
+        }
+
+        fn chat(
+            &self,
+            request: &ChatRequest,
+        ) -> Result<Box<dyn Iterator<Item = Result<StreamEvent>> + Send>> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(request.model.clone());
+            if request.model == self.primary {
+                return Ok(Box::new(
+                    vec![Err(Error::provider("gateway 504 timed out"))].into_iter(),
+                ));
+            }
+            let events: Vec<Result<StreamEvent>> = vec![
+                Ok(StreamEvent::Text(format!("saved by {}", request.model))),
+                Ok(StreamEvent::Usage(Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                    cached_tokens: 0,
+                })),
+                Ok(StreamEvent::Done),
+            ];
+            Ok(Box::new(events.into_iter()))
+        }
+    }
+
+    #[test]
+    fn an_exhausted_primary_falls_back_to_the_backup_model() {
+        let _guard = run_lock();
+        let registry = Arc::new(ToolRegistry::with_builtins());
+        let provider = Box::new(FallbackProvider {
+            primary: "primary-model".to_string(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut config = AgentConfig::new("primary-model");
+        config.fallback_model = Some("backup-model".to_string());
+        config.stream_retries = 2;
+        let mut agent = Agent::new(
+            provider,
+            registry,
+            config,
+            ToolCtx::new(std::env::temp_dir()),
+            "system",
+        );
+        let mut sink = crate::events::CollectingSink::default();
+        let reason = agent.run("hello", &mut sink).expect("run");
+        assert_eq!(reason, FinishReason::Complete);
+        // 2 次主模型重试 + 1 次备用模型。
+        assert_eq!(agent.requests(), 3, "primary budget then one fallback shot");
+        let last = agent
+            .history()
+            .last()
+            .map(|message| message.text())
+            .expect("answer");
+        assert_eq!(last, "saved by backup-model");
+        let notices: Vec<String> = sink
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                crate::events::AgentEvent::Notice(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            notices
+                .iter()
+                .any(|text| text.contains("falling back to backup-model")),
+            "operator must be told the run switched models: {notices:?}"
+        );
+    }
+
+    #[test]
+    fn without_a_fallback_the_exhausted_primary_fails_the_run() {
+        let _guard = run_lock();
+        let registry = Arc::new(ToolRegistry::with_builtins());
+        let provider = Box::new(FallbackProvider {
+            primary: "primary-model".to_string(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut config = AgentConfig::new("primary-model");
+        config.stream_retries = 2;
+        let mut agent = Agent::new(
+            provider,
+            registry,
+            config,
+            ToolCtx::new(std::env::temp_dir()),
+            "system",
+        );
+        let mut sink = crate::events::CollectingSink::default();
+        let reason = agent.run("hello", &mut sink).expect("run");
+        assert!(
+            matches!(reason, FinishReason::Error(_)),
+            "no fallback configured: the run must fail with the stream error"
+        );
+        assert_eq!(agent.requests(), 2, "only the primary budget runs");
+    }
+
+    #[test]
+    fn a_permanent_error_never_switches_to_the_fallback_model() {
+        // A 400 or a rejected key comes back from the second model too:
+        // the switch must not even be attempted.
+        let _guard = run_lock();
+        let registry = Arc::new(ToolRegistry::with_builtins());
+        let provider = Box::new(FallbackProvider {
+            primary: "primary-model".to_string(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut config = AgentConfig::new("primary-model");
+        config.fallback_model = Some("backup-model".to_string());
+        config.stream_retries = 2;
+        let mut agent = Agent::new(
+            provider,
+            registry,
+            config,
+            ToolCtx::new(std::env::temp_dir()),
+            "system",
+        );
+        // Swap the provider's primary error for a permanent one.
+        agent.provider = Box::new(PermanentErrorProvider {
+            calls: Mutex::new(0),
+        });
+        let mut sink = crate::events::CollectingSink::default();
+        let reason = agent.run("hello", &mut sink).expect("run");
+        assert!(matches!(reason, FinishReason::Error(message) if message.contains("401")));
+        assert_eq!(
+            agent.requests(),
+            2,
+            "only the primary budget runs; the backup is never tried"
+        );
+    }
+
+    /// 与 FallbackProvider 同形，但错误是永久性的（401）。
+    struct PermanentErrorProvider {
+        calls: Mutex<usize>,
+    }
+
+    impl Provider for PermanentErrorProvider {
+        fn name(&self) -> &str {
+            "permanent-test"
+        }
+
+        fn models(&self) -> Result<Vec<ModelInfo>> {
+            Ok(Vec::new())
+        }
+
+        fn chat(
+            &self,
+            _request: &ChatRequest,
+        ) -> Result<Box<dyn Iterator<Item = Result<StreamEvent>> + Send>> {
+            let mut calls = self.calls.lock().expect("lock");
+            *calls += 1;
+            Ok(Box::new(
+                vec![Err(Error::provider("401 unauthorized"))].into_iter(),
+            ))
+        }
+    }
+
+    #[test]
+    fn transient_error_classification_matches_the_cli_contract() {
+        for message in [
+            "429 too many requests",
+            "500 internal server error",
+            "502 bad gateway",
+            "503 overloaded",
+            "504 gateway timeout",
+            "request timed out",
+            "connection reset by peer",
+            "connection refused",
+        ] {
+            assert!(
+                is_transient_model_error(message),
+                "{} should be transient",
+                message
+            );
+        }
+        for message in [
+            "400 bad request: unknown model",
+            "model not found",
+            "401 unauthorized",
+            "403 forbidden",
+            "invalid api key",
+        ] {
+            assert!(
+                !is_transient_model_error(message),
+                "{} should not be transient",
+                message
+            );
+        }
     }
 
     // ---- P0 回归：Partial 流保留完整工具调用并配对结果 ----

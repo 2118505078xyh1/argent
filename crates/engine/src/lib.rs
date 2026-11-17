@@ -876,6 +876,7 @@ fn build_agent(
             agent_config.cache_warming = argent_agent::CacheWarming::parse(policy);
         }
     }
+    agent_config.fallback_model = config.fallback_model.clone();
     // 每次用户 prompt 开始一轮运行；检查点按这个粒度回滚。
     {
         let checkpoints = checkpoints.clone();

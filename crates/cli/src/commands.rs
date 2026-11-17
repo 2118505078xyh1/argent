@@ -10,7 +10,7 @@ use argent_auth::{AuthStore, Credential};
 use argent_config::{Paths, Settings};
 use argent_core::error::{Error, Result};
 use argent_core::json::Json;
-use argent_hooks::{digest_file, HookConfig, HookTrust};
+use argent_hooks::{digest_file, HookConfig, HookEvent, HookTrust};
 use argent_plugins::{
     InstallPolicy, MarketplaceStore, PluginManager, PluginManifest, SignaturePolicy,
 };
@@ -723,6 +723,70 @@ fn hooks(args: &[String]) -> Result<i32> {
         "list" => {
             let manager = PluginManager::for_workspace(&cwd);
             print_hook_list(&manager, &cwd, &HookTrust::at(&trust_path)?)
+        }
+        "run" => {
+            let name = args
+                .iter()
+                .skip_while(|arg| arg.as_str() != "run")
+                .nth(1)
+                .ok_or_else(|| {
+                    Error::config("usage: argent hooks run <Event> [--tool NAME] [--workspace PATH]")
+                })?;
+            let event = HookEvent::parse(name).ok_or_else(|| {
+                Error::config(format!(
+                    "unknown hook event '{}'; expected one of: {}",
+                    name,
+                    HookEvent::ALL
+                        .iter()
+                        .map(|event| event.name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
+            let tool = flag_value(args, "--tool");
+            let manager = PluginManager::for_workspace(&cwd);
+            let config = crate::load_hooks(&manager, &cwd);
+            let ctx = argent_hooks::HookContext {
+                cwd: cwd.clone(),
+                tool_name: tool.map(str::to_string),
+                tool_input: flag_value(args, "--input").map(str::to_string),
+                prompt: flag_value(args, "--prompt").map(str::to_string),
+                message: flag_value(args, "--message").map(str::to_string),
+                ..argent_hooks::HookContext::default()
+            };
+            let hooks = config.for_event(event, tool);
+            if hooks.is_empty() {
+                println!(
+                    "no trusted {} hook matches{}",
+                    event.name(),
+                    tool.map(|tool| format!(" tool '{}'", tool))
+                        .unwrap_or_default()
+                );
+                return Ok(0);
+            }
+            let mut blocked = false;
+            for hook in hooks {
+                let outcome = argent_hooks::run_command(event, hook, &ctx);
+                let status = if outcome.timed_out {
+                    "timeout"
+                } else if outcome.success {
+                    "ok"
+                } else {
+                    "failed"
+                };
+                println!(
+                    "{} · {}ms · {}",
+                    status, outcome.elapsed_ms, outcome.command
+                );
+                for line in outcome.stdout.lines() {
+                    println!("  out: {}", line);
+                }
+                for line in outcome.stderr.lines() {
+                    println!("  err: {}", line);
+                }
+                blocked |= outcome.blocks(hook);
+            }
+            Ok(if blocked { 1 } else { 0 })
         }
         "validate" => {
             let manager = PluginManager::for_workspace(&cwd);
@@ -2998,7 +3062,9 @@ fn bug_report(args: &[String]) -> Result<i32> {
 pub(crate) fn cwd_from(args: &[String]) -> PathBuf {
     let mut index = 0;
     while index < args.len() {
-        if (args[index] == "--cwd" || args[index] == "-C") && index + 1 < args.len() {
+        if (args[index] == "--cwd" || args[index] == "-C" || args[index] == "--workspace")
+            && index + 1 < args.len()
+        {
             return PathBuf::from(&args[index + 1]);
         }
         index += 1;

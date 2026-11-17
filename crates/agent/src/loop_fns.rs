@@ -157,6 +157,32 @@ pub fn retry_pause(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_millis(millis.min(4_000))
 }
 
+/// Is this error worth another model?
+///
+/// Rate limits, gateway errors, timeouts and dropped connections are worth
+/// a try on the fallback model. A 400, an unknown model or a rejected key
+/// is not: the same error comes back from the second model too.
+pub fn is_transient_model_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    [
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "overloaded",
+        "unavailable",
+        "rate limit",
+        "too many requests",
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection refused",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 /// Estimate the token count of a message list.
 ///
 /// This is a heuristic, not a tokenizer. It walks Unicode scalar values (not

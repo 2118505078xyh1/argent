@@ -51,6 +51,9 @@ pub struct Config {
     /// because the estimator is heuristic and can drift from a real
     /// tokenizer; setting the line directly sidesteps the drift.
     pub compact_threshold_tokens: Option<usize>,
+    /// Backup model tried after the primary keeps returning empty streams.
+    /// Same provider endpoint, different model id; unset disables the chain.
+    pub fallback_model: Option<String>,
     /// Models shown in the picker and allowed by model cycling. Empty means
     /// every model from the provider catalog (Pi's `enabledModels`).
     pub enabled_models: Vec<String>,
@@ -128,6 +131,7 @@ impl Default for Config {
             background_intelligence: false,
             background_model: None,
             compact_threshold_tokens: None,
+            fallback_model: None,
             enabled_models: Vec::new(),
             plugins: Vec::new(),
             allowed_tools: Vec::new(),
@@ -406,6 +410,11 @@ pub fn merge_into(config: &mut Config, text: &str, source: &Path) -> Result<()> 
             "compactThresholdTokens" | "compact_threshold_tokens" => {
                 if let Some(n) = val.as_f64() {
                     config.compact_threshold_tokens = Some(n.max(1.0) as usize);
+                }
+            }
+            "fallbackModel" | "fallback_model" => {
+                if let Some(m) = val.as_str() {
+                    config.fallback_model = Some(m.to_string());
                 }
             }
             "autoApproveBash" | "auto_approve_bash" => {

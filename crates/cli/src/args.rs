@@ -248,8 +248,8 @@ OPTIONS:
                             nests, e.g. -c model=fast or -c tools.include='["read"]'
     -r, --resume <FILE>     Resume a specific session file
     -a, --add-dir <DIR>     Grant the agent another working directory (repeatable)
-        --fallback-model <ID>  Retry a transient failure (429/5xx/overload) once
-                            on this model
+        --fallback-model <ID>  When the primary model keeps failing transiently
+                            (429/5xx/timeout), retry the turn on this model
         --output-schema <F> Force the final answer to be JSON matching this schema
                             (a file path, or inline JSON beginning with '{')
         --bg                Run in the background; prints an id, then `logs <id>`
@@ -371,7 +371,8 @@ pub const HELP_ZH: &str = r#"argent — Rust 编写的 coding agent
                             例如 -c model=fast 或 -c tools.include='["read"]'
     -r, --resume <FILE>     恢复指定会话
     -a, --add-dir <DIR>     再授权一个工作目录（可重复）
-        --fallback-model <ID>  主模型遇到 429/5xx/过载时，换用该模型重试一次
+        --fallback-model <ID>  主模型连续瞬时失败（429/5xx/超时）时，换用该模型
+                            重跑；对所有运行路径生效
         --output-schema <F> 要求最终回答是符合该 schema 的 JSON
                             （文件路径，或以 '{' 开头的内联 JSON）
         --bg                后台运行；立即打印 id，之后用 `logs <id>` 查看

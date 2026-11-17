@@ -29,12 +29,17 @@ conversation now owns exactly one thread.
   `reasoning_content`; argent stores it and resends it with the assistant
   turn, keeping the request byte-identical to what the model produced. On
   KV-cache-backed servers (llama.cpp, DeepSeek) a continued turn evaluates
-  ~15 new tokens instead of ~96+.
+  37 new tokens instead of ~96+.
 - **Relaxed budgets** (spill-to-disk keeps the full output recoverable, so
   a wider budget only saves read-back round-trips): per-result 6k → 15k
   tokens, per-turn 20k → 60k, `read` 5k → 10k lines / 1 MB → 3 MB,
   `maxOutputTokens` 8k → 32k, tool/bash timeout 120 s → 300 s, turn cap
   40 → 100, policy-refusal retries 1 → 3.
+- **Fallback model** (`fallbackModel` setting or `--fallback-model`): when
+  the primary model keeps failing transiently — 429/5xx/timeout, after its
+  full empty-stream retry budget — the turn reruns on the backup model with
+  a fresh budget. Permanent errors (400, rejected key) never switch. Works
+  on every run path: one-shot, REPL, TUI and the engine (GUI/RPC/ACP).
 - **Background small-model assistant** (opt-in
   `backgroundIntelligence: true`, `backgroundModel`): session titles,
   compaction summaries and branch-switch summaries are drafted by a cheap

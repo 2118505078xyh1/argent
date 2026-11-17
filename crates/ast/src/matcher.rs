@@ -62,6 +62,17 @@ pub fn search_tokens(source: &str, tokens: &[Token], pattern: &Pattern) -> Vec<M
     out
 }
 
+/// What stays fixed while the matcher walks a pattern: holding it together keeps
+/// the recursion down to the three arguments that actually change.
+#[derive(Clone, Copy)]
+struct Walk<'a> {
+    source: &'a str,
+    tokens: &'a [Token],
+    elems: &'a [PatternElem],
+    floor: u32,
+    ignore_comments: bool,
+}
+
 /// Try to match `pattern` starting at token `start`.
 fn match_at(
     source: &str,
@@ -71,116 +82,93 @@ fn match_at(
     floor: u32,
 ) -> Option<(usize, BTreeMap<String, String>)> {
     let mut captures = BTreeMap::new();
-    let end = match_from(
+    let walk = Walk {
         source,
         tokens,
-        &pattern.elems,
-        0,
-        start,
+        elems: &pattern.elems,
         floor,
-        pattern.ignore_comments,
-        &mut captures,
-    )?;
+        ignore_comments: pattern.ignore_comments,
+    };
+    let end = walk.next(0, start, &mut captures)?;
     Some((end, captures))
 }
 
-fn match_from(
-    source: &str,
-    tokens: &[Token],
-    elems: &[PatternElem],
-    pattern_index: usize,
-    token_index: usize,
-    floor: u32,
-    ignore_comments: bool,
-    captures: &mut BTreeMap<String, String>,
-) -> Option<usize> {
-    if pattern_index == elems.len() {
-        return Some(token_index);
-    }
+impl Walk<'_> {
+    fn next(
+        &self,
+        pattern_index: usize,
+        token_index: usize,
+        captures: &mut BTreeMap<String, String>,
+    ) -> Option<usize> {
+        let Walk {
+            source,
+            tokens,
+            elems,
+            floor,
+            ignore_comments,
+        } = *self;
 
-    match &elems[pattern_index] {
-        PatternElem::Literal(expected) => {
-            let index = skip_trivia(tokens, token_index, ignore_comments)?;
-            if tokens[index].text != *expected {
-                return None;
-            }
-            match_from(
-                source,
-                tokens,
-                elems,
-                pattern_index + 1,
-                index + 1,
-                floor,
-                ignore_comments,
-                captures,
-            )
+        if pattern_index == elems.len() {
+            return Some(token_index);
         }
-        PatternElem::One(name) => {
-            let index = skip_trivia(tokens, token_index, ignore_comments)?;
-            let token = &tokens[index];
-            if token.depth < floor {
-                return None;
-            }
-            if let Some(existing) = captures.get(name) {
-                if existing != &token.text {
+
+        match &elems[pattern_index] {
+            PatternElem::Literal(expected) => {
+                let index = skip_trivia(tokens, token_index, ignore_comments)?;
+                if tokens[index].text != *expected {
                     return None;
                 }
-            } else {
-                captures.insert(name.clone(), token.text.clone());
+                self.next(pattern_index + 1, index + 1, captures)
             }
-            match_from(
-                source,
-                tokens,
-                elems,
-                pattern_index + 1,
-                index + 1,
-                floor,
-                ignore_comments,
-                captures,
-            )
-        }
-        PatternElem::Run(_) | PatternElem::AnonymousRun => {
-            let capture = match &elems[pattern_index] {
-                PatternElem::Run(name) => Some(name.clone()),
-                _ => None,
-            };
-
-            // Shortest run first, so the match is as tight as possible.
-            let mut index = token_index;
-            loop {
-                let mut probe = captures.clone();
-                if let Some(name) = &capture {
-                    let text = span_of(source, tokens, token_index, index);
-                    if let Some(existing) = probe.get(name) {
-                        if existing != &text {
-                            return None;
-                        }
+            PatternElem::One(name) => {
+                let index = skip_trivia(tokens, token_index, ignore_comments)?;
+                let token = &tokens[index];
+                if token.depth < floor {
+                    return None;
+                }
+                if let Some(existing) = captures.get(name) {
+                    if existing != &token.text {
+                        return None;
                     }
-                    probe.insert(name.clone(), text);
+                } else {
+                    captures.insert(name.clone(), token.text.clone());
                 }
-                if let Some(end) = match_from(
-                    source,
-                    tokens,
-                    elems,
-                    pattern_index + 1,
-                    index,
-                    floor,
-                    ignore_comments,
-                    &mut probe,
-                ) {
-                    *captures = probe;
-                    return Some(end);
+                self.next(pattern_index + 1, index + 1, captures)
+            }
+            PatternElem::Run(_) | PatternElem::AnonymousRun => {
+                let capture = match &elems[pattern_index] {
+                    PatternElem::Run(name) => Some(name.clone()),
+                    _ => None,
+                };
+
+                // Shortest run first, so the match is as tight as possible.
+                let mut index = token_index;
+                loop {
+                    let mut probe = captures.clone();
+                    if let Some(name) = &capture {
+                        let text = span_of(source, tokens, token_index, index);
+                        if let Some(existing) = probe.get(name) {
+                            if existing != &text {
+                                return None;
+                            }
+                        }
+                        probe.insert(name.clone(), text);
+                    }
+                    if let Some(end) = self.next(pattern_index + 1, index, &mut probe) {
+                        *captures = probe;
+                        return Some(end);
+                    }
+                    if index >= tokens.len() {
+                        return None;
+                    }
+                    // A run must not swallow the bracket that closes the pattern's
+                    // own block: a close records the depth it returns to, so the
+                    // guard is inclusive.
+                    if tokens[index].kind == TokenKind::Close && tokens[index].depth <= floor {
+                        return None;
+                    }
+                    index += 1;
                 }
-                if index >= tokens.len() {
-                    return None;
-                }
-                // A run must not swallow the bracket that closes the pattern's
-                // own block: a close records the depth it returns to, so the
-                // guard is inclusive.
-                if tokens[index].kind == TokenKind::Close && tokens[index].depth <= floor {
-                    return None;
-                }
-                index += 1;
             }
         }
     }

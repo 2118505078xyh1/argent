@@ -5,25 +5,35 @@ session、agent、MCP、plugins、hooks、commands——但每个边界都是一
 crate，依赖单向。
 
 ```text
-core            无依赖
+core            无依赖：JSON、HTTP/SSE、进程、终端、配置
 ├── config      配置与路径
+│   ├── profiles  命名 profile：提示、模型、工具策略、预算
+│   ├── security  权限策略、命令/路径守卫、审计与脱敏
+│   ├── telemetry opt-in 本地遥测与崩溃日志
+│   ├── update    Ed25519 签名 manifest、校验下载与回滚
+│   └── automation 调度语法、任务存储、子进程运行器
 ├── memory      跨会话事实
-├── ai          消息模型 + Anthropic/OpenAI 客户端
+├── i18n        中英文案目录（无依赖）
+├── hooks       生命周期 hook 与信任库
+├── ai          消息模型 + Anthropic/OpenAI/Responses 客户端
 │   └── provider  模板目录 + 客户端工厂（config、ai）
 │       └── auth   凭据（core、config、provider）
-├── tools       工具 trait、核心工具、skills、插件组
+├── tools       工具 trait、核心工具、skills、插件组（依赖 ai、memory）
 │   ├── agent   循环、事件、子代理、角色
 │   │   ├── session   JSONL 树 + compaction
-│   │   ├── ui-core   前端无关的 transcript
-│   │   └── native   iced 原生窗口
+│   │   ├── ui-core   前端无关的 view model
+│   │   └── engine    窗口前端背后的 worker：会话、命令、事件、审批
+│   │       └── native   iced 原生窗口
 │   ├── mcp     stdio / HTTP / SSE MCP 客户端（含 OAuth）
-│   ├── plugins ZCode 兼容清单（config、mcp、hooks、update）
+│   ├── plugins ZCode 兼容清单（config、mcp、hooks、update、script-plugin）
 │   ├── commands markdown 斜杠命令
-│   ├── hooks   生命周期 hook + 信任
-│   ├── workflow 依赖感知的子代理工作流
-│   ├── lsp / jobs / ast / pty / device   （lsp+ast 的工具层已合并为 codeintel）
-│   └── plugin  原生 C ABI（树外工具）
-└── cli         `argent` 二进制
+│   ├── workflow 依赖感知的子代理工作流（session）
+│   ├── lsp     Content-Length 帧的 LSP 客户端（ast）
+│   ├── jobs / ast / pty / device   （lsp+ast 的工具层已合并为 codeintel）
+│   ├── plugin  原生 C ABI（树外工具）
+│   ├── script-plugin  Rhai 进程内插件
+│   └── eval    脚本化模型 + 真实工具的回归评测
+└── cli         `argent` 二进制，依赖除 engine / native 外的全部 crate
 ```
 
 图是无环的。`tools` 永远不依赖 `agent`；子代理的创建通过宿主安装的

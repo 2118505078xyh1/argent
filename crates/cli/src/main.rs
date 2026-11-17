@@ -43,7 +43,6 @@ mod auth_cmd;
 mod background;
 mod commands;
 mod export;
-mod fallback;
 mod keybindings;
 pub(crate) mod mainx;
 mod mcp;
@@ -534,6 +533,18 @@ pub fn run(raw: &[String]) -> Result<i32> {
     if let Some(policy) = settings.string("cacheWarming") {
         agent_config.cache_warming = argent_agent::CacheWarming::parse(policy);
     }
+    // The env override wins so a single shell can test warming without
+    // editing settings.json.
+    if let Ok(policy) = std::env::var("ARGENT_CACHE_WARMING") {
+        agent_config.cache_warming = argent_agent::CacheWarming::parse(&policy);
+    }
+    // `--fallback-model` 参数优先于 settings 的 `fallbackModel`；agent
+    // 内部在主模型空流重试耗尽且错误可临时（429/5xx/超时）时自动切换，
+    // 全路径（one-shot/REPL/TUI/engine）一个机制兜底。
+    agent_config.fallback_model = cli
+        .fallback_model
+        .clone()
+        .or(config.fallback_model.clone());
     let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
     if let Some(turns) = cli
         .max_turns
@@ -1165,7 +1176,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
                         .collect(),
                 )
             };
-            let mut ttft_ms;
+            let ttft_ms;
             let mut outcome = if let Some(sink) = &json_sink {
                 let mut sink = sink.clone_handle();
                 let outcome = agent.run_message(message, &mut sink);
@@ -1177,46 +1188,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
                 ttft_ms = sink.clock.ms();
                 outcome
             };
-            // `--fallback-model`：只在"请求还没产出任何内容"时重试，历史里
-            // 只有刚推入的用户消息。已经流出的半截回答不重放，避免重复。
-            if let Some(fallback) = cli.fallback_model.clone() {
-                let transient = match &outcome {
-                    Ok(FinishReason::Error(message))
-                        if fallback::should_retry_with_fallback(
-                            &outcome,
-                            agent.history().len(),
-                            before,
-                        ) =>
-                    {
-                        Some(message.clone())
-                    }
-                    _ => None,
-                };
-                if let Some(message) = transient {
-                    emit_notice(
-                        json_sink.as_ref(),
-                        &mut renderer,
-                        &format!(
-                            "{} failed ({}); retrying with {}",
-                            agent.model(),
-                            message,
-                            fallback
-                        ),
-                    );
-                    agent.set_model(fallback);
-                    outcome = if let Some(sink) = &json_sink {
-                        let mut sink = sink.clone_handle();
-                        let outcome = agent.continue_run(&mut sink);
-                        ttft_ms = ttft_ms.or_else(|| sink.clock.ms());
-                        outcome
-                    } else {
-                        let mut sink = RendererSink::new(&mut renderer);
-                        let outcome = agent.continue_run(&mut sink);
-                        ttft_ms = ttft_ms.or_else(|| sink.clock.ms());
-                        outcome
-                    };
-                }
-            }
             // 结构化输出是这一轮运行的一部分：校验失败先让模型纠正一次，
             // 再失败就把运行改判为错误（exit 1），不把不合规的 JSON 当作
             // 成功交给调用方。
@@ -1317,7 +1288,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
                     &checkpoints,
                     &hook_config,
                     &cli.cwd,
-                    cli.fallback_model.as_deref(),
                     background,
                 ),
             }
@@ -1339,7 +1309,6 @@ fn run_repl(
     checkpoints: &argent_tools::CheckpointStore,
     hooks: &HookConfig,
     cwd: &Path,
-    fallback_model: Option<&str>,
     background: Option<crate::mainx::background::BackgroundAssistant>,
 ) -> Result<i32> {
     let mut first_run = true;
@@ -1453,28 +1422,11 @@ fn run_repl(
             }
         }
         let before = agent.history().len();
-        let (mut reason, mut ttft_ms) = {
+        let (reason, ttft_ms) = {
             let mut sink = RendererSink::new(renderer);
             let reason = agent.run(&prompt, &mut sink)?;
             (reason, sink.clock.ms())
         };
-        if let Some(fallback) = fallback_model {
-            if let FinishReason::Error(message) = &reason {
-                if fallback::should_retry_reason(&reason, agent.history().len(), before) {
-                    renderer.notice(&format!(
-                        "{} failed ({}); retrying with {}",
-                        agent.model(),
-                        message,
-                        fallback
-                    ));
-                    agent.set_model(fallback);
-                    let mut sink = RendererSink::new(renderer);
-                    let continued = agent.continue_run(&mut sink)?;
-                    ttft_ms = ttft_ms.or_else(|| sink.clock.ms());
-                    reason = continued;
-                }
-            }
-        }
         let history = agent.history().to_vec();
         session.record_new(&history, before)?;
         renderer.finish(&reason);

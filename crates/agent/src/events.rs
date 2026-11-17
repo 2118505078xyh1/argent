@@ -89,7 +89,10 @@ impl TtftClock {
     /// Record the first token-bearing event; later events are ignored.
     pub fn observe(&mut self, event: &AgentEvent) {
         if self.ttft_ms.is_none()
-            && matches!(event, AgentEvent::Thinking(_) | AgentEvent::AssistantText(_))
+            && matches!(
+                event,
+                AgentEvent::Thinking(_) | AgentEvent::AssistantText(_)
+            )
         {
             self.ttft_ms = Some(self.started.elapsed().as_millis() as u64);
         }

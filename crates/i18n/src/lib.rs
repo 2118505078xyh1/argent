@@ -110,6 +110,8 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::Zh, "tui.sessions.sort") => "排序",
         (Locale::En, "tui.sessions.sort_recent") => "recent",
         (Locale::Zh, "tui.sessions.sort_recent") => "最近",
+        (Locale::En, "tui.sessions.matches") => "match(es)",
+        (Locale::Zh, "tui.sessions.matches") => "条匹配",
         (Locale::En, "tui.sessions.sort_name") => "name",
         (Locale::Zh, "tui.sessions.sort_name") => "名称",
         (Locale::En, "tui.sessions.help_move") => {

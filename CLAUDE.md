@@ -76,10 +76,13 @@ cargo run -p argent-pty --example tui_approval_probe -- target/debug/argent.exe 
 Dependency graph is acyclic and layered (full diagram in `docs/ARCHITECTURE.md`):
 
 ```text
-core -> config / memory / ai -> provider -> auth
-core -> tools -> agent -> session / ui-core / desktop
-tools -> mcp / plugins / commands / hooks / workflow / lsp / jobs / ast / pty / device / plugin
-cli -> everything
+core -> config / memory / ai / hooks / i18n
+config -> profiles / security / telemetry / update / automation
+ai -> provider -> auth
+core -> tools -> agent -> session / ui-core
+agent + session + ui-core -> engine -> native
+tools -> mcp / plugins / commands / hooks / workflow / lsp / jobs / ast / pty / device / plugin / script-plugin
+cli -> every crate except engine / native
 ```
 
 - `argent-core` is zero-dependency (JSON, HTTP, SSE, process, terminal, config). `argent-ai`, `argent-tools`, `argent-agent` also have only workspace path dependencies — keep it that way.

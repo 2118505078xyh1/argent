@@ -759,12 +759,30 @@ mod tests {
         )
         .unwrap();
         let warnings = validate_json(&value);
-        assert!(warnings.iter().any(|w| w.contains("unknown event")), "{warnings:?}");
-        assert!(warnings.iter().any(|w| w.contains("onError")), "{warnings:?}");
-        assert!(warnings.iter().any(|w| w.contains("timeoutMs")), "{warnings:?}");
-        assert!(warnings.iter().any(|w| w.contains("not supported")), "{warnings:?}");
-        assert!(warnings.iter().any(|w| w.contains("empty command")), "{warnings:?}");
-        assert!(warnings.iter().any(|w| w.contains("contains a space")), "{warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("unknown event")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("onError")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("timeoutMs")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("not supported")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("empty command")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("contains a space")),
+            "{warnings:?}"
+        );
         // 宽容解析仍然得到可运行的命令。
         let config = HookConfig::from_json(&value).expect("parse");
         assert_eq!(config.len(), 1);

@@ -56,10 +56,12 @@
 - [ ] **SDK（TypeScript 或 Rust client）**
   - 基于现有 `--rpc`/`--serve` 生成 typed client；示例：CI 调用、编辑器集成。
   - 参考：pi SDK、Claude Agent SDK、OpenCode client。
-- [x] **Hooks 诊断（CLI 第一批）**
-  - `argent hooks list`：信任状态、事件、matcher、onError、timeout、async、命令。
-  - `argent hooks validate [path]`：JSON 错误、未知事件、空命令、非法 onError、过小 timeout、带空格 matcher。
-  - 仍待补：`hooks run <event>` 手动触发；TUI 权限面板展示 hooks/信任状态。
+- [x] **Hooks 诊断与面板**
+  - `argent hooks list` / `validate [path]` / `run <Event> [--tool] [--input] [--prompt]`。
+  - TUI `/hooks`：信任状态、事件、matcher、timeout、async、命令，只读面板。
+  - 修了 `--workspace` 未被 `cwd_from` 识别的 bug。
+- [x] **prompt cache warmer**
+  - 已有实现（`cacheWarming: "streaming"`），本次补 `ARGENT_CACHE_WARMING` 环境变量覆盖，方便单次实验。
 - [ ] **Skills/commands 发现可视**
   - TUI `/skills`、`/commands` 列出名称、来源、优先级、冲突。
   - 参考：ZCode 的 settings/skills 管理。

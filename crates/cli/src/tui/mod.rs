@@ -22,13 +22,13 @@ pub(crate) const USER_MARK: &str = "› ";
 
 /// `/session` 信息面板里，操作项从第几行开始。
 const SESSION_INFO_ROWS: usize = 8;
-/// 用户消息块：中蓝底（Fixed(25)，#005faf）配白字，一整条铺满行宽。
-// pi 在纯黑背景上把 userMessageBg 推导成 #1d2e37（低饱和蓝灰），
-// 文字用终端默认前景色，不再额外指定亮白。
-pub(crate) const USER_FG: argent_core::screen::Color = argent_core::screen::Color::Default;
-pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Rgb(29, 46, 55);
-fn user_style() -> Style {
-    Style::fg(USER_FG).with_bg(USER_BG)
+/// 用户消息块：前景/底色都取自主题，一整条铺满行宽。
+///
+/// 不能用终端默认前景：浅色主题下默认前景是黑的，铺在深色块上几乎
+/// 看不见；两块颜色必须成对由主题给出。
+pub(crate) fn user_style() -> Style {
+    let theme = crate::theme::current();
+    Style::fg(theme.user_fg).with_bg(theme.user_bg)
 }
 
 use std::collections::VecDeque;
@@ -40,8 +40,9 @@ use std::time::{Duration, Instant};
 
 use argent_agent::{AbortHandle, Agent, AgentEvent, EventSink, FinishReason};
 use argent_ai::Usage;
+use argent_core::config::ApprovalMode;
 use argent_core::screen::{
-    clip_to_width, text_width, wrap_text, Color, Line, Span, Style, SPINNER,
+    char_width, clip_to_width, text_width, wrap_text, Line, Span, Style, SPINNER,
 };
 use argent_core::terminal::{self, RawModeGuard};
 use argent_hooks::{HookConfig, HookContext, HookEvent};
@@ -1554,6 +1555,55 @@ fn refresh_session_cache_key(path: &std::path::Path) {
     std::env::set_var("ARGENT_CACHE_KEY", key);
 }
 
+/// Rows for the `/hooks` panel: trust state per document, then each command.
+fn hook_overview(cwd: &Path) -> Vec<(String, String)> {
+    let manager = argent_plugins::PluginManager::for_workspace(cwd);
+    let trust = argent_hooks::HookTrust::at(argent_config::Paths::new(cwd).hook_trust()).ok();
+    let mut rows = Vec::new();
+    for file in crate::workspace_hook_files(&manager, cwd) {
+        if !file.is_file() {
+            continue;
+        }
+        let trusted = match (&trust, argent_hooks::digest_file(&file)) {
+            (Some(trust), Ok(digest)) => trust.is_trusted(&file, &digest),
+            _ => false,
+        };
+        let name = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("hooks.json");
+        rows.push((
+            format!(
+                "{}  {}",
+                if trusted { "trusted  " } else { "untrusted" },
+                name
+            ),
+            file.display().to_string(),
+        ));
+        match HookConfig::load(&file) {
+            Ok(config) => {
+                for (event, command) in config.entries() {
+                    rows.push((
+                        format!("  {}", event.name()),
+                        format!(
+                            "{} · {}ms · {}{}",
+                            command.matcher.as_deref().unwrap_or("*"),
+                            command.timeout_ms,
+                            command.command,
+                            if command.async_hook { "  [async]" } else { "" }
+                        ),
+                    ));
+                }
+            }
+            Err(error) => rows.push(("  invalid".to_string(), error.to_string())),
+        }
+    }
+    if rows.is_empty() {
+        rows.push(("no hook documents found".to_string(), String::new()));
+    }
+    rows
+}
+
 fn session_rows(index: &SessionIndex) -> Vec<SessionRow> {
     index
         .list()
@@ -1639,6 +1689,10 @@ enum Overlay {
         index: usize,
     },
     Tools {
+        index: usize,
+    },
+    /// 只读的 hooks 总览：信任状态、事件、matcher、命令。
+    Hooks {
         index: usize,
     },
     Approval {
@@ -1727,6 +1781,7 @@ struct App {
     session_delete_pending: Option<usize>,
     models: Vec<String>,
     tools: Vec<(String, String)>,
+    hook_rows: Vec<(String, String)>,
     commands: Vec<argent_commands::CommandDoc>,
     prompts: crate::prompts::PromptLibrary,
     input: Vec<char>,
@@ -1745,6 +1800,9 @@ struct App {
     working: bool,
     /// Plan mode: ask the model for a plan before it edits anything.
     plan: bool,
+    /// 启动时的审批策略；`Never`（--yolo / --approval never）要在状态栏
+    /// 常驻一个危险徽标，自动批准不能是隐形状态。
+    approval_mode: ApprovalMode,
     queued: usize,
     /// Prompts queued with Alt+Enter; sent one after another when a run ends.
     follow_ups: std::collections::VecDeque<String>,
@@ -1808,6 +1866,7 @@ impl App {
             tree_rows: Vec::new(),
             models: Vec::new(),
             tools: Vec::new(),
+            hook_rows: Vec::new(),
             commands,
             prompts,
             input: Vec::new(),
@@ -1823,6 +1882,8 @@ impl App {
             approved_prefixes: std::collections::BTreeSet::new(),
             working: false,
             plan: false,
+            // 远端会话拿不到启动参数，先按默认策略显示；本地 run() 会覆盖。
+            approval_mode: ApprovalMode::Sensible,
             queued: 0,
             follow_ups: std::collections::VecDeque::new(),
             failed_prompt: None,
@@ -1943,7 +2004,8 @@ impl App {
             Overlay::Tree { index }
             | Overlay::Models { index }
             | Overlay::Thinking { index }
-            | Overlay::Tools { index } => Some(*index),
+            | Overlay::Tools { index }
+            | Overlay::Hooks { index } => Some(*index),
             Overlay::SessionActions { selected, .. } => Some(*selected),
             Overlay::SessionInfo { selected } => Some(SESSION_INFO_ROWS + selected),
             _ => None,
@@ -2566,6 +2628,18 @@ impl App {
                     }
                     _ => self.overlay = Some(Overlay::ToolDetail { index }),
                 },
+                Overlay::Hooks { mut index } => match key {
+                    Key::Up => {
+                        index = index.saturating_sub(1);
+                        self.overlay = Some(Overlay::Hooks { index });
+                    }
+                    Key::Down => {
+                        index = (index + 1).min(self.hook_rows.len().saturating_sub(1));
+                        self.overlay = Some(Overlay::Hooks { index });
+                    }
+                    Key::Esc | Key::Char('q') => {}
+                    _ => self.overlay = Some(Overlay::Hooks { index }),
+                },
                 Overlay::SessionInfo { mut selected } => match key {
                     Key::Up => {
                         selected = selected.saturating_sub(1);
@@ -2841,6 +2915,7 @@ impl App {
             ("clear", "clear history"),
             ("copy", "copy the last reply to the clipboard"),
             ("tools", "list tool schemas"),
+            ("hooks", "list trusted hook documents"),
             ("provider", "show provider and model"),
             ("expand", "toggle tool output"),
             ("init", "create AGENTS.md for this project"),
@@ -3411,6 +3486,16 @@ impl App {
                 let _ = worker.commands.send(Command::ListTools);
                 self.overlay = Some(Overlay::Tools { index: 0 });
             }
+            "/hooks" => {
+                let cwd = self
+                    .ready
+                    .as_ref()
+                    .map(|ready| PathBuf::from(&ready.cwd))
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| PathBuf::from("."));
+                self.hook_rows = hook_overview(&cwd);
+                self.overlay = Some(Overlay::Hooks { index: 0 });
+            }
             "/provider" => {
                 if let Some(ready) = &self.ready {
                     self.set_status(format!(
@@ -3561,7 +3646,8 @@ impl App {
             None
         };
         let palette_height = palette.as_ref().map(|(_, shown)| *shown).unwrap_or(0);
-        let tail = 4;
+        let (input_rows, _) = self.input_window(width);
+        let tail = 3 + input_rows.len();
         let body_height = height
             .saturating_sub(tail)
             .saturating_sub(palette_height)
@@ -3609,7 +3695,18 @@ impl App {
             }
         }
         lines.push(input_top(width));
-        lines.push(self.input_line(width));
+        for (index, row) in input_rows.iter().enumerate() {
+            let mark = if index == 0 && row.start == 0 {
+                USER_MARK
+            } else {
+                "  "
+            };
+            lines.push(
+                Line::new()
+                    .push(Span::new(mark, Style::fg(crate::theme::current().accent)))
+                    .push(Span::new(row.text.clone(), Style::plain())),
+            );
+        }
         lines.push(separator(width));
         lines.push(self.status_line(width));
 
@@ -3630,8 +3727,10 @@ impl App {
         }
         self.frame_text = lines.iter().map(|line| line.plain_text()).collect();
 
-        // 整帧带底色：终端自带的背景不可控，显式填一层才不会露底。
-        let base = Style::plain().with_bg(crate::theme::current().background);
+        // 整帧带底色和正文色：终端自带的颜色不可控，主题自己填一层，
+        // 浅色终端里用深色主题也不会出现黑字配黑底。
+        let theme = crate::theme::current();
+        let base = Style::fg(theme.text).with_bg(theme.background);
         lines
             .into_iter()
             .map(|line| line.render(width, base, true))
@@ -3651,59 +3750,107 @@ impl App {
             _ => None,
         };
 
-        // 右侧：↑累计输入 ↓累计输出 · cache · 上下文占比/窗口 · cost。
-        let mut segments: Vec<String> = Vec::new();
+        // 右侧：滚到中间的提示 · ↑累计输入 ↓累计输出 · cache · cost ·
+        // 上下文占比/窗口。每段带一个优先级：宽度不够时先从数字大的丢，
+        // 滚动提示（0）和上下文占用（1）最后才让位。
+        let mut items: Vec<(u8, String)> = Vec::new();
+        let max_scroll = self.body_total.saturating_sub(self.frame_body_height);
+        if self.scroll > 0 && max_scroll > 0 {
+            let percent = (self.scroll * 100 / max_scroll).min(100);
+            items.push((0, format!("↑{}%", percent)));
+        }
         let up = self.metrics.session_prompt_tokens;
         let down = self.metrics.session_completion_tokens;
         if up + down > 0 {
-            segments.push(format!("↑{} ↓{}", compact_count(up), compact_count(down)));
+            items.push((4, format!("↑{} ↓{}", compact_count(up), compact_count(down))));
         }
         if let Some(hit) = self.metrics.session_cache_hit_percent() {
             // 首轮冷启动是 0%，也要显示出来，才能看出后面有没有涨。
-            segments.push(format!("cache {}%", hit));
+            items.push((2, format!("cache {}%", hit)));
         }
         if let Some(cost) = self.metrics.cost {
             if cost > 0.0 {
-                segments.push(format!("${:.4}", cost));
+                items.push((3, format!("${:.4}", cost)));
             }
         }
         if self.metrics.context_max > 0 {
-            segments.push(format!(
-                "{:.1}%/{}",
-                self.metrics.context_fraction() * 100.0,
-                compact_window(self.metrics.context_max)
+            items.push((
+                1,
+                format!(
+                    "{:.1}%/{}",
+                    self.metrics.context_fraction() * 100.0,
+                    compact_window(self.metrics.context_max)
+                ),
             ));
         }
-        // statusline 配置的附加段接在默认段之后：session / model / thinking / cwd。
+        // statusline 配置的附加段优先级最低：session / model / thinking / cwd。
         for segment in &self.statusline {
             match segment.as_str() {
-                "session" => segments.push(
+                "session" => items.push((
+                    5,
                     self.ready
                         .as_ref()
                         .map(|ready| ready.session.clone())
                         .unwrap_or_default(),
-                ),
-                "model" => segments.push(self.metrics.model.clone()),
+                )),
+                "model" => items.push((5, self.metrics.model.clone())),
                 "thinking" => {
                     if !self.metrics.thinking.is_empty() {
-                        segments.push(self.metrics.thinking.clone());
+                        items.push((5, self.metrics.thinking.clone()));
                     }
                 }
-                "cwd" => segments.push(
+                "cwd" => items.push((
+                    5,
                     self.ready
                         .as_ref()
                         .map(|ready| ready.cwd.clone())
                         .unwrap_or_default(),
-                ),
+                )),
                 _ => {}
             }
         }
-        let segments: Vec<String> = segments.into_iter().filter(|s| !s.is_empty()).collect();
-        let right = if segments.is_empty() {
+        items.retain(|(_, text)| !text.is_empty());
+
+        // 左侧至少留 24 列（窄窗口按一半）。右侧超宽时逐段降级，
+        // 而不是像以前那样用一个魔法数 60 直接裁掉尾巴。
+        let min_left = if width >= 60 { 24 } else { width / 2 };
+        let allowed = width.saturating_sub(min_left + 1);
+        loop {
+            let joined = items
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>()
+                .join(" · ");
+            if items.is_empty() || text_width(&joined) < allowed {
+                break;
+            }
+            let victim = items
+                .iter()
+                .enumerate()
+                .filter(|(_, (priority, _))| *priority > 0)
+                .max_by_key(|(_, (priority, _))| *priority)
+                .map(|(index, _)| index);
+            let Some(index) = victim else { break };
+            items.remove(index);
+        }
+        let right = if items.is_empty() {
             String::new()
         } else {
-            format!("{} ", segments.join(" · "))
+            format!(
+                "{} ",
+                items
+                    .iter()
+                    .map(|(_, text)| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            )
         };
+        let left_budget = if right.is_empty() {
+            width
+        } else {
+            width.saturating_sub(text_width(&right) + 1)
+        }
+        .max(4);
 
         let mut left = Line::new();
         if self.plan {
@@ -3711,24 +3858,55 @@ impl App {
                 .push(Span::new("PLAN", Style::fg(theme.warning)))
                 .push(dot.clone());
         }
+        // 自动批准不能是隐形状态：--yolo / --approval never，或本轮按过
+        // “全部允许”，都在状态栏常驻红色 YOLO。
+        if self.approve_all || self.approval_mode == ApprovalMode::Never {
+            left = left
+                .push(Span::new("YOLO", Style::bold(theme.error)))
+                .push(dot.clone());
+        }
+        let tail = if self.working {
+            3
+        } else if self.queued > 0 {
+            text_width(&format!("  {} queued", self.queued))
+        } else {
+            0
+        };
+        let body_budget = left_budget.saturating_sub(left.width() + tail);
+
         if let Some(hint) = hint {
-            left = left.push(Span::new(hint, Style::dim(theme.dim)));
+            left = left.push(Span::new(
+                clip_to_width(&hint, body_budget),
+                Style::dim(theme.dim),
+            ));
         } else if let Some(ready) = &self.ready {
             // cwd · model · thinking —— 顺序是用户要的工作目录在前。
-            // 过长的路径吃掉剩余宽度，裁掉尾部。
-            let room = width.saturating_sub(60 + text_width(&right)).max(6);
-            left = left
-                .push(Span::new(
-                    clip_to_width(&ready.cwd, room),
-                    Style::dim(theme.dim),
-                ))
-                .push(dot.clone())
-                .push(Span::new(ready.model.clone(), Style::dim(theme.dim)));
-            if !self.metrics.thinking.is_empty() {
-                left = left.push(dot.clone()).push(Span::new(
-                    self.metrics.thinking.clone(),
-                    Style::dim(theme.dim),
-                ));
+            // 过长的路径先裁，再按剩余宽度决定 model/thinking 能否留下。
+            let thinking = if self.metrics.thinking.is_empty() {
+                None
+            } else {
+                Some(self.metrics.thinking.as_str())
+            };
+            let reserved = text_width(&ready.model)
+                + 3
+                + thinking.map(|text| text_width(text) + 3).unwrap_or(0);
+            let cwd_room = body_budget.saturating_sub(reserved).max(6).min(body_budget);
+            let cwd = clip_to_width(&ready.cwd, cwd_room);
+            let mut room = body_budget.saturating_sub(text_width(&cwd) + 3);
+            left = left.push(Span::new(cwd, Style::dim(theme.dim)));
+            if room > 0 {
+                let model = clip_to_width(&ready.model, room);
+                room = room.saturating_sub(text_width(&model));
+                left = left
+                    .push(dot.clone())
+                    .push(Span::new(model, Style::dim(theme.dim)));
+                if let Some(thinking) = thinking {
+                    if room >= text_width(thinking) + 3 {
+                        left = left
+                            .push(dot.clone())
+                            .push(Span::new(thinking.to_string(), Style::dim(theme.dim)));
+                    }
+                }
             }
             if self.working {
                 left = left.push(Span::new("  ", Style::plain())).push(Span::new(
@@ -3795,36 +3973,64 @@ impl App {
         }
     }
 
-    fn input_line(&self, width: usize) -> Line {
+    /// Soft-wrap the input into at most four rows, keeping the cursor visible.
+    ///
+    /// A single clamped row made anything past ~96 cells invisible while
+    /// typing; wrapping reuses the terminal's own line flow instead of
+    /// horizontal scrolling.
+    fn input_window(&self, width: usize) -> (Vec<InputRow>, usize) {
+        const MAX_ROWS: usize = 4;
         let inner = width.saturating_sub(4).max(1);
-        let start = self.cursor.saturating_sub(inner);
-        let visible: Vec<char> = self.input.iter().skip(start).take(inner).copied().collect();
-        let line = Line::new().push(Span::new(
-            USER_MARK,
-            Style::fg(crate::theme::current().accent),
-        ));
-        // 光标交给终端原生光标（位置见 `cursor_screen_position`）：不再画
-        // 反显块，深浅色主题下都不会看起来像渲染残留。行尾留一个空格
-        // 占位，光标停在它上面。
-        // One span for the whole visible input: a per-character String + Span
-        // allocation for every keystroke is wasteful, and `text_width` already
-        // measures the full string (including CJK width) correctly.
-        let text: String = visible.iter().collect();
-        line.push(Span::new(text, Style::plain()))
+        let mut rows: Vec<InputRow> = Vec::new();
+        let mut text = String::new();
+        let mut start = 0;
+        let mut used = 0;
+        for (index, ch) in self.input.iter().enumerate() {
+            let cell = char_width(*ch);
+            if used > 0 && used + cell > inner {
+                rows.push(InputRow { text, start });
+                text = String::new();
+                start = index;
+                used = 0;
+            }
+            text.push(*ch);
+            used += cell;
+        }
+        rows.push(InputRow { text, start });
+
+        let cursor_row = rows
+            .iter()
+            .rposition(|row| row.start <= self.cursor)
+            .unwrap_or(0)
+            .min(rows.len().saturating_sub(1));
+        let offset = if cursor_row >= MAX_ROWS {
+            (cursor_row + 1 - MAX_ROWS).min(rows.len() - MAX_ROWS)
+        } else {
+            0
+        };
+        let visible: Vec<InputRow> = rows.into_iter().skip(offset).take(MAX_ROWS).collect();
+        (visible, cursor_row - offset)
     }
 
     /// 终端光标应该停在的位置（ANSI 1 基 row/col）。
     ///
-    /// 输入框是倒数第 3 行（下方依次是分隔线、状态行）。
+    /// 输入区占据倒数第 `rows + 2` 行到倒数第 2 行（最后一行是状态栏）。
     fn cursor_screen_position(&self, width: usize, height: usize) -> (usize, usize) {
-        let row = height.saturating_sub(2).max(1);
-        let inner = width.saturating_sub(4).max(1);
-        let start = self.cursor.saturating_sub(inner);
-        let text: String = self.input[start..self.cursor.min(self.input.len())]
-            .iter()
+        let (rows, cursor_row) = self.input_window(width);
+        let row_count = rows.len().max(1);
+        let current = rows.get(cursor_row).cloned().unwrap_or_default();
+        let prefix: String = current
+            .text
+            .chars()
+            .take(self.cursor.saturating_sub(current.start))
             .collect();
-        let col = 1 + text_width(USER_MARK) + text_width(&text);
-        (row, col.max(1).min(width))
+        let terminal_row = height
+            .saturating_sub(1)
+            .saturating_sub(row_count)
+            .saturating_add(cursor_row)
+            .max(1);
+        let col = 1 + text_width(USER_MARK) + text_width(&prefix);
+        (terminal_row, col.max(1).min(width))
     }
 
     fn palette_line(&self, item: &PaletteItem, selected: bool, width: usize) -> Line {
@@ -4020,7 +4226,8 @@ impl App {
                         let mut footer = format!("{} {}", run.state.glyph(), run.state.describe());
                         let output_lines = run.output.lines().count();
                         if output_lines > 0 {
-                            footer.push_str(&format!(" · {} lines", output_lines));
+                            let unit = if output_lines == 1 { "line" } else { "lines" };
+                            footer.push_str(&format!(" · {} {}", output_lines, unit));
                         }
                         let footer_style = if run.state.is_failed() {
                             Style::fg(crate::theme::current().error)
@@ -4169,9 +4376,11 @@ impl App {
                         argent_i18n::t(self.locale, "tui.sessions.filter_hint").to_string()
                     } else {
                         format!(
-                            "{}: {}",
+                            "{}: {} · {} {}",
                             argent_i18n::t(self.locale, "tui.sessions.filter"),
-                            self.session_query
+                            self.session_query,
+                            view.len(),
+                            argent_i18n::t(self.locale, "tui.sessions.matches")
                         )
                     },
                     String::new(),
@@ -4271,6 +4480,18 @@ impl App {
                     .map(|level| (level.to_string(), String::new()))
                     .collect(),
             ),
+            Overlay::Hooks { index: _ } => {
+                let mut content = self.hook_rows.clone();
+                content.push((String::new(), String::new()));
+                content.push((
+                    "trusted hooks only run · ↑↓ move · esc close".to_string(),
+                    String::new(),
+                ));
+                (
+                    format!("hooks · {} row(s)", self.hook_rows.len()),
+                    content,
+                )
+            }
             Overlay::Tools { .. } => {
                 let mut content: Vec<(String, String)> = self
                     .tools
@@ -4416,9 +4637,9 @@ impl App {
 /// 只做终端里真正提升可读性的几件事，不追求完整 markdown。
 fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) -> Vec<Line> {
     let theme = crate::theme::current();
-    // pi 的语义配色：标题黄、行内码紫、代码块绿、引用灰；黑底上代码块
-    // 另铺一档深灰，保留"这是一块代码"的区块感。
-    let code_bg = Color::Fixed(235);
+    // 代码块的前景/底色由主题成对给出：深色主题是深灰块配浅字，
+    // 浅色主题是米灰块配深字，不能写死一档深灰。
+    let code_bg = theme.code_bg;
     let mut out: Vec<Line> = Vec::new();
     let mut in_code = false;
     let mut first_line = true;
@@ -4435,16 +4656,16 @@ fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) -> Vec<Line
             let pad = body_width.saturating_sub(text_width(&clipped));
             out.push(Line::new().push(Span::new(
                 format!("  {}{}", clipped, " ".repeat(pad)),
-                Style::fg(theme.success).with_bg(code_bg),
+                Style::fg(theme.code_fg).with_bg(code_bg),
             )));
             first_line = false;
             continue;
         }
         let (spans, _) = inline_spans(trimmed, theme);
         let spans: Vec<Span> = if trimmed.starts_with('#') {
-            // pi: mdHeading = yellow（不一定要紫）
+            // Claude 风格：标题只加粗，不用高饱和色抢正文的注意力。
             let body = trimmed.trim_start_matches('#').trim_start();
-            vec![Span::new(body.to_string(), Style::bold(theme.warning))]
+            vec![Span::new(body.to_string(), Style::bold(theme.text))]
         } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
             // pi: mdListBullet = violet/accent
             let mut decorated = vec![Span::new("- ", Style::fg(theme.accent))];
@@ -4758,8 +4979,15 @@ fn separator(width: usize) -> Line {
     Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
 }
 
+#[derive(Debug, Clone, Default)]
+struct InputRow {
+    text: String,
+    /// Char index in `input` where this row starts.
+    start: usize,
+}
+
 fn input_top(width: usize) -> Line {
-    // 只有一条细线：输入区不需要标签，占位符已经说明了它是什么。
+    // 只有一条细线：输入区不贴标签，`›` 已经说明了它是什么。
     // 与下方分隔线同宽——差两格看起来像两条没对齐的线。
     Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
 }
@@ -4983,6 +5211,7 @@ pub fn run(
     // max_context_tokens（默认 128000 只是下限）。
     let max_context_tokens =
         argent_session::controller::model_context_window(&agent, config.max_context_tokens);
+    let approval_mode = config.approval_mode;
     let worker = spawn(
         agent,
         session,
@@ -4998,6 +5227,7 @@ pub fn run(
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
     app.animate_stream = true;
     app.context_max = max_context_tokens;
+    app.approval_mode = approval_mode;
     let initial_size = terminal::size();
     let mut last_frame: Vec<String> = Vec::new();
     draw_at(
@@ -5569,6 +5799,26 @@ mod tests {
 
     /// 会话管理 overlay：两次 Ctrl+D 才发删除命令，Ctrl+R 进改名输入。
     #[test]
+    fn hooks_panel_lists_documents_and_commands() {
+        let dir = std::env::temp_dir().join(format!("argent-hooks-panel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".argent")).expect("mkdir");
+        std::fs::write(
+            dir.join(".argent").join("hooks.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"command":"echo hi","timeoutMs":5000}]}]}}"#,
+        )
+        .expect("write");
+        let rows = hook_overview(&dir);
+        assert!(rows[0].0.contains("untrusted"), "{:?}", rows[0]);
+        assert!(
+            rows.iter()
+                .any(|(left, right)| left.contains("SessionStart") && right.contains("echo hi")),
+            "{rows:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_session_manager_needs_a_second_ctrl_d_and_renames_in_place() {
         let mut app = App::new(
             Vec::new(),
@@ -5742,7 +5992,7 @@ mod tests {
                 state: argent_ui_core::ToolState::Failed { ms: 23 },
             }));
         app.transcript.push_entry(Entry::Assistant(
-            "main 只做三件事：配置、注册工具、进循环。".to_string(),
+            "main 只做三件事：配置、注册工具、进循环。\n".to_string(),
         ));
         app.transcript.push_entry(Entry::Assistant(
             "```rust\nfn main() {\n    run();\n}\n```\n用 `cargo run` 启动，**一次**就好。"
@@ -6220,6 +6470,14 @@ mod cursor_tests {
         )
     }
 
+    fn status_text(app: &mut App, width: usize) -> String {
+        app.status_line(width)
+            .spans
+            .iter()
+            .map(|span| span.text.clone())
+            .collect()
+    }
+
     #[test]
     fn a_failed_tool_shows_the_reason_without_expanding() {
         let mut app = app();
@@ -6376,6 +6634,52 @@ mod cursor_tests {
         );
         // 单行：不允许出现换行。
         assert_eq!(text.matches('\n').count(), 0);
+    }
+
+    #[test]
+    fn narrow_status_bars_drop_low_priority_segments_before_the_context() {
+        let mut app = app();
+        app.metrics.context_max = 128_000;
+        app.metrics.context_used = 4_200;
+        app.metrics.session_prompt_tokens = 1_234;
+        app.metrics.session_completion_tokens = 567;
+        app.metrics.session_cached_tokens = 100;
+        app.metrics.cost = Some(0.1234);
+        let text = status_text(&mut app, 50);
+        // 上下文占用最后才让位；token 总量和花费先被丢掉。
+        assert!(text.contains("/128k"), "{text}");
+        assert!(!text.contains("$0.1234"), "{text}");
+        assert!(!text.contains("↓567"), "{text}");
+        // 宽窗口里同样的数据仍然完整显示。
+        let wide = status_text(&mut app, 200);
+        assert!(wide.contains("↓567"), "{wide}");
+        assert!(wide.contains("$0.1234"), "{wide}");
+    }
+
+    #[test]
+    fn yolo_is_visible_in_the_status_bar() {
+        let mut app = app();
+        app.approval_mode = ApprovalMode::Never;
+        assert!(status_text(&mut app, 100).contains("YOLO"));
+        // 极窄窗口也保留危险徽标：它是安全信息，不能被裁剪掉。
+        assert!(status_text(&mut app, 24).contains("YOLO"));
+        app.approval_mode = ApprovalMode::Sensible;
+        assert!(!status_text(&mut app, 100).contains("YOLO"));
+        // 本轮按过“全部允许”也同样常驻。
+        app.approve_all = true;
+        assert!(status_text(&mut app, 100).contains("YOLO"));
+    }
+
+    #[test]
+    fn the_status_bar_shows_how_far_the_transcript_is_scrolled_back() {
+        let mut app = app();
+        app.body_total = 120;
+        app.frame_body_height = 20;
+        app.scroll = 50;
+        let text = status_text(&mut app, 100);
+        assert!(text.contains("↑50%"), "{text}");
+        app.scroll = 0;
+        assert!(!status_text(&mut app, 100).contains("↑50%"));
     }
 
     #[test]
@@ -6838,9 +7142,11 @@ mod cursor_tests {
         let style = user_style();
         let lines = wrapped_block("你好，argent", 40, USER_MARK, "  ", style);
         for line in &lines {
-            // 每个 span 都带浅蓝底。
+            // 每个 span 都带主题给出的用户块底色。
             assert!(
-                line.spans.iter().all(|span| span.style.bg == Some(USER_BG)),
+                line.spans
+                    .iter()
+                    .all(|span| span.style.bg == Some(crate::theme::current().user_bg)),
                 "every span carries the background"
             );
             assert_eq!(line.width(), 40, "the row is padded to full width");
@@ -6857,13 +7163,26 @@ mod cursor_tests {
     }
 
     #[test]
-    fn the_input_window_scrolls_with_a_long_line() {
+    fn the_input_window_wraps_a_long_line() {
         let mut app = app();
-        // 200 characters: the visible window starts past the beginning.
+        // 200 characters at inner width 96 wrap into 96 + 96 + 8.
         app.input = "a".repeat(200).chars().collect();
         app.cursor = 200;
-        let (_, col) = app.cursor_screen_position(100, 30);
-        // inner = 96, start = 104, so the cursor sits at the end of the window.
-        assert_eq!(col, 1 + text_width(USER_MARK) + 96);
+        let (row, col) = app.cursor_screen_position(100, 30);
+        assert_eq!(row, 28, "three input rows above the separator");
+        assert_eq!(col, 1 + text_width(USER_MARK) + 8);
+        // The frame still has exactly the requested height.
+        assert_eq!(app.frame(100, 30).len(), 30);
+    }
+
+    #[test]
+    fn a_long_input_window_keeps_the_cursor_visible() {
+        let mut app = app();
+        app.input = "b".repeat(500).chars().collect();
+        app.cursor = 500;
+        let (row, col) = app.cursor_screen_position(60, 24);
+        // MAX_ROWS = 4, so the cursor never drops below the fourth input row.
+        assert!((24 - 1 - 4..=22).contains(&row), "row {row}");
+        assert!(col < 60, "col {col}");
     }
 }
