@@ -1,0 +1,15 @@
+{
+  "name": "@argent/cli-client",
+  "version": "0.2.0",
+  "description": "Typed NDJSON RPC client for the argent coding agent",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types test/smoke.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6"
+  }
+}

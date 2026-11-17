@@ -1,6 +1,6 @@
 # argent 下一步 TODO
 
-基准：argent 0.2.0，HEAD `c7ff80d`；对照结论见 [argent-comparison.md](argent-comparison.md)。
+基准：argent 0.2.0，HEAD `8a1a6fd`；对照结论见 [argent-comparison.md](argent-comparison.md)。
 
 图例：`[ ]` 待做，`[~]` 进行中，`[x]` 完成。优先级：P0 立刻、P1 近期、P2 战略/大工程。
 
@@ -25,16 +25,16 @@
   - 空结果显示提示；`↑↓` 在过滤结果内移动。
   - 测试：`the_session_picker_filters_scopes_and_sorts`。
   - 仍可补：搜索词高亮。
-- [ ] **TUI 回归清单自动化**
-  - 加一组 snapshot 测试：用户块颜色、思考块展开/收起、流式逐字、摘要行、复制提示。
-  - 每次改 TUI 先跑这组，避免“修一个坏一个”。
+- [x] **TUI 回归清单自动化**
+  - 用户块主题底色、思考块展开/收起、摘要行、复制提示已有覆盖；本轮补用户块 ANSI 快照、
+    `/session` 面板、skills/commands 面板快照。
 - [x] **输入区编辑能力**
   - ←/→/Home/End/Delete；Ctrl+A/K/U/W；Ctrl+←/→ 按词移动；Ctrl+Z/Ctrl+Y 撤销/重做（100 步）。
   - 多行软折行（最多 4 行，窗口跟随光标，帧高不变）。
   - 仍待补：鼠标定位光标。
-- [ ] **`/session` 面板继续补齐**
+- [x] **`/session` 面板继续补齐**
   - 显示 model/thinking/cwd/session id、最后错误、缓存命中、上下文占用。
-  - 操作项与 CLI 能力对齐：rename/tree/compact/export/copy path。
+  - 操作项：rename/copy path/tree/compact/resume；显示 last error 与上下文占用。
 
 ## P0/P1：缓存与成本
 
@@ -44,13 +44,13 @@
   - 测试：`the_channel_sink_times_the_first_stream_chunk`、usage ledger 断言。
 - [x] **P1：无头/RPC/ACP 也记 ttft**
   - 共享 `argent_agent::TtftClock`；一次性/REPL、`--json-lines`、RPC、ACP、engine 全部在首个 Thinking/AssistantText chunk 计时。
-- [ ] **P1：缓存诊断**
+- [x] **P1：缓存诊断**
   - 每次 miss 归因：idle 超时 / 模型切换 / 前缀漂移 / provider 不支持。
-  - `/cost` 或 `argent usage --explain` 展示。
+  - `argent usage --explain` 展示按 missed tokens 加权的归因；`--json` 带 `miss_attribution`。
 
 ## P1：扩展与生态
 
-- [ ] **SDK（TypeScript 或 Rust client）**
+- [x] **SDK（TypeScript client）**
   - 基于现有 `--rpc`/`--serve` 生成 typed client；示例：CI 调用、编辑器集成。
   - 参考：pi SDK、Claude Agent SDK、OpenCode client。
 - [x] **Hooks 诊断与面板**
@@ -58,36 +58,36 @@
   - TUI `/hooks`：信任状态、事件、matcher、timeout、async、命令，只读面板。
   - 修了 `--workspace` 未被 `cwd_from` 识别的 bug。
 - [x] **prompt cache warmer**
-  - 已有实现（`cacheWarming: "streaming"`），支持 `ARGENT_CACHE_WARMING` 环境变量覆盖。
-  - 仍待补：TTL 前主动保活、经济性门槛、warm 次数/成本记录。
-- [ ] **Skills/commands 发现可视**
+  - `cacheWarming: "streaming"` 在每轮结束用 `max_tokens=1` 保活；支持 `ARGENT_CACHE_WARMING` 覆盖。
+  - 仍待补：空闲 TTL 定时器与 warm 成本账本（当前实现不启动后台线程）。
+- [x] **Skills/commands 发现可视**
   - TUI `/skills`、`/commands` 列出名称、来源、优先级、冲突。
   - 参考：ZCode 的 settings/skills 管理。
-- [ ] **插件市场体验**
+- [x] **插件市场体验**
   - `plugins search`、安装前展示 manifest/权限、签名校验结果。
   - 失败回滚与更新 diff。
 
 ## P1：TUI / UI
 
-- [ ] **主题系统**
+- [x] **主题系统**
   - 增加 theme token 校验、预览、导入/导出；用户主题目录热重载。
-- [ ] **状态栏信息密度**
+- [x] **状态栏信息密度**
   - 可选段：git 分支、审批模式、sandbox、jobs 数、后台会话数。
-- [ ] **可访问性**
+- [x] **可访问性**
   - 屏幕阅读器模式（扁平文本、无动画）；高对比主题。
 
 ## P2：架构与战略
 
-- [ ] **Agent teams / 共享任务板**
+- [x] **Agent teams / 共享任务板**
   - 多 agent 共享 todo、互发消息；与 workflow DAG 区分（动态协作 vs 静态编排）。
   - 参考：Claude agent teams、Codex agent_message_board。
-- [ ] **宿主/云**
+- [x] **宿主/云（MVP）**
   - 可选 hosted run（提交任务、取回 diff），或强化 `--serve` 成多租户服务。
-- [ ] **移动/远程控制**
+- [x] **移动/远程控制**
   - 复用 `--serve` + 配对码，提供最小 Web 客户端；不做原生 App。
-- [ ] **性能与体积**
+- [x] **性能与体积**
   - 启动时间、二进制体积、首 token 延迟基准；与 pi/Codex 对比。
-- [ ] **发布工程**
+- [x] **发布工程**
   - 官网/文档站、安装脚本、版本公告、崩溃上报（可关）。
 
 ## 已完成的近期项（存档）

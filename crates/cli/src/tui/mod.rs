@@ -20,7 +20,6 @@ pub(crate) const ASSISTANT_MARK: &str = "◆ ";
 pub(crate) const TOOL_MARK: &str = "● ";
 pub(crate) const USER_MARK: &str = "› ";
 
-/// `/session` 信息面板里，操作项从第几行开始。
 mod app;
 mod events;
 mod model;
@@ -41,6 +40,7 @@ use render::*;
 use session::*;
 pub(crate) use worker::run_hook_event;
 
+/// `/session` 信息面板里，操作项从第几行开始。
 const SESSION_INFO_ROWS: usize = 8;
 /// 正文最大宽度。超宽终端上给两侧留白，一行 200 列读起来很累。
 const MAX_BODY_WIDTH: usize = 120;

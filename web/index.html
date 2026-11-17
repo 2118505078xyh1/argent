@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>argent remote</title>
+<style>
+body{font:16px/1.5 system-ui,sans-serif;background:#1a1a1a;color:#fff;margin:0;padding:1rem;max-width:52rem}
+textarea,input,button{font:inherit;padding:.6rem;border-radius:.4rem;border:1px solid #555;background:#262626;color:#fff}
+textarea{width:100%;min-height:5rem}button{background:#d77757;border:0;cursor:pointer}
+#out{white-space:pre-wrap;background:#111;padding:1rem;min-height:8rem;border-radius:.4rem}
+.row{display:flex;gap:.5rem;margin:.5rem 0}.row>*{flex:1}
+</style>
+</head>
+<body>
+<h2>argent remote</h2>
+<div class="row"><input id="token" type="password" placeholder="bearer token (optional)"></div>
+<textarea id="prompt" placeholder="Ask argent…"></textarea>
+<div class="row"><button id="send">Send</button><button id="stop">Stop</button></div>
+<pre id="out"></pre>
+<script>
+const $ = id => document.getElementById(id);
+$('token').value = sessionStorage.getItem('argent-token') || '';
+const headers = () => ({'content-type':'application/json','authorization':'Bearer '+$('token').value});
+function connect() {
+  const token = $('token').value;
+  sessionStorage.setItem('argent-token', token);
+  const source = new EventSource('/v1/events?token=' + encodeURIComponent(token));
+  const show = event => {
+    try {
+      const frame = JSON.parse(event.data);
+      const text = frame.text || frame.data?.text;
+      if (text) $('out').textContent += text;
+    } catch (_) {}
+  };
+  source.addEventListener('text', show);
+  source.addEventListener('thinking', () => {});
+}
+$('token').onchange = () => { sessionStorage.setItem('argent-token',$('token').value); };
+$('send').onclick = async () => {
+  const text = $('prompt').value.trim();
+  if (!text) return;
+  $('out').textContent += '\n› ' + text + '\n';
+  $('prompt').value = '';
+  await fetch('/v1/prompt', {method:'POST', headers: headers(), body: JSON.stringify({text})});
+};
+$('stop').onclick = () => fetch('/v1/abort', {method:'POST', headers: headers()});
+connect();
+</script>
+</body>
+</html>

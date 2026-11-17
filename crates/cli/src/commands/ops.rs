@@ -16,13 +16,347 @@ pub(super) fn keybindings(args: &[String]) -> Result<i32> {
 /// `argent themes`：列出可用主题与当前选择。
 pub(super) fn themes(args: &[String]) -> Result<i32> {
     let cwd = cwd_from(args);
-    let names = crate::theme::names(&cwd);
-    let current = crate::theme::current();
-    for name in names {
-        let marker = if name == current.name { "*" } else { " " };
-        println!("{} {}", marker, name);
+    let positional: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect();
+    let action = positional.first().copied().unwrap_or("list");
+    let paths = Paths::new(&cwd);
+    let user_dir = paths.storage().join("themes");
+    let project_dir = cwd.join(".argent").join("themes");
+    let locate = |name: &str| -> Option<PathBuf> {
+        [project_dir.join(format!("{name}.json")), user_dir.join(format!("{name}.json"))]
+            .into_iter()
+            .find(|path| path.is_file())
+    };
+
+    match action {
+        "list" | "ls" | "themes" => {
+            let current = crate::theme::current();
+            for name in crate::theme::names(&cwd) {
+                let marker = if name == current.name { "*" } else { " " };
+                println!("{} {}", marker, name);
+            }
+            Ok(0)
+        }
+        "validate" | "check" => {
+            let Some(name) = positional.get(1) else {
+                return Err(Error::config("usage: argent themes validate <name>"));
+            };
+            let Some(path) = locate(name) else {
+                return Err(Error::config(format!("theme '{}' has no JSON file", name)));
+            };
+            let text = std::fs::read_to_string(&path)
+                .map_err(|error| Error::io(format!("read {} failed: {}", path.display(), error)))?;
+            let value = Json::parse(&text)
+                .map_err(|error| Error::config(format!("{}: {}", path.display(), error)))?;
+            let known = [
+                "background",
+                "accent",
+                "secondary",
+                "text",
+                "dim",
+                "success",
+                "warning",
+                "error",
+                "user_fg",
+                "user_bg",
+                "code_fg",
+                "code_bg",
+            ];
+            let mut warnings = 0;
+            for (key, _) in value.as_object().unwrap_or(&[]) {
+                if !known.contains(&key.as_str()) {
+                    eprintln!("warning: unknown field '{}' (ignored)", key);
+                    warnings += 1;
+                }
+            }
+            let base = crate::theme::Theme::builtin("dark").expect("dark");
+            base.overlaid(&value)?;
+            println!(
+                "ok: {} ({} known field(s), {} warning(s))",
+                path.display(),
+                known.len(),
+                warnings
+            );
+            Ok(0)
+        }
+        "export" => {
+            let Some(name) = positional.get(1) else {
+                return Err(Error::config("usage: argent themes export <name> [--output FILE]"));
+            };
+            let theme = crate::theme::load(name, &cwd);
+            let mut data = Json::obj();
+            for (key, color) in [
+                ("background", theme.background),
+                ("accent", theme.accent),
+                ("secondary", theme.secondary),
+                ("text", theme.text),
+                ("dim", theme.dim),
+                ("success", theme.success),
+                ("warning", theme.warning),
+                ("error", theme.error),
+                ("user_fg", theme.user_fg),
+                ("user_bg", theme.user_bg),
+                ("code_fg", theme.code_fg),
+                ("code_bg", theme.code_bg),
+            ] {
+                data.set(key, Json::string(color_text(color)));
+            }
+            let text = data.dump_pretty();
+            match flag_value(args, "--output") {
+                Some(path) => {
+                    std::fs::write(path, format!("{}
+", text))
+                        .map_err(|error| Error::io(format!("write {} failed: {}", path, error)))?;
+                    println!("exported {} to {}", theme.name, path);
+                }
+                None => println!("{}", text),
+            }
+            Ok(0)
+        }
+        "import" => {
+            let Some(source) = positional.get(1) else {
+                return Err(Error::config("usage: argent themes import <file.json>"));
+            };
+            let path = Path::new(source);
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| Error::io(format!("read {} failed: {}", path.display(), error)))?;
+            let value = Json::parse(&text)
+                .map_err(|error| Error::config(format!("{}: {}", path.display(), error)))?;
+            crate::theme::Theme::builtin("dark")
+                .expect("dark")
+                .overlaid(&value)?;
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                return Err(Error::config("theme file needs a name"));
+            };
+            std::fs::create_dir_all(&user_dir).map_err(|error| {
+                Error::io(format!("create {} failed: {}", user_dir.display(), error))
+            })?;
+            let destination = user_dir.join(format!("{}.json", stem));
+            if destination.exists() && !args.iter().any(|arg| arg == "--force") {
+                return Err(Error::config(format!(
+                    "{} already exists; pass --force to overwrite",
+                    destination.display()
+                )));
+            }
+            std::fs::write(&destination, text).map_err(|error| {
+                Error::io(format!("write {} failed: {}", destination.display(), error))
+            })?;
+            println!("imported {} as '{}'", source, stem);
+            Ok(0)
+        }
+        other => Err(Error::config(format!(
+            "unknown themes command '{}'; expected list, validate, export or import",
+            other
+        ))),
     }
-    Ok(0)
+}
+
+fn array_mut<'a>(value: &'a mut Json, key: &str) -> &'a mut Vec<Json> {
+    let Some(slot) = value.get_mut(key) else {
+        panic!("board is missing its {key} array");
+    };
+    if !matches!(slot, Json::Arr(_)) {
+        *slot = Json::arr();
+    }
+    match slot {
+        Json::Arr(items) => items,
+        _ => unreachable!(),
+    }
+}
+
+/// A file-backed task board shared by agents working in the same workspace.
+///
+/// This is intentionally small: a JSON file under `.argent/` is visible to
+/// every agent (and to the operator), needs no service, and survives restarts.
+/// It gives cooperating agents a shared todo list plus a message inbox.
+pub(super) fn board(args: &[String]) -> Result<i32> {
+    let cwd = cwd_from(args);
+    let path = cwd.join(".argent/board.json");
+    // Skip flag values as well as flags: `--workspace DIR` must not become
+    // part of a task title or a message body.
+    let mut positional: Vec<&str> = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if ["--workspace", "--cwd", "-C", "--as"].contains(&arg) {
+            index += 2;
+        } else if arg.starts_with('-') {
+            index += 1;
+        } else {
+            positional.push(arg);
+            index += 1;
+        }
+    }
+    let action = positional.first().copied().unwrap_or("list");
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|time| time.as_secs())
+            .unwrap_or(0)
+    };
+    let blank = || {
+        let mut doc = Json::obj();
+        doc.set("tasks", Json::arr());
+        doc.set("messages", Json::arr());
+        doc
+    };
+    let mut doc = if path.is_file() {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| Error::io(format!("read {} failed: {}", path.display(), error)))?;
+        Json::parse(&text).unwrap_or_else(|_| blank())
+    } else {
+        blank()
+    };
+    if action != "list" && action != "inbox" {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Error::io(format!("create {} failed: {}", parent.display(), error))
+            })?;
+        }
+    }
+    let save = |doc: &Json| -> Result<()> {
+        std::fs::write(&path, format!("{}
+", doc.dump_pretty()))
+            .map_err(|error| Error::io(format!("write {} failed: {}", path.display(), error)))
+    };
+
+    match action {
+        "init" => {
+            if !path.exists() {
+                save(&doc)?;
+                println!("created {}", path.display());
+            } else {
+                println!("board already exists at {}", path.display());
+            }
+            Ok(0)
+        }
+        "add" => {
+            let title = positional[1..].join(" ").trim().to_string();
+            if title.is_empty() {
+                return Err(Error::config("usage: argent board add <title>"));
+            }
+            let tasks = array_mut(&mut doc, "tasks");
+            let next = tasks
+                .iter()
+                .filter_map(|task| task.get("id").and_then(Json::as_i64))
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let mut task = Json::obj();
+            task.set("id", Json::num(next as f64));
+            task.set("title", Json::string(title.clone()));
+            task.set("owner", Json::string(String::new()));
+            task.set("status", Json::string("todo"));
+            task.set("created", Json::num(now() as f64));
+            tasks.push(task);
+            save(&doc)?;
+            println!("#{} {}", next, title);
+            Ok(0)
+        }
+        "list" => {
+            let tasks = doc.get("tasks").and_then(Json::as_array).unwrap_or(&[]);
+            if tasks.is_empty() {
+                println!("no tasks; add one with `argent board add <title>`");
+            }
+            for task in tasks {
+                println!(
+                    "#{:<3} {:<9} {:<12} {}",
+                    task.get("id").and_then(Json::as_i64).unwrap_or(0),
+                    task.str_or("status", "todo"),
+                    task.str_or("owner", "-"),
+                    task.str_or("title", ""),
+                );
+            }
+            Ok(0)
+        }
+        "claim" => {
+            let Some(id) = positional.get(1).and_then(|value| value.parse::<i64>().ok()) else {
+                return Err(Error::config("usage: argent board claim <id> [--as AGENT]"));
+            };
+            let agent = flag_value(args, "--as").unwrap_or("agent").to_string();
+            let tasks = array_mut(&mut doc, "tasks");
+            let task = tasks
+                .iter_mut()
+                .find(|task| task.get("id").and_then(Json::as_i64) == Some(id))
+                .ok_or_else(|| Error::config(format!("task #{} not found", id)))?;
+            task.set("owner", Json::string(agent.clone()));
+            task.set("status", Json::string("doing"));
+            save(&doc)?;
+            println!("#{} claimed by {}", id, agent);
+            Ok(0)
+        }
+        "done" => {
+            let Some(id) = positional.get(1).and_then(|value| value.parse::<i64>().ok()) else {
+                return Err(Error::config("usage: argent board done <id>"));
+            };
+            let tasks = array_mut(&mut doc, "tasks");
+            let task = tasks
+                .iter_mut()
+                .find(|task| task.get("id").and_then(Json::as_i64) == Some(id))
+                .ok_or_else(|| Error::config(format!("task #{} not found", id)))?;
+            task.set("status", Json::string("done"));
+            save(&doc)?;
+            println!("#{} done", id);
+            Ok(0)
+        }
+        "message" => {
+            if positional.len() < 4 {
+                return Err(Error::config("usage: argent board message <from> <to> <text...>"));
+            }
+            let from = positional[1];
+            let to = positional[2];
+            let text = positional[3..].join(" ");
+            let mut message = Json::obj();
+            message.set("from", Json::string(from.to_string()));
+            message.set("to", Json::string(to.to_string()));
+            message.set("text", Json::string(text));
+            message.set("epoch", Json::num(now() as f64));
+            array_mut(&mut doc, "messages")
+                .push(message);
+            save(&doc)?;
+            println!("message queued for {}", to);
+            Ok(0)
+        }
+        "inbox" => {
+            let Some(agent) = positional.get(1) else {
+                return Err(Error::config("usage: argent board inbox <agent>"));
+            };
+            let messages = doc.get("messages").and_then(Json::as_array).unwrap_or(&[]);
+            for message in messages.iter().filter(|message| message.str_or("to", "") == *agent) {
+                println!(
+                    "{} ← {}: {}",
+                    argent_session::local_stamp(message.num_or("epoch", 0.0) as u64),
+                    message.str_or("from", "?"),
+                    message.str_or("text", "")
+                );
+            }
+            Ok(0)
+        }
+        other => Err(Error::config(format!(
+            "unknown board command '{}'; expected init, add, list, claim, done, message or inbox",
+            other
+        ))),
+    }
+}
+
+fn color_text(color: argent_core::screen::Color) -> String {
+    use argent_core::screen::Color;
+    match color {
+        Color::Default => "default".to_string(),
+        Color::Red => "red".to_string(),
+        Color::Green => "green".to_string(),
+        Color::Yellow => "yellow".to_string(),
+        Color::Blue => "blue".to_string(),
+        Color::Magenta => "magenta".to_string(),
+        Color::Cyan => "cyan".to_string(),
+        Color::Gray => "gray".to_string(),
+        Color::White => "white".to_string(),
+        Color::Fixed(index) => index.to_string(),
+        Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
+    }
 }
 
 // ------------------------------------------------------------------ usage
@@ -369,4 +703,99 @@ pub(super) fn bug_report(args: &[String]) -> Result<i32> {
     println!("bug report written to {}", path.display());
     println!("attach it manually if you file an issue; it never leaves your machine");
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn board_shares_tasks_and_messages_between_agents() {
+        let dir = std::env::temp_dir().join(format!("argent-board-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let workspace = || ["--workspace".to_string(), dir.display().to_string()];
+        let mut init = workspace().to_vec();
+        init.insert(0, "init".to_string());
+        assert_eq!(board(&init).expect("init"), 0);
+
+        let mut add = workspace().to_vec();
+        add.insert(0, "add".to_string());
+        add.insert(1, "fix the flaky test".to_string());
+        assert_eq!(board(&add).expect("add"), 0);
+
+        let mut claim = workspace().to_vec();
+        claim.insert(0, "claim".to_string());
+        claim.insert(1, "1".to_string());
+        claim.extend(["--as".to_string(), "alice".to_string()]);
+        assert_eq!(board(&claim).expect("claim"), 0);
+
+        let mut message = workspace().to_vec();
+        message.insert(0, "message".to_string());
+        message.extend(["alice".to_string(), "bob".to_string(), "need review".to_string()]);
+        assert_eq!(board(&message).expect("message"), 0);
+
+        let mut inbox = workspace().to_vec();
+        inbox.insert(0, "inbox".to_string());
+        inbox.insert(1, "bob".to_string());
+        assert_eq!(board(&inbox).expect("inbox"), 0);
+
+        let text = std::fs::read_to_string(dir.join(".argent/board.json")).expect("board file");
+        assert!(text.contains("fix the flaky test"), "{text}");
+        assert!(text.contains("alice"), "{text}");
+        assert!(text.contains("need review"), "{text}");
+        let doc = Json::parse(&text).expect("board json");
+        let task = &doc.get("tasks").and_then(Json::as_array).unwrap()[0];
+        assert_eq!(task.str_or("status", ""), "doing");
+        assert_eq!(task.str_or("owner", ""), "alice");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn themes_validate_export_and_import_round_trip() {
+        let dir = std::env::temp_dir().join(format!("argent-theme-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let themes_dir = dir.join(".argent/themes");
+        std::fs::create_dir_all(&themes_dir).expect("themes dir");
+        std::fs::write(
+            themes_dir.join("custom.json"),
+            r##"{"accent":"#ff0000","text":"white"}"##,
+        )
+        .expect("write theme");
+        let args = |action: &str, extra: &[&str]| {
+            let mut out = vec![
+                action.to_string(),
+                "custom".to_string(),
+                "--workspace".to_string(),
+                dir.display().to_string(),
+            ];
+            out.extend(extra.iter().map(|value| value.to_string()));
+            out
+        };
+        assert_eq!(themes(&args("validate", &[])).expect("valid theme"), 0);
+
+        let exported = dir.join("exported.json");
+        assert_eq!(
+            themes(&args("export", &["--output", exported.to_str().unwrap()])).expect("export"),
+            0
+        );
+        let text = std::fs::read_to_string(&exported).expect("exported file");
+        assert!(text.contains("\"accent\""), "{text}");
+
+        let imported = dir.join("imported.json");
+        std::fs::write(&imported, text).expect("write import");
+        let code = themes(&[
+            "import".to_string(),
+            imported.display().to_string(),
+            "--workspace".to_string(),
+            dir.display().to_string(),
+            "--force".to_string(),
+        ])
+        .expect("import");
+        assert_eq!(code, 0);
+
+        std::fs::write(themes_dir.join("custom.json"), r#"{"accent":"not-a-color"}"#)
+            .expect("write bad theme");
+        assert!(themes(&args("validate", &[])).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -61,6 +61,22 @@ impl Theme {
                 code_fg: Color::Rgb(0xf0, 0xf0, 0xf0),
                 code_bg: Color::Rgb(0x26, 0x26, 0x26),
             }),
+            // 高对比主题：纯黑底 + 纯白字 + 亮黄强调色，供低视力/强光环境使用。
+            "contrast" => Some(Theme {
+                name: "contrast".to_string(),
+                background: Color::Rgb(0x00, 0x00, 0x00),
+                accent: Color::Rgb(0xff, 0xd7, 0x00),
+                secondary: Color::Rgb(0x00, 0xe5, 0xff),
+                text: Color::Rgb(0xff, 0xff, 0xff),
+                dim: Color::Rgb(0xb8, 0xb8, 0xb8),
+                success: Color::Rgb(0x00, 0xff, 0x66),
+                warning: Color::Rgb(0xff, 0xd7, 0x00),
+                error: Color::Rgb(0xff, 0x55, 0x55),
+                user_fg: Color::Rgb(0xff, 0xff, 0xff),
+                user_bg: Color::Rgb(0x00, 0x33, 0x66),
+                code_fg: Color::Rgb(0xff, 0xff, 0xff),
+                code_bg: Color::Rgb(0x11, 0x11, 0x11),
+            }),
             // Claude 的浅色配色：奶油纸底、深墨字，橙色压暗一档保证对比度。
             "light" => Some(Theme {
                 name: "light".to_string(),
@@ -237,7 +253,7 @@ pub fn load(name: &str, cwd: &Path) -> Theme {
 
 /// 可用主题名：内置 + 两个目录里的文件名。
 pub fn names(cwd: &Path) -> Vec<String> {
-    let mut out = vec!["dark".to_string(), "light".to_string()];
+    let mut out = vec!["dark".to_string(), "light".to_string(), "contrast".to_string()];
     let paths = argent_config::Paths::new(cwd);
     for root in [
         paths.storage().join("themes"),
@@ -340,8 +356,16 @@ mod tests {
     }
 
     #[test]
+    fn contrast_theme_is_high_contrast_and_listed() {
+        let theme = Theme::builtin("contrast").expect("contrast theme");
+        let ratio = contrast(theme.text, theme.background).expect("RGB");
+        assert!(ratio >= 12.0, "contrast ratio {:.1}", ratio);
+        assert!(names(Path::new(".")).iter().any(|name| name == "contrast"));
+    }
+
+    #[test]
     fn builtin_theme_blocks_keep_readable_contrast() {
-        for name in ["dark", "light"] {
+        for name in ["dark", "light", "contrast"] {
             let theme = Theme::builtin(name).expect(name);
             for (label, fg, bg) in [
                 ("user block", theme.user_fg, theme.user_bg),

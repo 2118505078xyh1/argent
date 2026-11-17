@@ -44,6 +44,9 @@ use argent_core::json::Json;
 
 use crate::rpc::Compaction;
 
+/// Single-file mobile/remote client, served at `/`.
+const WEB_UI: &str = include_str!("../../../web/index.html");
+
 /// The default port. High enough to avoid the usual dev servers, low enough
 /// to type.
 pub const DEFAULT_PORT: u16 = 7777;
@@ -177,13 +180,17 @@ impl ServerRef {
             Some(request) => request,
             None => return Ok(()),
         };
-        if request.path == "/v1/health" {
+        let path = request.path.split('?').next().unwrap_or("/").to_string();
+        if path == "/v1/health" {
             return write_json(&mut stream, 200, &health());
+        }
+        if path == "/" || path == "/index.html" {
+            return write_text(&mut stream, 200, "text/html; charset=utf-8", WEB_UI);
         }
         if let Err(message) = self.check_token(&request) {
             return write_json(&mut stream, 401, &error_body(&message));
         }
-        match request.path.as_str() {
+        match path.as_str() {
             "/v1/events" => self.events(&mut stream),
             "/v1/prompt" => self.prompt(&mut stream, &request),
             "/v1/snapshot" => self.snapshot(&mut stream),
@@ -216,7 +223,16 @@ impl ServerRef {
             .or_else(|| header.strip_prefix("bearer "))
             .unwrap_or("")
             .trim();
-        if constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
+        // EventSource cannot set a header, so the small web client passes the
+        // pairing token as a query parameter on the SSE endpoint.
+        let query_token = request
+            .path
+            .split_once('?')
+            .and_then(|(_, query)| query.split('&').find_map(|pair| pair.strip_prefix("token=")))
+            .unwrap_or("");
+        if constant_time_eq(presented.as_bytes(), expected.as_bytes())
+            || constant_time_eq(query_token.as_bytes(), expected.as_bytes())
+        {
             Ok(())
         } else {
             Err("a valid bearer token is required".to_string())
@@ -492,6 +508,24 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<Request>> {
 }
 
 /// Write a JSON response.
+fn write_text(stream: &mut TcpStream, status: u16, content_type: &str, body: &str) -> Result<()> {
+    let head = format!(
+        "HTTP/1.1 {} OK
+content-type: {}
+content-length: {}
+connection: close
+
+",
+        status,
+        content_type,
+        body.len()
+    );
+    stream
+        .write_all(head.as_bytes())
+        .and_then(|_| stream.write_all(body.as_bytes()))
+        .map_err(io("write response"))
+}
+
 fn write_json(stream: &mut TcpStream, status: u16, body: &Json) -> Result<()> {
     let reason = match status {
         200 => "OK",
@@ -873,6 +907,35 @@ mod tests {
             approval: server.approval.clone(),
         };
         assert!(open.check_token(&request_with(None)).is_ok());
+    }
+
+    #[test]
+    fn remote_web_token_works_as_query_parameter() {
+        let mut request = request_with(None);
+        request.path = "/v1/events?token=pair-me".to_string();
+        let server = Server::new(
+            Agent::new(
+                Box::new(NullProvider),
+                Arc::new(argent_tools::ToolRegistry::with_builtins()),
+                argent_agent::AgentConfig::new("test"),
+                argent_tools::ToolCtx::new(std::env::temp_dir()),
+                "system",
+            ),
+            crate::rpc::Compaction::new(100_000, 1_000, 20_000),
+            Some("pair-me".to_string()),
+        );
+        let ref_ = ServerRef {
+            agent: Arc::clone(&server.agent),
+            compaction: Arc::clone(&server.compaction),
+            token: server.token.clone(),
+            abort: server.abort.clone(),
+            steering: Arc::clone(&server.steering),
+            bus: Arc::clone(&server.bus),
+            approval: "sensible".to_string(),
+        };
+        assert!(ref_.check_token(&request).is_ok());
+        request.path = "/v1/events?token=wrong".to_string();
+        assert!(ref_.check_token(&request).is_err());
     }
 
     #[test]

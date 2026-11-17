@@ -76,6 +76,7 @@ pub fn dispatch(raw: &[String]) -> Result<Option<i32>> {
         "follow" => Ok(Some(agents::background_logs(&raw[1..], true)?)),
         "stop" => Ok(Some(agents::background_stop(&raw[1..])?)),
         "rm" | "remove" => Ok(Some(agents::background_remove(&raw[1..])?)),
+        "board" => Ok(Some(ops::board(&raw[1..])?)),
         "help" => {
             print!("{}", HELP);
             Ok(Some(0))
