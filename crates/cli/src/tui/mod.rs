@@ -20,6 +20,9 @@ pub(crate) use keys::next_key;
 pub(crate) const ASSISTANT_MARK: &str = "◆ ";
 pub(crate) const TOOL_MARK: &str = "● ";
 pub(crate) const USER_MARK: &str = "› ";
+
+/// `/session` 信息面板里，操作项从第几行开始。
+const SESSION_INFO_ROWS: usize = 8;
 /// 用户消息块：中蓝底（Fixed(25)，#005faf）配白字，一整条铺满行宽。
 pub(crate) const USER_FG: argent_core::screen::Color = argent_core::screen::Color::Fixed(255);
 pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(17);
@@ -1532,6 +1535,18 @@ enum Overlay {
         index: usize,
         selected: usize,
     },
+    /// pi 风格的会话信息面板（名字 / 路径 / 用量 / 缓存 + 操作菜单）。
+    SessionInfo {
+        selected: usize,
+    },
+    /// 当前会话的改名输入。
+    RenameCurrent {
+        input: String,
+    },
+    /// 单个工具的详情（从 /tools 列表进入）。
+    ToolDetail {
+        index: usize,
+    },
     Tree {
         index: usize,
     },
@@ -2303,9 +2318,85 @@ impl App {
                         _ => self.overlay = Some(Overlay::Thinking { index }),
                     }
                 }
-                Overlay::Tools { index } => match key {
+                Overlay::Tools { mut index } => match key {
+                    Key::Up => {
+                        index = index.saturating_sub(1);
+                        self.overlay = Some(Overlay::Tools { index });
+                    }
+                    Key::Down => {
+                        index = (index + 1).min(self.tools.len().saturating_sub(1));
+                        self.overlay = Some(Overlay::Tools { index });
+                    }
+                    Key::Enter => {
+                        if self.tools.get(index).is_some() {
+                            self.overlay = Some(Overlay::ToolDetail { index });
+                        }
+                    }
                     Key::Esc | Key::Char('q') => {}
                     _ => self.overlay = Some(Overlay::Tools { index }),
+                },
+                Overlay::ToolDetail { index } => match key {
+                    Key::Esc | Key::Char('q') | Key::Backspace => {
+                        self.overlay = Some(Overlay::Tools { index });
+                    }
+                    _ => self.overlay = Some(Overlay::ToolDetail { index }),
+                },
+                Overlay::SessionInfo { mut selected } => match key {
+                    Key::Up => {
+                        selected = selected.saturating_sub(1);
+                        self.overlay = Some(Overlay::SessionInfo { selected });
+                    }
+                    Key::Down => {
+                        selected = (selected + 1).min(4);
+                        self.overlay = Some(Overlay::SessionInfo { selected });
+                    }
+                    Key::Enter => match selected {
+                        0 => {
+                            let input = self
+                                .ready
+                                .as_ref()
+                                .map(|ready| ready.session.clone())
+                                .unwrap_or_default();
+                            self.overlay = Some(Overlay::RenameCurrent { input });
+                        }
+                        1 => {
+                            if let Some(path) = self.ready.as_ref().map(|r| r.session_path.clone()) {
+                                let _ = argent_core::clipboard::copy_text(&path);
+                                self.set_status(format!("copied {}", path));
+                            }
+                            self.overlay = None;
+                        }
+                        2 => {
+                            let _ = worker.commands.send(Command::Tree);
+                            self.overlay = None;
+                        }
+                        3 => {
+                            let _ = worker.commands.send(Command::ListSessions);
+                            self.overlay = Some(Overlay::Sessions { index: 0 });
+                        }
+                        _ => self.overlay = None,
+                    },
+                    Key::Esc => {}
+                    _ => self.overlay = Some(Overlay::SessionInfo { selected }),
+                },
+                Overlay::RenameCurrent { mut input } => match key {
+                    Key::Enter => {
+                        let name = input.trim().to_string();
+                        if !name.is_empty() {
+                            let _ = worker.commands.send(Command::Rename(name));
+                        }
+                        self.overlay = None;
+                    }
+                    Key::Esc => self.overlay = Some(Overlay::SessionInfo { selected: 0 }),
+                    Key::Backspace => {
+                        input.pop();
+                        self.overlay = Some(Overlay::RenameCurrent { input });
+                    }
+                    Key::Char(ch) => {
+                        input.push(ch);
+                        self.overlay = Some(Overlay::RenameCurrent { input });
+                    }
+                    _ => self.overlay = Some(Overlay::RenameCurrent { input }),
                 },
                 Overlay::Approval {
                     tool,
@@ -2485,8 +2576,8 @@ impl App {
             ("thinking", "set reasoning effort"),
             ("compact", "compact the conversation now"),
             ("rewind", "undo the last run's file changes"),
-            ("resume", "open a stored session"),
-            ("session", "manage stored sessions (↑↓ + enter)"),
+            ("resume", "open a stored session (↑↓ + enter)"),
+            ("session", "current session info + actions"),
             ("new", "start a new session"),
             ("cost", "show usage, cost and context for this session"),
             ("plan", "toggle plan mode"),
@@ -2899,9 +2990,13 @@ impl App {
                     let _ = worker.commands.send(Command::Rename(argument.to_string()));
                 }
             }
-            "/resume" | "/sessions" | "/session" => {
+            "/resume" | "/sessions" => {
                 let _ = worker.commands.send(Command::ListSessions);
                 self.overlay = Some(Overlay::Sessions { index: 0 });
+            }
+            "/session" => {
+                // pi 的 /session 是当前会话的面板；找历史会话走 /resume。
+                self.overlay = Some(Overlay::SessionInfo { selected: 0 });
             }
             "/model" => {
                 if argument.is_empty() {
@@ -3772,13 +3867,114 @@ impl App {
                     .map(|level| (level.to_string(), String::new()))
                     .collect(),
             ),
-            Overlay::Tools { .. } => (
-                argent_i18n::t(self.locale, "tui.tools.title").to_string(),
-                self.tools
+            Overlay::Tools { .. } => {
+                let mut content: Vec<(String, String)> = self
+                    .tools
                     .iter()
                     .map(|(name, description)| (name.clone(), clip_to_width(description, 48)))
-                    .collect(),
-            ),
+                    .collect();
+                content.push((String::new(), String::new()));
+                content.push((
+                    "↑↓ select · enter details · esc close".to_string(),
+                    String::new(),
+                ));
+                (
+                    argent_i18n::t(self.locale, "tui.tools.title").to_string(),
+                    content,
+                )
+            }
+            Overlay::ToolDetail { index } => {
+                let (name, description) = self
+                    .tools
+                    .get(*index)
+                    .cloned()
+                    .unwrap_or_else(|| ("?".to_string(), String::new()));
+                let mut content = vec![
+                    (name.clone(), String::new()),
+                    (String::new(), String::new()),
+                ];
+                content.extend(
+                    wrap_text(&description, 56)
+                        .into_iter()
+                        .map(|line| (line, String::new())),
+                );
+                content.push((String::new(), String::new()));
+                content.push(("esc back".to_string(), String::new()));
+                (format!("tool · {}", name), content)
+            }
+            Overlay::SessionInfo { selected: _ } => {
+                let (name, path) = match &self.ready {
+                    Some(ready) => (ready.session.clone(), ready.session_path.clone()),
+                    None => ("—".to_string(), "—".to_string()),
+                };
+                let cached_pct = self
+                    .metrics
+                    .session_cache_hit_percent()
+                    .map(|pct| format!(" ({}%)", pct))
+                    .unwrap_or_default();
+                let cost = match self.metrics.cost {
+                    Some(cost) => format!("${cost:.3}"),
+                    None => "—".to_string(),
+                };
+                let mut content = vec![
+                    (format!("Name: {}", name), String::new()),
+                    (format!("File: {}", path), String::new()),
+                    (format!("Messages: {}", self.transcript.entries().len()), String::new()),
+                    (
+                        format!("Input: {}", self.metrics.session_prompt_tokens),
+                        String::new(),
+                    ),
+                    (
+                        format!(
+                            "Cached: {}{}",
+                            self.metrics.session_cached_tokens, cached_pct
+                        ),
+                        String::new(),
+                    ),
+                    (
+                        format!("Output: {}", self.metrics.session_completion_tokens),
+                        String::new(),
+                    ),
+                    (format!("Cost: {}", cost), String::new()),
+                    (String::new(), String::new()),
+                ];
+                debug_assert_eq!(content.len(), SESSION_INFO_ROWS);
+                content.extend(
+                    [
+                        "Rename session",
+                        "Copy file path",
+                        "Browse branches",
+                        "Resume another session",
+                        "Close",
+                    ]
+                    .iter()
+                    .map(|action| (action.to_string(), String::new())),
+                );
+                content.push((String::new(), String::new()));
+                content.push((
+                    "↑↓ select · enter confirm · esc close".to_string(),
+                    String::new(),
+                ));
+                (
+                    argent_i18n::t(self.locale, "tui.sessions.title").to_string(),
+                    content,
+                )
+            }
+            Overlay::RenameCurrent { input } => {
+                let current = self
+                    .ready
+                    .as_ref()
+                    .map(|ready| ready.session.clone())
+                    .unwrap_or_default();
+                (
+                    argent_i18n::t(self.locale, "tui.sessions.rename").to_string(),
+                    vec![
+                        (current, String::new()),
+                        (format!("> {}", input), String::new()),
+                        ("enter save · esc cancel".to_string(), String::new()),
+                    ],
+                )
+            }
             Overlay::Approval {
                 tool,
                 args,
@@ -4174,6 +4370,7 @@ fn boxed_overlay(
         | Some(Overlay::Thinking { index })
         | Some(Overlay::Tools { index }) => Some(*index),
         Some(Overlay::SessionActions { selected, .. }) => Some(*selected),
+        Some(Overlay::SessionInfo { selected }) => Some(SESSION_INFO_ROWS + selected),
         _ => None,
     };
     for (position, (left, right)) in content.iter().enumerate() {
@@ -5653,6 +5850,14 @@ mod cursor_tests {
             "/session 必须出现在命令提示里"
         );
         app.submit(&worker);
+        // /session 是当前会话面板，↑↓ 在操作项上走。
+        assert!(matches!(app.overlay, Some(Overlay::SessionInfo { selected: 0 })));
+        app.handle_key(&worker, Key::Down);
+        app.handle_key(&worker, Key::Down);
+        assert!(matches!(app.overlay, Some(Overlay::SessionInfo { selected: 2 })));
+        // 选到 Resume another session，进入会话列表。
+        app.handle_key(&worker, Key::Down);
+        app.handle_key(&worker, Key::Enter);
         assert!(matches!(app.overlay, Some(Overlay::Sessions { index: 0 })));
         assert!(matches!(command_rx.try_recv(), Ok(Command::ListSessions)));
 
