@@ -62,6 +62,44 @@ impl FinishReason {
     }
 }
 
+/// Time-to-first-token clock shared by every frontend sink.
+///
+/// The clock starts when the sink is created and stops at the first streamed
+/// thinking or answer chunk. Tool-call-only turns report `None`.
+#[derive(Debug, Clone)]
+pub struct TtftClock {
+    started: std::time::Instant,
+    ttft_ms: Option<u64>,
+}
+
+impl Default for TtftClock {
+    fn default() -> TtftClock {
+        TtftClock::new()
+    }
+}
+
+impl TtftClock {
+    pub fn new() -> TtftClock {
+        TtftClock {
+            started: std::time::Instant::now(),
+            ttft_ms: None,
+        }
+    }
+
+    /// Record the first token-bearing event; later events are ignored.
+    pub fn observe(&mut self, event: &AgentEvent) {
+        if self.ttft_ms.is_none()
+            && matches!(event, AgentEvent::Thinking(_) | AgentEvent::AssistantText(_))
+        {
+            self.ttft_ms = Some(self.started.elapsed().as_millis() as u64);
+        }
+    }
+
+    pub fn ms(&self) -> Option<u64> {
+        self.ttft_ms
+    }
+}
+
 /// A sink for agent events.
 pub trait EventSink: Send {
     /// Handle one event.
@@ -313,6 +351,18 @@ mod tests {
     fn describes_finish_reasons() {
         assert_eq!(FinishReason::Complete.describe(), "complete");
         assert_eq!(FinishReason::Aborted.describe(), "aborted");
+    }
+
+    #[test]
+    fn ttft_clock_stops_at_the_first_token() {
+        let mut clock = TtftClock::new();
+        clock.observe(&AgentEvent::TurnStart { index: 0 });
+        assert_eq!(clock.ms(), None);
+        clock.observe(&AgentEvent::Thinking("hmm".to_string()));
+        let first = clock.ms().expect("thinking starts the clock");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        clock.observe(&AgentEvent::AssistantText("answer".to_string()));
+        assert_eq!(clock.ms(), Some(first));
     }
 
     #[test]

@@ -514,7 +514,7 @@ pub fn spawn(
                                 &usage,
                                 requests,
                                 cost,
-                                sink.ttft_ms,
+                                sink.clock.ms(),
                             );
                             let turn_ok = matches!(reason, FinishReason::Complete);
                             let _ = event_tx.send(UiEvent::TurnDone {
@@ -1570,31 +1570,21 @@ fn session_rows(index: &SessionIndex) -> Vec<SessionRow> {
 
 struct ChannelSink {
     tx: Sender<UiEvent>,
-    started: std::time::Instant,
-    /// First thinking/answer chunk; `None` when the turn made no model call.
-    ttft_ms: Option<u64>,
+    clock: argent_agent::TtftClock,
 }
 
 impl ChannelSink {
     fn new(tx: Sender<UiEvent>) -> ChannelSink {
         ChannelSink {
             tx,
-            started: std::time::Instant::now(),
-            ttft_ms: None,
+            clock: argent_agent::TtftClock::new(),
         }
     }
 }
 
 impl EventSink for ChannelSink {
     fn emit(&mut self, event: AgentEvent) {
-        if self.ttft_ms.is_none()
-            && matches!(
-                event,
-                AgentEvent::Thinking(_) | AgentEvent::AssistantText(_)
-            )
-        {
-            self.ttft_ms = Some(self.started.elapsed().as_millis() as u64);
-        }
+        self.clock.observe(&event);
         let _ = self.tx.send(UiEvent::Agent(event));
     }
 }
@@ -4754,8 +4744,9 @@ pub fn run_remote(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 鼠标由 TUI 接管：点击展开/收起思考块，拖拽选中复制（pi fullscreen 模式）。
-    terminal::enable_mouse();
+    // 不请求鼠标上报（`?1000h`）：终端自己的拖选、右键复制/粘贴、滚轮
+    // 比 TUI 自绘的选择更可靠，也是用户熟悉的操作。键盘输入仍走控制台
+    // 按键记录，和鼠标模式无关。
 
     let locale = argent_i18n::Locale::from_env();
     let (key_tx, key_rx) = mpsc::channel();
@@ -4838,7 +4829,6 @@ pub fn run_remote(
     }
 
     app.flush_stream_text();
-    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     drop(guard);
@@ -4880,8 +4870,7 @@ pub fn run(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 鼠标由 TUI 接管：点击展开/收起思考块，拖拽选中复制（pi fullscreen 模式）。
-    terminal::enable_mouse();
+    // 同 run()：鼠标交给终端，TUI 不抢拖选和右键菜单。
 
     let locale = argent_i18n::Locale::from_env();
     let statusline = config.statusline.clone();
@@ -5005,7 +4994,6 @@ pub fn run(
     };
     let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
     app.flush_stream_text();
-    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
@@ -5432,12 +5420,12 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut sink = ChannelSink::new(tx);
         sink.emit(AgentEvent::TurnStart { index: 0 });
-        assert_eq!(sink.ttft_ms, None, "turn start is not a token");
+        assert_eq!(sink.clock.ms(), None, "turn start is not a token");
         sink.emit(AgentEvent::Thinking("hmm".to_string()));
-        let first = sink.ttft_ms.expect("thinking starts the clock");
+        let first = sink.clock.ms().expect("thinking starts the clock");
         std::thread::sleep(std::time::Duration::from_millis(20));
         sink.emit(AgentEvent::AssistantText("answer".to_string()));
-        assert_eq!(sink.ttft_ms, Some(first), "the first chunk wins");
+        assert_eq!(sink.clock.ms(), Some(first), "the first chunk wins");
     }
 
     /// 会话管理 overlay：两次 Ctrl+D 才发删除命令，Ctrl+R 进改名输入。

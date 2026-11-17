@@ -279,9 +279,7 @@ pub fn start_session(
                         )));
                     }
                     let before = agent.history().len();
-                    let mut sink = ChannelSink {
-                        tx: event_tx.clone(),
-                    };
+                    let mut sink = ChannelSink::new(event_tx.clone());
                     let outcome = agent.run(&text, &mut sink);
                     // Persist before reporting: a crash after this point cannot
                     // lose what the operator already watched arrive.
@@ -291,12 +289,13 @@ pub fn start_session(
                             let usage = agent.usage();
                             let requests = agent.requests();
                             let cost = agent.usage_cost();
-                            let _ = argent_session::usage::record(
+                            let _ = argent_session::usage::record_with_ttft(
                                 &current,
                                 agent.model(),
                                 &usage,
                                 requests,
                                 cost,
+                                sink.clock.ms(),
                             );
                             let _ = event_tx.send(UiEvent::TurnDone {
                                 reason,
@@ -647,10 +646,21 @@ fn open_session(path: &std::path::Path) -> Result<(Vec<Message>, SessionStore), 
 
 struct ChannelSink {
     tx: Sender<UiEvent>,
+    clock: argent_agent::TtftClock,
+}
+
+impl ChannelSink {
+    fn new(tx: Sender<UiEvent>) -> ChannelSink {
+        ChannelSink {
+            tx,
+            clock: argent_agent::TtftClock::new(),
+        }
+    }
 }
 
 impl EventSink for ChannelSink {
     fn emit(&mut self, event: AgentEvent) {
+        self.clock.observe(&event);
         let _ = self.tx.send(UiEvent::Agent(event));
     }
 }

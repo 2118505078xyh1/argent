@@ -41,8 +41,8 @@
 - [x] **P1：`usage.jsonl` 增加 ttft_ms 与首 token 时间**
   - 已完成 TUI：`ChannelSink` 在首个 Thinking/AssistantText chunk 计时，`usage.jsonl` 写 `ttft_ms`；`argent usage` 显示 `ttft X.Xs avg`。
   - 测试：`the_channel_sink_times_the_first_stream_chunk`、usage ledger 断言。
-- [ ] **P1：无头/RPC/ACP 也记 ttft**
-  - 目前这些入口写 `None`；下一步在 `RendererSink`/RPC 事件层补首个 chunk 计时。
+- [x] **P1：无头/RPC/ACP 也记 ttft**
+  - 共享 `argent_agent::TtftClock`；一次性/REPL、`--json-lines`、RPC、ACP、engine 全部在首个 Thinking/AssistantText chunk 计时。
 - [ ] **P1：prompt cache warmer**
   - 空闲接近 TTL 时用 `max_tokens=1` 重发最后请求保活；默认关闭，env 开关。
   - 经济性门槛：预计节省 > 成本才 warm；记录 warm 次数/成本。
@@ -93,8 +93,8 @@
 ## 已完成的近期项（存档）
 
 - [x] pi 风格 Markdown 语义配色（标题/链接/行内码/代码块/列表）。
-- [x] 思考块整块可点（标题 + 正文），`Ctrl+E` 全局切换。
-- [x] 鼠标拖选复制（TUI 自管，不再依赖终端 QuickEdit）。
+- [ ] 思考块整块可点（需要 TUI 接管鼠标；当前让位给终端原生选择，点击暂不可用，`Ctrl+E` 仍可全局切换）。
+- [x] 鼠标拖选复制（交给终端原生选择 + 右键复制/粘贴；TUI 不再请求鼠标上报）。
 - [x] 会话操作二级菜单（Open/Rename/Delete/Branch）。
 - [x] `/session` 信息面板 + 操作菜单（pi 对齐）。
 - [x] `/tools` 列表可导航 + 详情页。

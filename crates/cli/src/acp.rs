@@ -455,18 +455,17 @@ fn worker(
                 }
 
                 let before = agent.history().len();
-                let result = {
-                    let mut sink = ChannelSink { tx: events.clone() };
-                    agent.run(&text, &mut sink)
-                };
+                let mut sink = ChannelSink::new(events.clone());
+                let result = agent.run(&text, &mut sink);
                 match result {
                     Ok(reason) => {
-                        let _ = argent_session::usage::record(
+                        let _ = argent_session::usage::record_with_ttft(
                             &session.path,
                             agent.model(),
                             &agent.usage(),
                             agent.requests(),
                             agent.usage_cost(),
+                            sink.clock.ms(),
                         );
                         let _ = session.record_new(agent.history(), before);
                         let stop = HookContext {
@@ -522,10 +521,21 @@ fn worker(
 
 struct ChannelSink {
     tx: Sender<Event>,
+    clock: argent_agent::TtftClock,
+}
+
+impl ChannelSink {
+    fn new(tx: Sender<Event>) -> ChannelSink {
+        ChannelSink {
+            tx,
+            clock: argent_agent::TtftClock::new(),
+        }
+    }
 }
 
 impl EventSink for ChannelSink {
     fn emit(&mut self, event: AgentEvent) {
+        self.clock.observe(&event);
         let _ = self.tx.send(Event::Agent(event));
     }
 }

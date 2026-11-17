@@ -160,7 +160,6 @@ impl RawModeGuard {
         const LINE_INPUT: u32 = 0x0002;
         const ECHO_INPUT: u32 = 0x0004;
         const QUICK_EDIT_MODE: u32 = 0x0040;
-        const ENABLE_MOUSE_INPUT: u32 = 0x0010;
         const EXTENDED_FLAGS: u32 = 0x0080;
         const VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
@@ -192,11 +191,12 @@ impl RawModeGuard {
             let mut raw = original.bits;
             // Turn off line buffering and echo: the UI draws every character
             // itself, so a second echo would double everything on screen.
-            raw &= !(LINE_INPUT | ECHO_INPUT | PROCESSED_INPUT | QUICK_EDIT_MODE);
-            // 鼠标由 TUI 自己接管：关掉控制台 Quick-Edit、打开鼠标输入，
-            // 拖拽选中和复制在 App 里实现（等价于 pi 的 fullscreen 模式），
-            // 思考块整块可点，选中文字仍可复制。
-            raw |= ENABLE_MOUSE_INPUT | EXTENDED_FLAGS;
+            raw &= !(LINE_INPUT | ECHO_INPUT | PROCESSED_INPUT);
+            // Quick-Edit 必须保留：控制台的鼠标选中、右键复制粘贴靠它。
+            // Windows Terminal 的选择由终端自己处理，前提是应用不请求
+            // 鼠标上报（TUI 不再发 `?1000h`）。关掉它会让两种终端都失去
+            // 拖选和右键粘贴。
+            raw |= QUICK_EDIT_MODE | EXTENDED_FLAGS;
             // Windows Terminal / ConPTY 靠 VT input 把键盘字节流转成按键记录；
             // 关掉它会让 ReadConsoleInputW 在伪终端里收不到任何输入。
             raw |= VIRTUAL_TERMINAL_INPUT;

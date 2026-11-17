@@ -67,9 +67,7 @@ pub fn enforce_output_schema(
                 let mut sink = sink.clone_handle();
                 agent.run_message(argent_ai::Message::user(correction), &mut sink)
             } else {
-                let mut sink = crate::RendererSink {
-                    renderer: &mut *renderer,
-                };
+                let mut sink = crate::RendererSink::new(&mut *renderer);
                 agent.run_message(argent_ai::Message::user(correction), &mut sink)
             };
             match result {
@@ -171,9 +169,7 @@ mod tests {
         let mut renderer = Renderer::new(false);
         let outcome = agent.run(
             "give me the answer",
-            &mut crate::RendererSink {
-                renderer: &mut renderer,
-            },
+            &mut crate::RendererSink::new(&mut renderer),
         );
         assert!(
             matches!(outcome, Ok(FinishReason::Complete)),

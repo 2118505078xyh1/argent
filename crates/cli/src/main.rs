@@ -1165,14 +1165,17 @@ pub fn run(raw: &[String]) -> Result<i32> {
                         .collect(),
                 )
             };
+            let mut ttft_ms;
             let mut outcome = if let Some(sink) = &json_sink {
                 let mut sink = sink.clone_handle();
-                agent.run_message(message, &mut sink)
+                let outcome = agent.run_message(message, &mut sink);
+                ttft_ms = sink.clock.ms();
+                outcome
             } else {
-                let mut sink = RendererSink {
-                    renderer: &mut renderer,
-                };
-                agent.run_message(message, &mut sink)
+                let mut sink = RendererSink::new(&mut renderer);
+                let outcome = agent.run_message(message, &mut sink);
+                ttft_ms = sink.clock.ms();
+                outcome
             };
             // `--fallback-model`：只在"请求还没产出任何内容"时重试，历史里
             // 只有刚推入的用户消息。已经流出的半截回答不重放，避免重复。
@@ -1203,12 +1206,14 @@ pub fn run(raw: &[String]) -> Result<i32> {
                     agent.set_model(fallback);
                     outcome = if let Some(sink) = &json_sink {
                         let mut sink = sink.clone_handle();
-                        agent.continue_run(&mut sink)
+                        let outcome = agent.continue_run(&mut sink);
+                        ttft_ms = ttft_ms.or_else(|| sink.clock.ms());
+                        outcome
                     } else {
-                        let mut sink = RendererSink {
-                            renderer: &mut renderer,
-                        };
-                        agent.continue_run(&mut sink)
+                        let mut sink = RendererSink::new(&mut renderer);
+                        let outcome = agent.continue_run(&mut sink);
+                        ttft_ms = ttft_ms.or_else(|| sink.clock.ms());
+                        outcome
                     };
                 }
             }
@@ -1232,7 +1237,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
             // Only the messages this run produced are appended.
             let history = agent.history().to_vec();
             session.record_new(&history, before)?;
-            record_usage(&session, &agent);
+            record_usage(&session, &agent, ttft_ms);
             {
                 let usage = agent.usage();
                 let mut data = Json::obj();
@@ -1448,9 +1453,10 @@ fn run_repl(
             }
         }
         let before = agent.history().len();
-        let mut reason = {
-            let mut sink = RendererSink { renderer };
-            agent.run(&prompt, &mut sink)?
+        let (mut reason, mut ttft_ms) = {
+            let mut sink = RendererSink::new(renderer);
+            let reason = agent.run(&prompt, &mut sink)?;
+            (reason, sink.clock.ms())
         };
         if let Some(fallback) = fallback_model {
             if let FinishReason::Error(message) = &reason {
@@ -1462,15 +1468,17 @@ fn run_repl(
                         fallback
                     ));
                     agent.set_model(fallback);
-                    let mut sink = RendererSink { renderer };
-                    reason = agent.continue_run(&mut sink)?;
+                    let mut sink = RendererSink::new(renderer);
+                    let continued = agent.continue_run(&mut sink)?;
+                    ttft_ms = ttft_ms.or_else(|| sink.clock.ms());
+                    reason = continued;
                 }
             }
         }
         let history = agent.history().to_vec();
         session.record_new(&history, before)?;
         renderer.finish(&reason);
-        record_usage(session, agent);
+        record_usage(session, agent, ttft_ms);
         renderer.usage(agent.usage(), agent.requests());
         // The first run of the session gets a real title from the background
         // model. REPL has no worker loop to route through, so the title is
@@ -1508,14 +1516,25 @@ assistant: {}",
 }
 
 /// Append this turn's usage to the ledger, if the session has a path.
-fn record_usage(session: &SessionContext, agent: &argent_agent::Agent) {
+fn record_usage(
+    session: &SessionContext,
+    agent: &argent_agent::Agent,
+    ttft_ms: Option<u64>,
+) {
     let usage = agent.usage();
     let requests = agent.requests();
     let cost = agent.usage_cost();
     if session.path.as_os_str().is_empty() {
         return;
     }
-    let _ = argent_session::usage::record(&session.path, agent.model(), &usage, requests, cost);
+    let _ = argent_session::usage::record_with_ttft(
+        &session.path,
+        agent.model(),
+        &usage,
+        requests,
+        cost,
+        ttft_ms,
+    );
 }
 
 enum ReplAction {
@@ -1832,10 +1851,21 @@ attach it manually if you file an issue",
 /// Sink that prints events to stdout, for one-shot runs.
 struct RendererSink<'a> {
     renderer: &'a mut Renderer,
+    clock: argent_agent::TtftClock,
+}
+
+impl<'a> RendererSink<'a> {
+    fn new(renderer: &'a mut Renderer) -> RendererSink<'a> {
+        RendererSink {
+            renderer,
+            clock: argent_agent::TtftClock::new(),
+        }
+    }
 }
 
 impl<'a> EventSink for RendererSink<'a> {
     fn emit(&mut self, event: AgentEvent) {
+        self.clock.observe(&event);
         self.renderer.event(&event);
     }
 }
@@ -1848,11 +1878,16 @@ impl<'a> EventSink for RendererSink<'a> {
 struct JsonLinesSink {
     id: u64,
     out: std::sync::Arc<std::sync::Mutex<std::io::Stdout>>,
+    clock: argent_agent::TtftClock,
 }
 
 impl JsonLinesSink {
     fn new(id: u64, out: std::sync::Arc<std::sync::Mutex<std::io::Stdout>>) -> JsonLinesSink {
-        JsonLinesSink { id, out }
+        JsonLinesSink {
+            id,
+            out,
+            clock: argent_agent::TtftClock::new(),
+        }
     }
 
     /// `agent.run_message` 要一个 `&mut EventSink`；外层保留的 sink 只是
@@ -1861,6 +1896,7 @@ impl JsonLinesSink {
         JsonLinesSink {
             id: self.id,
             out: std::sync::Arc::clone(&self.out),
+            clock: argent_agent::TtftClock::new(),
         }
     }
 
@@ -1941,6 +1977,7 @@ fn error_line(message: &str) -> String {
 
 impl EventSink for JsonLinesSink {
     fn emit(&mut self, event: AgentEvent) {
+        self.clock.observe(&event);
         self.line(rpc::event_line(self.id, &event));
     }
 }

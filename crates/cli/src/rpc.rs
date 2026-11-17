@@ -125,6 +125,7 @@ fn error_line(id: u64, message: impl Into<String>) -> String {
 struct RpcSink {
     id: u64,
     out: Arc<Mutex<std::io::Stdout>>,
+    clock: argent_agent::TtftClock,
 }
 
 /// Context compaction for the RPC worker.
@@ -224,6 +225,7 @@ impl RpcSink {
 
 impl EventSink for RpcSink {
     fn emit(&mut self, event: AgentEvent) {
+        self.clock.observe(&event);
         self.write(event_line(self.id, &event));
     }
 }
@@ -264,6 +266,7 @@ fn handle(
             let mut sink = RpcSink {
                 id: request.id,
                 out: out.clone(),
+                clock: argent_agent::TtftClock::new(),
             };
             if let Some((before, after)) = compaction.apply(agent) {
                 sink.emit(AgentEvent::Notice(format!(
@@ -277,12 +280,13 @@ fn handle(
                     // The transcript lives in the session file, not in a private
                     // copy: a driver that reconnects must find this turn.
                     let _ = session.record_new(agent.history(), before);
-                    let _ = argent_session::usage::record(
+                    let _ = argent_session::usage::record_with_ttft(
                         std::path::Path::new(""),
                         agent.model(),
                         &agent.usage(),
                         agent.requests(),
                         agent.usage_cost(),
+                        sink.clock.ms(),
                     );
                     let mut data = Json::obj();
                     data.set("reason", Json::string(reason_name(&reason)));
