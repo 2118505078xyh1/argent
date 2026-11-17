@@ -8,3 +8,4 @@
 *.zip
 /llama-server.out
 /.tmp*
+node_modules/
