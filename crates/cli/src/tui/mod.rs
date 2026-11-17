@@ -1569,8 +1569,6 @@ struct App {
     body_user_row: Option<usize>,
     body_total: usize,
     frame_body_height: usize,
-    /// 锚定行的屏幕行号（最新一条你的消息）；不显示则 None。
-    anchor_row: Option<usize>,
     /// 屏幕上的折叠提示行号（body 行号减去滚动偏移）。
     visible_fold_rows: Vec<usize>,
     transcript: Transcript,
@@ -1638,7 +1636,6 @@ impl App {
             body_user_row: None,
             body_total: 0,
             frame_body_height: 0,
-            anchor_row: None,
             visible_fold_rows: Vec::new(),
             locale,
             statusline,
@@ -1813,12 +1810,9 @@ impl App {
     }
 
     fn handle_key(&mut self, worker: &Worker, key: Key) {
-        // 鼠标点击：点锚定行跳回最新一条你的消息；点折叠思考提示行展开/收起。
+        // 鼠标点击：点折叠思考提示行展开/收起。
         if let Key::MouseClick { row, .. } = key {
-            let row = row as usize;
-            if Some(row) == self.anchor_row {
-                self.jump_to_last_user();
-            } else if self.visible_fold_rows.contains(&row) {
+            if self.visible_fold_rows.contains(&(row as usize)) {
                 self.expand = !self.expand;
             }
             self.dirty = true;
@@ -2818,10 +2812,7 @@ impl App {
             None
         };
         let palette_height = palette.as_ref().map(|(_, shown)| *shown).unwrap_or(0);
-        // 最新一条你的消息钉在输入框上方：长回答/展开会把 body 挤出视口，
-        // 最老的一行（往往是你自己的消息）就看不见了。
-        let anchor = self.anchor_line(width);
-        let tail = 4 + usize::from(anchor.is_some());
+        let tail = 4;
         let body_height = height
             .saturating_sub(tail)
             .saturating_sub(palette_height)
@@ -2868,12 +2859,6 @@ impl App {
                 lines.push(self.palette_line(item, selected, width));
             }
         }
-        if let Some(anchor) = anchor {
-            self.anchor_row = Some(lines.len());
-            lines.push(anchor);
-        } else {
-            self.anchor_row = None;
-        }
         lines.push(input_top(width));
         lines.push(self.input_line(width));
         lines.push(separator(width));
@@ -2896,15 +2881,8 @@ impl App {
             _ => None,
         };
 
-        // 右侧：上下文占比/窗口 · ↑累计输入 ↓累计输出。
+        // 右侧：↑累计输入 ↓累计输出 · cache · 上下文占比/窗口 · live · avg。
         let mut segments: Vec<String> = Vec::new();
-        if self.metrics.context_max > 0 {
-            segments.push(format!(
-                "{:.1}%/{}",
-                self.metrics.context_fraction() * 100.0,
-                compact_window(self.metrics.context_max)
-            ));
-        }
         let up = self.metrics.session_prompt_tokens;
         let down = self.metrics.session_completion_tokens;
         if up + down > 0 {
@@ -2920,14 +2898,17 @@ impl App {
                 segments.push(format!("${:.4}", cost));
             }
         }
-        let rate = self.metrics.rate();
-        if rate > 0.0 {
+        if self.metrics.context_max > 0 {
             segments.push(format!(
-                "{:.0} {}",
-                rate,
-                argent_i18n::t(self.locale, "tui.tok_s")
+                "{:.1}%/{}",
+                self.metrics.context_fraction() * 100.0,
+                compact_window(self.metrics.context_max)
             ));
         }
+        // 两个速度：live 是正在进行的这一轮的瞬时速度，avg 是整段的平均速度。
+        let tok_s = argent_i18n::t(self.locale, "tui.tok_s");
+        segments.push(format!("live {:.0} {}", self.metrics.live_rate(), tok_s));
+        segments.push(format!("avg {:.0} {}", self.metrics.average_rate(), tok_s));
         // statusline 配置的附加段接在默认段之后：session / model / thinking / cwd。
         for segment in &self.statusline {
             match segment.as_str() {
@@ -2968,23 +2949,24 @@ impl App {
         if let Some(hint) = hint {
             left = left.push(Span::new(hint, Style::dim(theme.dim)));
         } else if let Some(ready) = &self.ready {
-            left = left
-                .push(Span::new(ready.model.clone(), Style::dim(theme.dim)))
-                .push(dot.clone())
-                .push(Span::new(
-                    ready.provider.clone(),
-                    Style::dim(theme.dim),
-                ));
-            // cwd 吃掉剩余宽度，过长的路径裁掉。
+            // cwd · model · thinking —— 顺序是用户要的工作目录在前。
+            // 过长的路径吃掉剩余宽度，裁掉尾部。
             let room = width
-                .saturating_sub(left.width() + text_width(&right) + 2)
+                .saturating_sub(60 + text_width(&right))
                 .max(6);
             left = left
-                .push(dot.clone())
                 .push(Span::new(
                     clip_to_width(&ready.cwd, room),
                     Style::dim(theme.dim),
+                ))
+                .push(dot.clone())
+                .push(Span::new(ready.model.clone(), Style::dim(theme.dim)));
+            if !self.metrics.thinking.is_empty() {
+                left = left.push(dot.clone()).push(Span::new(
+                    self.metrics.thinking.clone(),
+                    Style::dim(theme.dim),
                 ));
+            }
             if self.working {
                 left = left
                     .push(Span::new("  ", Style::plain()))
@@ -3000,32 +2982,6 @@ impl App {
             }
         }
         fill_between(left, right, width, Style::dim(theme.dim))
-    }
-
-    /// 输入框上方的锚定行：始终显示最新一条你的消息（点它/Esc 可跳回）。
-    fn anchor_line(&self, width: usize) -> Option<Line> {
-        let text = self
-            .transcript
-            .entries()
-            .iter()
-            .rev()
-            .find_map(|entry| match entry {
-                Entry::User(text) => Some(text.replace('\n', " ")),
-                _ => None,
-            })?;
-        let budget = width.saturating_sub(6).max(8);
-        Some(
-            Line::new()
-                .push(Span::new(
-                    USER_MARK,
-                    Style::bold(crate::theme::current().accent),
-                ))
-                .push(Span::new(" 你: ", Style::dim(crate::theme::current().dim)))
-                .push(Span::new(
-                    clip_to_width(&text, budget),
-                    Style::dim(crate::theme::current().dim),
-                )),
-        )
     }
 
     /// 把最后一条用户消息顶到正文可视区顶部（点击锚定行 / 空闲时按 Esc）。
@@ -3118,6 +3074,7 @@ impl App {
         }
         let mut fold_rows: Vec<usize> = Vec::new();
         let mut user_row: Option<usize> = None;
+        let mut seen_any = false;
         let mut groups: Vec<Group> = Vec::new();
         for entry in self.transcript.entries() {
             match entry {
@@ -3135,6 +3092,12 @@ impl App {
         }
         let mut lines = Vec::new();
         for group in groups {
+            // 输入/思考/回答/工具之间紧凑排布；只有上一轮结束、下一轮
+            // 的用户消息来了才空一行，把两轮分开。
+            if seen_any && matches!(&group, Group::User(_)) {
+                lines.push(Line::plain(""));
+            }
+            seen_any = true;
             match group {
                 Group::User(text) => {
                     user_row = Some(lines.len());
@@ -3248,7 +3211,6 @@ impl App {
         }
         if lines.is_empty() {
             // 空会话不写引导文字：输入框就是入口，占一行空白即可。
-            lines.push(Line::plain(""));
         }
         (lines, fold_rows, user_row)
     }
@@ -4961,22 +4923,6 @@ mod cursor_tests {
     }
 
     #[test]
-    fn the_anchor_line_pins_the_latest_user_message() {
-        let mut app = app();
-        app.transcript.push_user("帮我重构这个函数");
-        let frame = app.frame(80, 24);
-        let plain: Vec<String> = frame.iter().map(|l| strip_ansi(l)).collect();
-        // 输入框是最底下那个以 › 开头但不是锚定行的行。
-        let input_pos = plain
-            .iter()
-            .rposition(|l| l.starts_with("› ") && !l.contains("你:"))
-            .expect("input row");
-        // 锚定行在输入框与细分隔线再上面一行：…body…, anchor, ─, input, ─, status
-        assert_eq!(app.anchor_row, Some(input_pos - 2));
-        assert!(plain[input_pos - 2].contains("你: 帮我重构这个函数"), "{}", plain[input_pos - 2]);
-    }
-
-    #[test]
     fn the_status_line_is_one_line_with_context_ratio_and_totals() {
         let mut app = app();
         app.metrics.context_max = 960_000;
@@ -4991,6 +4937,8 @@ mod cursor_tests {
             .collect();
         assert!(text.contains("19.7%/960k"), "{text}");
         assert!(text.contains("↑19M ↓1.6M"), "{text}");
+        assert!(text.contains("live "), "{text}");
+        assert!(text.contains("avg "), "{text}");
         // 单行：不允许出现换行。
         assert_eq!(text.matches('\n').count(), 0);
     }
