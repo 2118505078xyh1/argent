@@ -25,8 +25,8 @@ CLI/TUI 路径完全不启动浏览器引擎；原生 iced 前端（`argent-nati
 
 | 进程 | 二进制 | 工作集 |
 |---|---:|---:|
-| `argent tui`（全屏） | 5.19 MB | 8.6 MB |
-| `argent-native`（iced + tiny-skia） | 6.4 MB | 约 32 MB |
+| `argent tui`（全屏） | 5.46 MB | 8.6 MB |
+| `argent-native`（iced + tiny-skia） | 6.96 MB | 约 32 MB |
 
 ## argent 独有的七个能力
 
