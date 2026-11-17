@@ -160,6 +160,7 @@ impl RawModeGuard {
         const LINE_INPUT: u32 = 0x0002;
         const ECHO_INPUT: u32 = 0x0004;
         const QUICK_EDIT_MODE: u32 = 0x0040;
+        const ENABLE_MOUSE_INPUT: u32 = 0x0010;
         const EXTENDED_FLAGS: u32 = 0x0080;
         const VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
@@ -192,9 +193,11 @@ impl RawModeGuard {
             // Turn off line buffering and echo: the UI draws every character
             // itself, so a second echo would double everything on screen.
             raw &= !(LINE_INPUT | ECHO_INPUT | PROCESSED_INPUT);
-            // Quick-edit 必须保留：框选复制靠它。思考块展开用 Ctrl+E，
-            // 不向终端要鼠标事件（?1000h 会把普通拖拽变成点击）。
-            raw |= QUICK_EDIT_MODE | EXTENDED_FLAGS;
+            // 鼠标由 TUI 自己接管：关掉控制台 Quick-Edit、打开鼠标输入，
+            // 拖拽选中和复制在 App 里实现（等价于 pi 的 fullscreen 模式），
+            // 思考块整块可点，选中文字仍可复制。
+            let _ = QUICK_EDIT_MODE;
+            raw |= ENABLE_MOUSE_INPUT | EXTENDED_FLAGS;
             // Windows Terminal / ConPTY 靠 VT input 把键盘字节流转成按键记录；
             // 关掉它会让 ReadConsoleInputW 在伪终端里收不到任何输入。
             raw |= VIRTUAL_TERMINAL_INPUT;
@@ -344,15 +347,16 @@ pub fn cursor_position(timeout: Duration) -> Option<(u16, u16)> {
     Some((row.parse().ok()?, column.parse().ok()?))
 }
 
-/// Turn on SGR mouse reporting: presses, releases and positions.
+/// Turn on SGR mouse reporting: presses, releases and drag positions.
 pub fn enable_mouse() {
-    // 1000: button events, 1006: SGR extended coordinates.
-    write_raw("\x1b[?1000h\x1b[?1006h");
+    // 1000: button events, 1002: button-motion (drag), 1006: SGR coordinates.
+    // 1004 焦点事件会让粘贴看起来像 Esc，不开。
+    write_raw("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
 }
 
 /// Turn mouse reporting off.
 pub fn disable_mouse() {
-    write_raw("\x1b[?1006l\x1b[?1000l");
+    write_raw("\x1b[?1006l\x1b[?1002l\x1b[?1000l");
 }
 
 /// Move the cursor up `rows` lines.

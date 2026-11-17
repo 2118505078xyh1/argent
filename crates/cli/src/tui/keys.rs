@@ -25,8 +25,12 @@ pub enum Key {
     /// 走虚拟键码记录——两者能区分：方向键翻输入历史，滚轮滚动会话。
     ScrollUp,
     ScrollDown,
-    /// 鼠标左键点击（屏幕行/列，0 基）。用来展开折叠的思考。
+    /// 鼠标左键（屏幕行/列，0 基）。按下→拖→松开由 TUI 自己处理：
+    /// 原地松开 = 点击（展开/收起思考块），拖动 = 选中并复制文字。
     MouseClick { row: u16, col: u16 },
+    MousePress { row: u16, col: u16 },
+    MouseDrag { row: u16, col: u16 },
+    MouseRelease { row: u16, col: u16 },
     Home,
     End,
     PageUp,
@@ -333,15 +337,25 @@ fn parse_sgr_mouse(body: &str, press: bool) -> Option<Key> {
     if parts.next().is_some() {
         return None;
     }
+    let row = y.saturating_sub(1);
+    let col = x.saturating_sub(1);
     match button {
         64 => Some(Key::ScrollUp),
         65 => Some(Key::ScrollDown),
-        // 左键按下（release 是 M→m 变体，press 只认 M）。
-        0 if press => Some(Key::MouseClick {
-            row: y.saturating_sub(1),
-            col: x.saturating_sub(1),
-        }),
-        _ => None,
+        _ => {
+            // SGR 1002：拖动时 button 的第 5 位（32）置位。
+            let motion = button & 0x20 != 0;
+            if button & !0x20 != 0 {
+                return None;
+            }
+            if motion {
+                Some(Key::MouseDrag { row, col })
+            } else if press {
+                Some(Key::MousePress { row, col })
+            } else {
+                Some(Key::MouseRelease { row, col })
+            }
+        }
     }
 }
 
@@ -396,6 +410,7 @@ fn spawn_input_windows(tx: Sender<Key>) {
         const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6;
         const KEY_EVENT: u16 = 1;
         const MOUSE_EVENT: u16 = 2;
+        const MOUSE_MOVED: u32 = 0x0002;
         const MOUSE_WHEELED: u32 = 0x0004;
         const WAIT_OBJECT_0: u32 = 0;
         const WAIT_TIMEOUT: u32 = 258;
@@ -444,13 +459,19 @@ fn spawn_input_windows(tx: Sender<Key>) {
                             } else {
                                 Some(Key::ScrollDown)
                             }
-                        } else if mouse.event_flags == 0 && (mouse.button_state & 0x0001) != 0 {
-                            Some(Key::MouseClick {
-                                row: mouse.mouse_y.max(0) as u16,
-                                col: mouse.mouse_x.max(0) as u16,
-                            })
                         } else {
-                            None
+                            let row = mouse.mouse_y.max(0) as u16;
+                            let col = mouse.mouse_x.max(0) as u16;
+                            let held = mouse.button_state & 0x0001 != 0;
+                            if held && mouse.event_flags & MOUSE_MOVED != 0 {
+                                Some(Key::MouseDrag { row, col })
+                            } else if held {
+                                Some(Key::MousePress { row, col })
+                            } else if mouse.event_flags & MOUSE_MOVED == 0 {
+                                Some(Key::MouseRelease { row, col })
+                            } else {
+                                None
+                            }
                         };
                         if let Some(key) = key {
                             if tx.send(key).is_err() {

@@ -226,6 +226,9 @@ pub fn key_name(key: &Key) -> String {
         Key::PasteEnd => "paste-end".to_string(),
         Key::Paste(_) => "paste".to_string(),
         Key::MouseClick { .. } => "mouse-click".to_string(),
+        Key::MousePress { .. } => "mouse-press".to_string(),
+        Key::MouseDrag { .. } => "mouse-drag".to_string(),
+        Key::MouseRelease { .. } => "mouse-release".to_string(),
         #[cfg(any(not(windows), test))]
         Key::Ignore => "ignore".to_string(),
     }

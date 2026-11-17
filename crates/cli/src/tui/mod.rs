@@ -1591,6 +1591,10 @@ struct App {
     /// 缓冲后按帧放出，视觉上才是逐字显示。
     animate_stream: bool,
     pending_text: std::collections::VecDeque<char>,
+    /// 自管的鼠标拖选：起点、当前终点（屏幕行列，0 基）。
+    selection: Option<((u16, u16), (u16, u16))>,
+    /// 最近一帧的纯文本，松开鼠标时据此取选中文字。
+    frame_text: Vec<String>,
     /// 每轮结束追加一行 dim 摘要（model · 时长 · tok/s · ttft），
     /// 值为 (该轮结束时的 entries 数, 文本)：渲染到锚点立即打印，
     /// 而不是全部堆在正文尾巴。重开会话（SessionOpened 重建正文）时清空。
@@ -1667,6 +1671,8 @@ impl App {
             thinking_block_last: None,
             animate_stream: false,
             pending_text: std::collections::VecDeque::new(),
+            selection: None,
+            frame_text: Vec::new(),
             turn_summaries: Vec::new(),
             locale,
             statusline,
@@ -1901,6 +1907,40 @@ impl App {
         hash
     }
 
+    /// 点思考块任意一行（标题或展开后的正文）都能切换这一块。
+    fn toggle_thinking_at(&mut self, row: u16) {
+        if let Some(&(_, ordinal)) = self
+            .visible_fold_rows
+            .iter()
+            .find(|&&(screen_row, _)| screen_row == row)
+        {
+            if !self.expanded_thinking.remove(&ordinal) {
+                self.expanded_thinking.insert(ordinal);
+            }
+            self.dirty = true;
+        }
+    }
+
+    /// 从最近一帧的纯文本里切出选中区间（按终端列，中文占两列）。
+    fn selected_text(&self, start: (u16, u16), end: (u16, u16)) -> String {
+        let (top, bottom) = if start <= end { (start, end) } else { (end, start) };
+        let mut out = String::new();
+        for row in top.0..=bottom.0 {
+            let Some(line) = self.frame_text.get(row as usize) else { continue };
+            let from = if row == top.0 { top.1 as usize } else { 0 };
+            let to = if row == bottom.0 {
+                bottom.1 as usize + 1
+            } else {
+                usize::MAX
+            };
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&slice_cells(line, from, to));
+        }
+        out.trim_end().to_string()
+    }
+
     /// 每帧放一小段缓冲字符；积压越多放得越快，避免网关一次给一大块时
     /// 答案落后于完成。30fps 下 10 字积压 → 每帧 3 字，很快追平。
     fn pump_stream_text(&mut self) {
@@ -1954,19 +1994,44 @@ impl App {
     }
 
     fn handle_key(&mut self, worker: &Worker, key: Key) {
-        // 鼠标点击：点思考标题行展开/收起那一个思考块。
-        if let Key::MouseClick { row, .. } = key {
-            if let Some(&(_, ordinal)) = self
-                .visible_fold_rows
-                .iter()
-                .find(|&&(screen_row, _)| screen_row == row)
-            {
-                if !self.expanded_thinking.remove(&ordinal) {
-                    self.expanded_thinking.insert(ordinal);
-                }
+        // 鼠标：按下→拖动→松开由 TUI 接管（pi 的 fullscreen 模式）。
+        // 原地松开 = 点击思考块；拖出距离 = 复制选中文字。
+        match key {
+            Key::MousePress { row, col } => {
+                self.selection = Some(((row, col), (row, col)));
                 self.dirty = true;
+                return;
             }
-            return;
+            Key::MouseDrag { row, col } => {
+                if let Some((start, _)) = self.selection {
+                    self.selection = Some((start, (row, col)));
+                    self.dirty = true;
+                }
+                return;
+            }
+            Key::MouseRelease { row, col } => {
+                let start = self.selection.map(|(first, _)| first).unwrap_or((row, col));
+                self.selection = None;
+                self.dirty = true;
+                if start == (row, col) {
+                    self.toggle_thinking_at(row);
+                } else {
+                    let text = self.selected_text(start, (row, col));
+                    if !text.trim().is_empty() {
+                        match argent_core::clipboard::copy_text(&text) {
+                            Ok(()) => self.set_status(format!("copied {} chars", text.chars().count())),
+                            Err(error) => self.set_status(format!("copy failed: {}", error)),
+                        }
+                    }
+                }
+                return;
+            }
+            Key::MouseClick { row, .. } => {
+                self.toggle_thinking_at(row);
+                self.dirty = true;
+                return;
+            }
+            _ => {}
         }
         if let Some(pending) = self.pending.take() {
             match key {
@@ -3014,6 +3079,23 @@ impl App {
         lines.push(separator(width));
         lines.push(self.status_line(width));
 
+        // 鼠标拖选：整行反显作为反馈，并留一份纯文本供松开时复制。
+        if let Some((start, end)) = self.selection {
+            let (top, bottom) = if start.0 <= end.0 {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            for row in top.0..=bottom.0 {
+                if let Some(line) = lines.get_mut(row as usize) {
+                    for span in &mut line.spans {
+                        span.style.reverse = true;
+                    }
+                }
+            }
+        }
+        self.frame_text = lines.iter().map(|line| line.plain_text()).collect();
+
         // 整帧带底色：终端自带的背景不可控，显式填一层才不会露底。
         let base = Style::plain().with_bg(crate::theme::current().background);
         lines
@@ -3353,11 +3435,15 @@ impl App {
                         // 还在流式思考：只写 Thinking，不把半成品摊在正文里。
                         header = header.push(Span::new("Thinking", dim));
                     }
-                    // 标题行的 body 行号＋块序号给点击展开/收起用。
+                    // 与 pi 的 MouseRegion 一致：标题和展开后的每一行都可点，
+                    // 点任意一行都能把这一块收起/展开。
                     fold_rows.push((lines.len(), ordinal));
                     lines.push(header);
                     if expanded {
-                        lines.extend(wrapped(&text, width, "  ", "  ", dim));
+                        for line in wrapped(&text, width, "  ", "  ", dim) {
+                            fold_rows.push((lines.len(), ordinal));
+                            lines.push(line);
+                        }
                     }
                 }
                 Group::Other(entry) => match entry {
@@ -3626,7 +3712,8 @@ impl App {
 /// 只做终端里真正提升可读性的几件事，不追求完整 markdown。
 fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) -> Vec<Line> {
     let theme = crate::theme::current();
-    // 纯黑底上的代码块：只比底色亮一丁点的深灰，铺出区块感。
+    // pi 的语义配色：标题黄、行内码紫、代码块绿、引用灰；黑底上代码块
+    // 另铺一档深灰，保留"这是一块代码"的区块感。
     let code_bg = Color::Fixed(235);
     let mut out: Vec<Line> = Vec::new();
     let mut in_code = false;
@@ -3644,15 +3731,23 @@ fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) -> Vec<Line
             let pad = body_width.saturating_sub(text_width(&clipped));
             out.push(Line::new().push(Span::new(
                 format!("  {}{}", clipped, " ".repeat(pad)),
-                Style::fg(theme.dim).with_bg(code_bg),
+                Style::fg(theme.success).with_bg(code_bg),
             )));
             first_line = false;
             continue;
         }
         let (spans, _) = inline_spans(trimmed, theme);
         let spans: Vec<Span> = if trimmed.starts_with('#') {
+            // pi: mdHeading = yellow（不一定要紫）
             let body = trimmed.trim_start_matches('#').trim_start();
-            vec![Span::new(body.to_string(), Style::bold(theme.accent))]
+            vec![Span::new(body.to_string(), Style::bold(theme.warning))]
+        } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+            // pi: mdListBullet = violet/accent
+            let mut decorated = vec![Span::new("- ", Style::fg(theme.accent))];
+            decorated.extend(spans.into_iter().skip(1));
+            decorated
+        } else if trimmed.starts_with("> ") {
+            vec![Span::new(trimmed.to_string(), Style::dim(theme.dim))]
         } else {
             spans
         };
@@ -3666,13 +3761,61 @@ fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) -> Vec<Line
     out
 }
 
-/// 行内样式：`code` 用高亮色，**bold** 加粗，其余原样。
+/// 行内样式：`code` 用强调色（pi 的 mdCode=violet），**bold** 加粗，
+/// `[文字](url)` 的文字用第二强调色、URL 用 dim，其余原样。
 fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span>, bool) {
     let mut spans: Vec<Span> = Vec::new();
     let mut buf = String::new();
     let mut chars = text.chars().peekable();
     let mut saw_style = false;
     while let Some(ch) = chars.next() {
+        if ch == '[' {
+            // [label](url)：链接文字与 URL 分色，失配时按普通文本处理。
+            let mut label = String::new();
+            let mut matched_label = false;
+            while let Some(next) = chars.next() {
+                if next == ']' {
+                    matched_label = true;
+                    break;
+                }
+                label.push(next);
+            }
+            if matched_label && chars.peek() == Some(&'(') {
+                chars.next();
+                let mut url = String::new();
+                let mut matched_url = false;
+                while let Some(next) = chars.next() {
+                    if next == ')' {
+                        matched_url = true;
+                        break;
+                    }
+                    url.push(next);
+                }
+                if matched_url {
+                    if !buf.is_empty() {
+                        spans.push(Span::new(std::mem::take(&mut buf), Style::plain()));
+                    }
+                    spans.push(Span::new(label, Style::fg(theme.secondary)));
+                    if !url.is_empty() {
+                        spans.push(Span::new(format!(" ({})", url), Style::dim(theme.dim)));
+                    }
+                    saw_style = true;
+                    continue;
+                }
+                // 括号没闭合：把已吃掉的字符原样吐回去。
+                buf.push('[');
+                buf.push_str(&label);
+                buf.push_str("](");
+                buf.push_str(&url);
+                continue;
+            }
+            buf.push('[');
+            buf.push_str(&label);
+            if matched_label {
+                buf.push(']');
+            }
+            continue;
+        }
         if ch == '`' {
             if !buf.is_empty() {
                 spans.push(Span::new(std::mem::take(&mut buf), Style::plain()));
@@ -3685,7 +3828,7 @@ fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span>, bool) {
                 code.push(next);
             }
             if !code.is_empty() {
-                spans.push(Span::new(code, Style::fg(theme.warning)));
+                spans.push(Span::new(code, Style::fg(theme.accent)));
                 saw_style = true;
             }
             continue;
@@ -3847,6 +3990,23 @@ fn format_thought_duration(d: std::time::Duration) -> String {
     }
 }
 
+/// 按终端列切一段文本（CJK 宽度与 `text_width` 保持一致）。
+fn slice_cells(text: &str, from: usize, to: usize) -> String {
+    let mut out = String::new();
+    let mut col = 0usize;
+    for ch in text.chars() {
+        let width = text_width(&ch.to_string());
+        if col >= from && col < to {
+            out.push(ch);
+        }
+        col += width;
+        if col >= to {
+            break;
+        }
+    }
+    out
+}
+
 fn compact_count(n: u64) -> String {
     if n < 1000 {
         return n.to_string();
@@ -3974,8 +4134,8 @@ pub fn run_remote(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 不开鼠标上报：框选复制必须能用（?1000h 会把普通拖拽变成点击）。
-    // 思考块展开用 Ctrl+E。
+    // 鼠标由 TUI 接管：点击展开/收起思考块，拖拽选中复制（pi fullscreen 模式）。
+    terminal::enable_mouse();
 
     let locale = argent_i18n::Locale::from_env();
     let (key_tx, key_rx) = mpsc::channel();
@@ -4067,6 +4227,7 @@ pub fn run_remote(
     }
 
     app.flush_stream_text();
+    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     drop(guard);
@@ -4108,8 +4269,8 @@ pub fn run(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 不开鼠标上报：框选复制必须能用（?1000h 会把普通拖拽变成点击）。
-    // 思考块展开用 Ctrl+E。
+    // 鼠标由 TUI 接管：点击展开/收起思考块，拖拽选中复制（pi fullscreen 模式）。
+    terminal::enable_mouse();
 
     let locale = argent_i18n::Locale::from_env();
     let statusline = config.statusline.clone();
@@ -4232,6 +4393,7 @@ pub fn run(
     };
     let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
     app.flush_stream_text();
+    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
@@ -5305,10 +5467,11 @@ mod cursor_tests {
         let expanded = joined(&mut app);
         assert!(expanded.contains("Thinking"), "展开后仍有标题：{}", expanded);
         assert!(expanded.contains("思考 3"), "点击后正文可见：{}", expanded);
-        let (row, _) = app.visible_fold_rows[0];
-        app.handle_key(&worker, Key::MouseClick { row, col: 0 });
+        // 点展开后的正文行（不是标题）也要能收起——整块可点。
+        let (body_row, _) = app.visible_fold_rows.last().copied().expect("content row");
+        app.handle_key(&worker, Key::MouseClick { row: body_row, col: 0 });
         let collapsed = joined(&mut app);
-        assert!(!collapsed.contains("思考 3"), "再点一次应收起：{}", collapsed);
+        assert!(!collapsed.contains("思考 3"), "点正文应收起：{}", collapsed);
     }
 
     #[test]
@@ -5339,6 +5502,15 @@ mod cursor_tests {
         app.flush_stream_text();
         let full = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
         assert!(full.contains("你好世界"), "flush 后全部落盘：{}", full);
+    }
+
+    #[test]
+    fn drag_selection_slices_by_terminal_columns() {
+        let mut app = app();
+        app.frame_text = vec!["abc 中文".to_string(), "second".to_string()];
+        assert_eq!(app.selected_text((0, 1), (0, 5)), "bc 中");
+        assert_eq!(app.selected_text((0, 4), (1, 2)), "中文\nsec");
+        assert_eq!(app.selected_text((1, 2), (1, 2)), "c");
     }
 
     #[test]
