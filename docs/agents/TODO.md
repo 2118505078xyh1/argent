@@ -32,7 +32,7 @@
 - [x] **输入区编辑能力**
   - ←/→/Home/End/Delete；Ctrl+A/K/U/W；Ctrl+←/→ 按词移动；Ctrl+Z/Ctrl+Y 撤销/重做（100 步）。
   - 多行软折行（最多 4 行，窗口跟随光标，帧高不变）。
-  - 仍待补：鼠标定位光标。
+  - [x] 鼠标定位光标：按下点落在输入区即移动光标，松开不触发正文选择/复制。
 - [x] **`/session` 面板继续补齐**
   - 显示 model/thinking/cwd/session id、最后错误、缓存命中、上下文占用。
   - 操作项：rename/copy path/tree/compact/resume；显示 last error 与上下文占用。
@@ -60,7 +60,9 @@
   - 修了 `--workspace` 未被 `cwd_from` 识别的 bug。
 - [x] **prompt cache warmer**
   - `cacheWarming: "streaming"` 在每轮结束用 `max_tokens=1` 保活；支持 `ARGENT_CACHE_WARMING` 覆盖。
-  - 仍待补：空闲 TTL 定时器与 warm 成本账本（当前实现不启动后台线程）。
+  - [x] warm 成本账本：暖请求的 token 折进 `agent.usage()`（usage.jsonl/成本可见），`warm_requests()` 单独计数。
+  - 空闲 TTL 定时器**不做**：需要把 provider 改成跨线程共享并管理线程生命周期，
+    而空闲期反复重暖是纯烧 token 换不确定收益；每轮结束暖一次已覆盖 TTL 窗口。
 - [x] **Skills/commands 发现可视**
   - TUI `/skills`、`/commands` 列出名称、来源、优先级、冲突。
   - 参考：ZCode 的 settings/skills 管理。

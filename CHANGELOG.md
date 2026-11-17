@@ -3,6 +3,16 @@
 All notable changes to argent are documented here. The format is a loose
 Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
+## Unreleased
+
+- **Mouse caret placement in the input area.** A press inside the input
+  rows moves the cursor to the clicked cell (CJK cells included); release
+  no longer leaks into transcript selection, copy or thinking toggles.
+- **Cache-warm spend is in the ledger.** The `cacheWarming` keep-alive
+  request is billed by the provider but was invisible in the usage
+  totals; its tokens now fold into `usage()` (so `usage.jsonl` and cost
+  show them) and `warm_requests()` counts them separately.
+
 ## 0.2.0 — 2026-11-17
 
 A compression of everything learned from the first release: smaller models

@@ -335,6 +335,9 @@ pub struct Agent {
     followups: Arc<Mutex<VecDeque<String>>>,
     /// Token totals the provider has reported for this session.
     usage: Usage,
+    /// How many cache-warming requests went out. Warm spend folds into
+    /// `usage` so the ledger sees it; the count keeps it attributable.
+    warm_requests: u64,
     /// Prompt tokens the last completed request reported. Every request
     /// resends the whole conversation, so this is the provider's own measure
     /// of the context size — the heuristic estimate can drift 40%+ from it.
@@ -384,6 +387,7 @@ impl Agent {
             usage: Usage::default(),
             last_prompt_tokens: 0,
             requests: 0,
+            warm_requests: 0,
             run_started: None,
             history_tokens: 0,
             schema_cache: None,
@@ -444,7 +448,9 @@ impl Agent {
 
     /// One minimal request against the current history so the provider's
     /// prompt cache does not go cold between runs. A failure here is noise:
-    /// warming is an optimization, never a turn of its own.
+    /// warming is an optimization, never a turn of its own. The provider
+    /// bills the request like any other, so its usage folds into the session
+    /// totals and the count of warm requests is kept separately.
     fn warm_cache(&mut self) {
         if self.config.cache_warming != CacheWarming::Streaming {
             return;
@@ -459,9 +465,12 @@ impl Agent {
             ChatRequest::new(self.config.model.clone(), Vec::new()).with_wire_messages(wire);
         request.max_tokens = Some(1);
         if let Ok(events) = self.provider.chat(&request) {
+            self.warm_requests += 1;
             for event in events {
-                if event.is_err() {
-                    break;
+                match event {
+                    Ok(StreamEvent::Usage(usage)) => self.usage.add(usage),
+                    Ok(_) => {}
+                    Err(_) => break,
                 }
             }
         }
@@ -534,6 +543,12 @@ impl Agent {
     /// How many model requests this session made.
     pub fn requests(&self) -> u64 {
         self.requests
+    }
+
+    /// How many cache-warming requests went out this run. Their token cost
+    /// is already inside [`Self::usage`]; the count keeps it attributable.
+    pub fn warm_requests(&self) -> u64 {
+        self.warm_requests
     }
 
     /// Estimated spend for this session, when the budget carries prices.
@@ -666,6 +681,7 @@ impl Agent {
         self.current_turn = 0;
         self.usage = Usage::default();
         self.requests = 0;
+        self.warm_requests = 0;
         self.run_started = None;
         self.abort.reset();
         self.effort_state = None;
@@ -1979,6 +1995,32 @@ mod tests {
         let reason = agent.run("hello", &mut sink).expect("run");
         assert_eq!(reason, FinishReason::Complete);
         assert_eq!(agent.history().len(), 2);
+    }
+
+    #[test]
+    fn a_warm_request_bills_into_the_session_usage() {
+        let _guard = run_lock();
+        let mut agent = agent_with(vec![Message::assistant("all done")]);
+        agent.config.cache_warming = CacheWarming::Streaming;
+        let mut sink = crate::events::CollectingSink::default();
+        agent.run("hello", &mut sink).expect("run");
+        assert_eq!(agent.warm_requests(), 1);
+        // 主请求 10/5（ScriptedProvider 固定上报），暖请求同样 10/5。
+        let usage = agent.usage();
+        assert_eq!(usage.prompt_tokens, 20);
+        assert_eq!(usage.completion_tokens, 10);
+    }
+
+    #[test]
+    fn warming_off_stays_out_of_the_usage_totals() {
+        let _guard = run_lock();
+        let mut agent = agent_with(vec![Message::assistant("all done")]);
+        let mut sink = crate::events::CollectingSink::default();
+        agent.run("hello", &mut sink).expect("run");
+        assert_eq!(agent.warm_requests(), 0);
+        let usage = agent.usage();
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 5);
     }
 
     #[test]
