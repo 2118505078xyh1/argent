@@ -1557,6 +1557,8 @@ struct BodyCache {
     fold_rows: Vec<usize>,
     /// 最后一条用户消息在 body 里的首行行号。
     user_row: Option<usize>,
+    /// 构建时有多少条摘要；摘要追加了正文尾部不能复用缓存。
+    summaries: usize,
 }
 
 struct App {
@@ -1577,6 +1579,9 @@ struct App {
     frame_body_height: usize,
     /// 屏幕上的折叠提示行号（body 行号减去滚动偏移）。
     visible_fold_rows: Vec<usize>,
+    /// 每轮结束追加一行 dim 摘要（model · 时长 · tok/s · ttft）；
+    /// 重开会话（SessionOpened 重建正文）时清空。
+    turn_summaries: Vec<String>,
     transcript: Transcript,
     metrics: Metrics,
     ready: Option<ReadyInfo>,
@@ -1643,6 +1648,7 @@ impl App {
             body_total: 0,
             frame_body_height: 0,
             visible_fold_rows: Vec::new(),
+            turn_summaries: Vec::new(),
             locale,
             statusline,
             bindings,
@@ -1713,6 +1719,7 @@ impl App {
                 for entry in entries {
                     self.transcript.push_entry(entry);
                 }
+                self.turn_summaries.clear();
                 self.scroll = 0;
             }
             UiEvent::Agent(event) => {
@@ -1735,7 +1742,20 @@ impl App {
             } => {
                 self.working = false;
                 self.queued = self.queued.saturating_sub(1);
+                let elapsed = self.metrics.elapsed();
+                let ttft = self.metrics.ttft();
                 self.metrics.finish_turn(usage, requests);
+                // 摘要行：模型 · 时长 · tok/s · ttft。没有真调用模型（hook 中止等）不打印。
+                if usage.total_tokens > 0 || ttft.is_some() {
+                    if let Some(ready) = &self.ready {
+                        self.turn_summaries.push(Self::turn_summary_text(
+                            &ready.model,
+                            elapsed,
+                            usage.completion_tokens,
+                            ttft,
+                        ));
+                    }
+                }
                 // An Alt+Enter follow-up starts immediately after the run
                 // that just finished; a later UiEvent pass sends it (the
                 // worker is not reachable inside this match arm).
@@ -1773,6 +1793,7 @@ impl App {
                 for entry in entries {
                     self.transcript.push_entry(entry);
                 }
+                self.turn_summaries.clear();
                 self.scroll = 0;
             }
             UiEvent::Models(models) => {
@@ -2879,7 +2900,7 @@ impl App {
     }
 
     fn status_line(&mut self, width: usize) -> Line {
-        // 一行装全部：模型 · provider · cwd | 上下文占比/窗口 · ↑↓累计 · cache · cost · tok/s。
+        // 一行装全部：模型 · provider · cwd | 上下文占比/窗口 · ↑↓累计 · cache · cost。
         let theme = crate::theme::current();
         let dot = Span::new(" · ", Style::dim(theme.dim));
         let hint: Option<String> = match &self.status {
@@ -2887,7 +2908,7 @@ impl App {
             _ => None,
         };
 
-        // 右侧：↑累计输入 ↓累计输出 · cache · 上下文占比/窗口 · live · avg。
+        // 右侧：↑累计输入 ↓累计输出 · cache · 上下文占比/窗口 · cost。
         let mut segments: Vec<String> = Vec::new();
         let up = self.metrics.session_prompt_tokens;
         let down = self.metrics.session_completion_tokens;
@@ -2911,12 +2932,6 @@ impl App {
                 compact_window(self.metrics.context_max)
             ));
         }
-        // 两个速度：live 是这一轮的平滑瞬时速度（idle 时不显示），avg 是整段平均。
-        let tok_s = argent_i18n::t(self.locale, "tui.tok_s");
-        if self.metrics.working {
-            segments.push(format!("live {:.0} {}", self.metrics.smoothed_live_rate(), tok_s));
-        }
-        segments.push(format!("avg {:.0} {}", self.metrics.average_rate(), tok_s));
         // statusline 配置的附加段接在默认段之后：session / model / thinking / cwd。
         for segment in &self.statusline {
             match segment.as_str() {
@@ -2992,7 +3007,43 @@ impl App {
         fill_between(left, right, width, Style::dim(theme.dim))
     }
 
-    /// 把最后一条用户消息顶到正文可视区顶部（点击锚定行 / 空闲时按 Esc）。
+    /// 两轮 Model 之间的紧凑时长（摘要行用）：4.2s / 14m 21s / 2h 5m。
+    fn format_turn_duration(d: Duration) -> String {
+        let secs = d.as_secs();
+        if secs < 60 {
+            if secs < 10 {
+                return format!("{:.1}s", d.as_secs_f64());
+            }
+            return format!("{secs}s");
+        }
+        if secs < 3600 {
+            return format!("{}m {}s", secs / 60, secs % 60);
+        }
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    }
+
+    /// 摘要行的文字：Hy4 flash Free · 14m 21s · 235.2 tok/s · 11.9s ttft
+    fn turn_summary_text(model: &str, elapsed: Duration, completion: u64, ttft: Option<Duration>) -> String {
+        let secs = elapsed.as_secs_f64().max(0.001);
+        let rate = completion as f64 / secs;
+        match ttft {
+            Some(ttft) => format!(
+                "{} · {} · {:.1} tok/s · {:.1}s ttft",
+                model,
+                Self::format_turn_duration(elapsed),
+                rate,
+                ttft.as_secs_f64()
+            ),
+            None => format!(
+                "{} · {} · {:.1} tok/s",
+                model,
+                Self::format_turn_duration(elapsed),
+                rate
+            ),
+        }
+    }
+
+    /// 把最后一条用户消息顶到正文可视区顶部（空闲按 Esc）。
     fn jump_to_last_user(&mut self) {
         if let Some(row) = self.body_user_row {
             let end = row + self.frame_body_height.max(1);
@@ -3046,7 +3097,7 @@ impl App {
         let version = self.transcript.version();
         let expand = self.expand;
         if let Some(cache) = &self.body_cache {
-            if cache.width == width && cache.expand == expand && cache.version == version {
+            if cache.width == width && cache.expand == expand && cache.version == version && cache.summaries == self.turn_summaries.len() {
                 self.body_fold_rows = cache.fold_rows.clone();
                 self.body_user_row = cache.user_row;
                 self.body_total = cache.lines.len();
@@ -3065,6 +3116,7 @@ impl App {
             lines: Arc::clone(&lines),
             fold_rows,
             user_row,
+            summaries: self.turn_summaries.len(),
         });
         lines
     }
@@ -3219,6 +3271,13 @@ impl App {
         }
         if lines.is_empty() {
             // 空会话不写引导文字：输入框就是入口，占一行空白即可。
+        }
+        // 会话结束摘要：dim 一行，creator 每轮一条。
+        for summary in &self.turn_summaries {
+            lines.push(Line::new().push(Span::new(
+                clip_to_width(summary, width),
+                Style::dim(crate::theme::current().dim),
+            )));
         }
         (lines, fold_rows, user_row)
     }
@@ -4964,8 +5023,7 @@ mod cursor_tests {
             .collect();
         assert!(text.contains("19.7%/960k"), "{text}");
         assert!(text.contains("↑19M ↓1.6M"), "{text}");
-        assert!(text.contains("avg "), "{text}");
-        assert!(!text.contains("live "), "idle shows avg only: {text}");
+        assert!(!text.contains("tok/s"), "speed lives in the turn summary, not the status bar: {text}");
         // 单行：不允许出现换行。
         assert_eq!(text.matches('\n').count(), 0);
     }
@@ -5045,6 +5103,64 @@ mod cursor_tests {
             session_path: "/tmp/s.jsonl".to_string(),
         });
         assert_eq!(app.metrics.context_max, 960_000);
+    }
+
+    #[test]
+    fn turn_done_prints_a_dim_summary_line() {
+        let mut app = app();
+        app.handle_ui(UiEvent::Ready {
+            model: "test/flash".to_string(),
+            thinking: "auto".to_string(),
+            provider: "local".to_string(),
+            protocol: "chat".to_string(),
+            cwd: "/tmp".to_string(),
+            session: "s".to_string(),
+            session_path: "/tmp/s.jsonl".to_string(),
+        });
+        app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 0 }));
+        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText("hello".to_string())));
+        app.handle_ui(UiEvent::TurnDone {
+            reason: FinishReason::Complete,
+            usage: argent_ai::Usage {
+                prompt_tokens: 4000,
+                completion_tokens: 170,
+                total_tokens: 4170,
+                cached_tokens: 2048,
+            },
+            requests: 1,
+            context_used: 4170,
+            cost: None,
+        });
+        let plain = app.frame(100, 30).join("\n");
+        let stripped: String = strip_ansi(&plain);
+        assert!(stripped.contains("test/flash · "), "model in summary: {stripped}");
+        assert!(stripped.contains("tok/s"), "rate in summary: {stripped}");
+        assert!(stripped.contains("ttft"), "ttft in summary: {stripped}");
+        assert!(!stripped.contains("live "), "no live segment: {stripped}");
+        assert_eq!(app.turn_summaries.len(), 1);
+        assert!(app.turn_summaries[0].starts_with("test/flash · "));
+    }
+
+    #[test]
+    fn turn_done_without_a_model_call_stays_quiet() {
+        let mut app = app();
+        app.handle_ui(UiEvent::Ready {
+            model: "test/flash".to_string(),
+            thinking: "auto".to_string(),
+            provider: "local".to_string(),
+            protocol: "chat".to_string(),
+            cwd: "/tmp".to_string(),
+            session: "s".to_string(),
+            session_path: "/tmp/s.jsonl".to_string(),
+        });
+        app.handle_ui(UiEvent::TurnDone {
+            reason: FinishReason::Aborted,
+            usage: argent_ai::Usage::default(),
+            requests: 0,
+            context_used: 0,
+            cost: None,
+        });
+        assert!(app.turn_summaries.is_empty(), "hook-blocked run prints nothing");
     }
 
     #[test]
