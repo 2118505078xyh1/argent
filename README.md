@@ -206,7 +206,11 @@ TUI 里输入 `/help` 看键位与全部命令。最常用的几个：
 /new     /rename  /import <path>       /rewind [n]
 /model   /thinking auto|off|minimal|low|medium|high|xhigh|max
 /copy    /tools   /plan    /init       /exit
+/reload  /changelog                    # 重载键位/模板/主题；查看当前版本更新
 ```
+
+非全屏 REPL 同样支持会话管理：`/session`（当前文件、标题、消息数、token/花费）、
+`/sessions`（列出本机会话）、`/resume <编号|名字>`（切换会话）、`/reload`、`/changelog`。
 
 消息里写 `@src/main.rs` 会把文件内容附给模型（最多三个）。写类工具会弹审批：
 `y` 允许一次、`a` 本轮全允、`n` 拒绝；Policy 规则是硬门，审批点不掉。
@@ -619,8 +623,8 @@ crates/
 ```
 
 依赖图和各 crate 职责见
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；与 ZCode 的逐组件对照见
-[docs/ZCODE-MAPPING.md](docs/ZCODE-MAPPING.md)。
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；与 ZCode / Pi 的逐项对等核对见
+[docs/PARITY.md](docs/PARITY.md)。
 
 ## 评测
 

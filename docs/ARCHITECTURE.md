@@ -241,19 +241,6 @@ MCP 服务器可以直接连接。
 审计仍然在子进程里生效。`argent automation daemon --once` 适合系统计划任务，
 不带 `--once` 时是前台循环；native 窗口的自动化页面列出、运行和启停任务。
 
-## 构建缓存
-
-本仓库开发时用了
-[huacnlee/cargo](https://github.com/huacnlee/cargo)——一个非官方 Cargo
-fork，在项目和 worktree 之间共享依赖产物。本地副本在
-`.tools/huacnlee-cargo/`，显式调用：
-
-```powershell
-.\.tools\huacnlee-cargo\cargo.exe test -p argent-agent
-```
-
-项目不依赖它。官方 `cargo` 构建同样的 workspace。
-
 ## 测试
 
 ```powershell

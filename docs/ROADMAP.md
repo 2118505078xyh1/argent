@@ -17,7 +17,7 @@ agent 已经可用；剩余工作主要是表面层和较大的插件能力。
 
 ## M1 — 对等表面
 
-1. ~~全屏 TUI~~ **完成**（`crates/cli/src/tui.rs`）：transcript、队列、
+1. ~~全屏 TUI~~ **完成**（`crates/cli/src/tui/mod.rs`）：transcript、队列、
    斜杠面板、自定义命令、模型/思考选择器、会话选择器、审批弹窗、指标
    头部、工具输出折叠。
 2. 桌面侧面板宿主：**加载插件 `ui.surfaces`、原生 office 预览和
@@ -40,6 +40,8 @@ agent 已经可用；剩余工作主要是表面层和较大的插件能力。
    继续；事件按会话过滤。
 
 ## 下一步批次（2026-11）
+
+> 执行进度账本以 `docs/TODO.md` 为准；本节只列批次意图与完成情况。
 
 顺序按“先补齐 GUI 运行时，再做能力规则与安全”排列；每批结束时
 `cargo test --workspace` 与 `argent eval evals/core.json` 必须全绿。
@@ -291,10 +293,10 @@ POST，无同意绝不联网；`Workflow::load` 接受 `.dwf.ts` 的
     `--mode json` 的 result 行带 `structured` 字段。
   - **worktree**：`--worktree[=name]` 在 `<storage>/worktrees/<repo>/<name>`
     创建（或复用）`argent/<name>` 分支的 worktree，并在加载配置前切换 cwd。
-  - **后台会话**：`--bg` 分叉一个脱离终端的自身进程（`--mode json` 输出到
-    `<storage>/background/<id>.jsonl`）；`agents`、`logs <id> [--follow]`、
-    `attach`（logs -f 别名）、`stop`、`rm` 是文件系统控制面，无需 daemon。
-    后台运行在用户未指定时强制 `--approval never`。
+  - **后台会话**：`--bg` 分叉一个 detached 子进程，以 HTTP 模式（`--serve`）跑在
+    随机端口上，端口与随机令牌写进 `<storage>/background/<id>.*`；`agents`、
+    `logs`、`attach`（默认进 TUI，`--plain` 流式打印）、`stop`、`rm` 是文件系统
+    控制面，无需 daemon。后台运行在用户未指定时强制 `--approval never`。
   - **文件系统策略**：`--sandbox-mode read-only|workspace-write|
     danger-full-access`。`read-only` 在注册表层摘掉所有 mutating 工具；
     `workspace-write` 给 `write`/`edit` 加根目录检查（cwd + `--add-dir`）。
