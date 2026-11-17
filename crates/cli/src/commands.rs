@@ -3515,6 +3515,7 @@ mod tests {
             imported.display().to_string(),
             "--workspace".to_string(),
             dir.display().to_string(),
+            "--force".to_string(),
         ])
         .expect("import");
         assert_eq!(code, 0);
