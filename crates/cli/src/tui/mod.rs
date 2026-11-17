@@ -70,7 +70,52 @@ pub struct TreeRow {
 pub struct SessionRow {
     pub path: PathBuf,
     pub title: String,
+    pub cwd: String,
     pub updated: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionScope {
+    Current,
+    All,
+}
+
+impl SessionScope {
+    fn toggle(self) -> SessionScope {
+        match self {
+            SessionScope::Current => SessionScope::All,
+            SessionScope::All => SessionScope::Current,
+        }
+    }
+
+    fn label(self, locale: argent_i18n::Locale) -> &'static str {
+        match self {
+            SessionScope::Current => argent_i18n::t(locale, "tui.sessions.scope_current"),
+            SessionScope::All => argent_i18n::t(locale, "tui.sessions.scope_all"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionSort {
+    Recent,
+    Name,
+}
+
+impl SessionSort {
+    fn toggle(self) -> SessionSort {
+        match self {
+            SessionSort::Recent => SessionSort::Name,
+            SessionSort::Name => SessionSort::Recent,
+        }
+    }
+
+    fn label(self, locale: argent_i18n::Locale) -> &'static str {
+        match self {
+            SessionSort::Recent => argent_i18n::t(locale, "tui.sessions.sort_recent"),
+            SessionSort::Name => argent_i18n::t(locale, "tui.sessions.sort_name"),
+        }
+    }
 }
 
 /// A request from the agent thread for a tool decision.
@@ -439,18 +484,14 @@ pub fn spawn(
                             compaction_for_hook.borrow_mut().advance();
                         }))
                     };
-                    let result = {
-                        let mut sink = ChannelSink {
-                            tx: event_tx.clone(),
-                        };
-                        if images.is_empty() {
-                            agent.run(&text, &mut sink)
-                        } else {
-                            agent.run_message(
-                                argent_ai::Message::user_with_images(text.clone(), images.clone()),
-                                &mut sink,
-                            )
-                        }
+                    let mut sink = ChannelSink::new(event_tx.clone());
+                    let result = if images.is_empty() {
+                        agent.run(&text, &mut sink)
+                    } else {
+                        agent.run_message(
+                            argent_ai::Message::user_with_images(text.clone(), images.clone()),
+                            &mut sink,
+                        )
                     };
                     match result {
                         Ok(reason) => {
@@ -467,12 +508,13 @@ pub fn spawn(
                             let usage = agent.usage();
                             let requests = agent.requests();
                             let cost = agent.usage_cost();
-                            let _ = argent_session::usage::record(
+                            let _ = argent_session::usage::record_with_ttft(
                                 &session.path,
                                 agent.model(),
                                 &usage,
                                 requests,
                                 cost,
+                                sink.ttft_ms,
                             );
                             let turn_ok = matches!(reason, FinishReason::Complete);
                             let _ = event_tx.send(UiEvent::TurnDone {
@@ -1520,6 +1562,7 @@ fn session_rows(index: &SessionIndex) -> Vec<SessionRow> {
         .map(|(path, info)| SessionRow {
             path,
             title: info.str_or("title", "(untitled)"),
+            cwd: info.str_or("cwd", ""),
             updated: argent_session::local_stamp(info.num_or("modified", 0.0) as u64),
         })
         .collect()
@@ -1527,10 +1570,31 @@ fn session_rows(index: &SessionIndex) -> Vec<SessionRow> {
 
 struct ChannelSink {
     tx: Sender<UiEvent>,
+    started: std::time::Instant,
+    /// First thinking/answer chunk; `None` when the turn made no model call.
+    ttft_ms: Option<u64>,
+}
+
+impl ChannelSink {
+    fn new(tx: Sender<UiEvent>) -> ChannelSink {
+        ChannelSink {
+            tx,
+            started: std::time::Instant::now(),
+            ttft_ms: None,
+        }
+    }
 }
 
 impl EventSink for ChannelSink {
     fn emit(&mut self, event: AgentEvent) {
+        if self.ttft_ms.is_none()
+            && matches!(
+                event,
+                AgentEvent::Thinking(_) | AgentEvent::AssistantText(_)
+            )
+        {
+            self.ttft_ms = Some(self.started.elapsed().as_millis() as u64);
+        }
         let _ = self.tx.send(UiEvent::Agent(event));
     }
 }
@@ -1658,6 +1722,9 @@ struct App {
     metrics: Metrics,
     ready: Option<ReadyInfo>,
     sessions: Vec<SessionRow>,
+    session_query: String,
+    session_scope: SessionScope,
+    session_sort: SessionSort,
     tree_rows: Vec<TreeRow>,
     /// Status-bar segments in order; empty means the built-in set.
     statusline: Vec<String>,
@@ -1695,6 +1762,9 @@ struct App {
     quit: bool,
     tick: u64,
     dirty: bool,
+    /// 开场键位提示只显示一次；第一次按键或启动 8 秒后不再占用状态栏。
+    hint_shown: bool,
+    opened_at: Instant,
 }
 
 impl App {
@@ -1737,6 +1807,9 @@ impl App {
             metrics: Metrics::new("", "", ""),
             ready: None,
             sessions: Vec::new(),
+            session_query: String::new(),
+            session_scope: SessionScope::All,
+            session_sort: SessionSort::Recent,
             tree_rows: Vec::new(),
             models: Vec::new(),
             tools: Vec::new(),
@@ -1762,12 +1835,124 @@ impl App {
             quit: false,
             tick: 0,
             dirty: true,
+            hint_shown: false,
+            opened_at: Instant::now(),
         }
     }
 
     fn set_status(&mut self, text: impl Into<String>) {
         self.status = Some((text.into(), Instant::now()));
         self.dirty = true;
+    }
+
+    fn session_view(&self) -> Vec<usize> {
+        let query = self.session_query.trim().to_ascii_lowercase();
+        let current_cwd = self
+            .ready
+            .as_ref()
+            .map(|ready| ready.cwd.as_str())
+            .unwrap_or("");
+        let normalize = |value: &str| {
+            value
+                .replace('\\', "/")
+                .trim_end_matches('/')
+                .to_ascii_lowercase()
+        };
+        let mut rows: Vec<usize> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                if self.session_scope == SessionScope::Current
+                    && (current_cwd.is_empty() || normalize(&row.cwd) != normalize(current_cwd))
+                {
+                    return None;
+                }
+                if !query.is_empty() {
+                    let file = row
+                        .path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("");
+                    let haystack =
+                        format!("{} {} {}", row.title, file, row.cwd).to_ascii_lowercase();
+                    if !haystack.contains(&query) {
+                        return None;
+                    }
+                }
+                Some(index)
+            })
+            .collect();
+        if self.session_sort == SessionSort::Name {
+            rows.sort_by(|left, right| {
+                let left = &self.sessions[*left];
+                let right = &self.sessions[*right];
+                left.title
+                    .to_ascii_lowercase()
+                    .cmp(&right.title.to_ascii_lowercase())
+                    .then_with(|| left.path.cmp(&right.path))
+            });
+        }
+        rows
+    }
+
+    fn first_visible_session(&self) -> usize {
+        self.session_view().first().copied().unwrap_or(0)
+    }
+
+    fn move_session_selection(&self, current: usize, delta: isize) -> usize {
+        let view = self.session_view();
+        if view.is_empty() {
+            return 0;
+        }
+        let Some(position) = view.iter().position(|actual| *actual == current) else {
+            return view[0];
+        };
+        let next = (position as isize + delta).clamp(0, view.len() as isize - 1);
+        view[next as usize]
+    }
+
+    fn reset_session_picker(&mut self) {
+        self.session_delete_pending = None;
+        let index = self.first_visible_session();
+        self.overlay = Some(Overlay::Sessions { index });
+    }
+
+    fn open_session_picker(&mut self) {
+        self.session_query.clear();
+        self.session_scope = SessionScope::All;
+        self.session_sort = SessionSort::Recent;
+        self.reset_session_picker();
+    }
+
+    fn clamp_session_picker(&mut self) {
+        let Some(Overlay::Sessions { index }) = self.overlay.as_ref() else {
+            return;
+        };
+        let index = *index;
+        let view = self.session_view();
+        if !view.contains(&index) {
+            self.overlay = Some(Overlay::Sessions {
+                index: view.first().copied().unwrap_or(0),
+            });
+            self.session_delete_pending = None;
+        }
+    }
+
+    fn overlay_selected_row(&self) -> Option<usize> {
+        match self.overlay.as_ref()? {
+            Overlay::Sessions { index } => self
+                .session_view()
+                .iter()
+                .position(|actual| actual == index),
+            Overlay::Tree { index }
+            | Overlay::Models { index }
+            | Overlay::Thinking { index }
+            | Overlay::Tools { index } => Some(*index),
+            Overlay::SessionActions { selected, .. } => Some(*selected),
+            Overlay::SessionInfo { selected } => Some(SESSION_INFO_ROWS + selected),
+            _ => None,
+        }
     }
 
     fn handle_ui(&mut self, event: UiEvent) {
@@ -1883,7 +2068,10 @@ impl App {
                     self.failed_prompt = None;
                 }
             }
-            UiEvent::Sessions(rows) => self.sessions = rows,
+            UiEvent::Sessions(rows) => {
+                self.sessions = rows;
+                self.clamp_session_picker();
+            }
             UiEvent::TreeRows(rows) => self.tree_rows = rows,
             UiEvent::SessionRetitled { title, path } => {
                 if let Some(ready) = &mut self.ready {
@@ -2054,6 +2242,8 @@ impl App {
     }
 
     fn handle_key(&mut self, worker: &Worker, key: Key) {
+        // 开场键位提示只在启动后保留到第一次按键；之后永不再出现。
+        self.hint_shown = true;
         // 鼠标：按下→拖动→松开由 TUI 接管（pi 的 fullscreen 模式）。
         // 原地松开 = 点击思考块；拖出距离 = 复制选中文字。
         match key {
@@ -2141,24 +2331,18 @@ impl App {
                 }
                 Overlay::Sessions { mut index } => match key {
                     Key::Up => {
-                        index = index.saturating_sub(1);
+                        index = self.move_session_selection(index, -1);
                         self.session_delete_pending = None;
                         self.overlay = Some(Overlay::Sessions { index });
                     }
                     Key::Down => {
-                        index = (index + 1).min(self.sessions.len().saturating_sub(1));
+                        index = self.move_session_selection(index, 1);
                         self.session_delete_pending = None;
                         self.overlay = Some(Overlay::Sessions { index });
                     }
                     Key::Enter => {
-                        if !self.sessions.is_empty() {
+                        if self.sessions.get(index).is_some() {
                             self.overlay = Some(Overlay::SessionActions { index, selected: 0 });
-                        }
-                    }
-                    Key::Char('o') => {
-                        if let Some(row) = self.sessions.get(index) {
-                            let _ = worker.commands.send(Command::OpenSession(row.path.clone()));
-                            self.overlay = None;
                         }
                     }
                     Key::CtrlD => {
@@ -2188,6 +2372,27 @@ impl App {
                                 input: row.title.clone(),
                             });
                         }
+                    }
+                    Key::Tab => {
+                        self.session_scope = self.session_scope.toggle();
+                        self.reset_session_picker();
+                    }
+                    Key::CtrlS => {
+                        self.session_sort = self.session_sort.toggle();
+                        self.reset_session_picker();
+                    }
+                    Key::Backspace => {
+                        self.session_query.pop();
+                        self.reset_session_picker();
+                    }
+                    Key::Char(ch) if !ch.is_control() => {
+                        self.session_query.push(ch);
+                        self.reset_session_picker();
+                    }
+                    Key::Paste(text) => {
+                        self.session_query
+                            .extend(text.chars().filter(|ch| !ch.is_control()));
+                        self.reset_session_picker();
                     }
                     Key::Esc => {}
                     _ => self.overlay = Some(Overlay::Sessions { index }),
@@ -2398,7 +2603,7 @@ impl App {
                         }
                         3 => {
                             let _ = worker.commands.send(Command::ListSessions);
-                            self.overlay = Some(Overlay::Sessions { index: 0 });
+                            self.open_session_picker();
                         }
                         _ => self.overlay = None,
                     },
@@ -2505,12 +2710,24 @@ impl App {
             self.dirty = true;
             return;
         }
-        if let Key::Paste(text) = key {
+        if let Key::Paste(text) = &key {
             // 换行在单行输入框里不可见，按空格落进去；整块一次插入，
             // 不逐字符触发补全或提交。
-            let flattened = text.replace('\n', " ");
-            self.insert_text(&flattened);
+            self.insert_pasted(text);
             self.dirty = true;
+            return;
+        }
+        if key == Key::PasteClipboard {
+            // 右键可能发生在拖选之后；先清掉高亮，避免半截选区留在画面上。
+            self.selection = None;
+            match argent_core::clipboard::read_text() {
+                Ok(text) if !text.is_empty() => {
+                    self.insert_pasted(&text);
+                    self.dirty = true;
+                }
+                Ok(_) => {}
+                Err(error) => self.set_status(format!("paste failed: {}", error)),
+            }
             return;
         }
         match key {
@@ -2674,6 +2891,17 @@ impl App {
             self.cursor += 1;
         }
         self.dirty = true;
+    }
+
+    /// 粘贴外部文本（终端 bracketed paste 或右键剪贴板）。
+    ///
+    /// 输入框只有一行，换行必须压成空格，否则后面那段看起来像消失了。
+    fn insert_pasted(&mut self, text: &str) {
+        let flattened = text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\n', " ");
+        self.insert_text(&flattened);
     }
 
     fn backspace(&mut self) {
@@ -3033,7 +3261,7 @@ impl App {
             }
             "/resume" | "/sessions" => {
                 let _ = worker.commands.send(Command::ListSessions);
-                self.overlay = Some(Overlay::Sessions { index: 0 });
+                self.open_session_picker();
             }
             "/session" => {
                 // pi 的 /session 是当前会话的面板；找历史会话走 /resume。
@@ -3323,6 +3551,10 @@ impl App {
         let dot = Span::new(" · ", Style::dim(theme.dim));
         let hint: Option<String> = match &self.status {
             Some((text, at)) if at.elapsed() < Duration::from_secs(6) => Some(text.clone()),
+            // 开场键位提示只在启动后显示一次：第一次按键或 8 秒后消失。
+            _ if !self.hint_shown && self.opened_at.elapsed() < Duration::from_secs(8) => {
+                Some(argent_i18n::t(self.locale, "tui.hint").to_string())
+            }
             _ => None,
         };
 
@@ -3814,9 +4046,10 @@ impl App {
                 .collect(),
             ),
             Overlay::Sessions { index: _ } => {
-                let mut content: Vec<(String, String)> = self
-                    .sessions
+                let view = self.session_view();
+                let mut content: Vec<(String, String)> = view
                     .iter()
+                    .filter_map(|actual| self.sessions.get(*actual))
                     .map(|row| {
                         (
                             row.title.clone(),
@@ -3831,14 +4064,49 @@ impl App {
                         )
                     })
                     .collect();
+                if view.is_empty() {
+                    content.push((
+                        argent_i18n::t(self.locale, "tui.sessions.no_match").to_string(),
+                        String::new(),
+                    ));
+                }
                 content.push((String::new(), String::new()));
                 content.push((
-                    "enter actions · o open · ↑↓ move · ctrl+r rename · ctrl+d delete · esc close"
-                        .to_string(),
+                    if self.session_query.is_empty() {
+                        argent_i18n::t(self.locale, "tui.sessions.filter_hint").to_string()
+                    } else {
+                        format!(
+                            "{}: {}",
+                            argent_i18n::t(self.locale, "tui.sessions.filter"),
+                            self.session_query
+                        )
+                    },
+                    String::new(),
+                ));
+                content.push((
+                    format!(
+                        "{} {} · {} {}  (tab / ctrl+s)",
+                        argent_i18n::t(self.locale, "tui.sessions.scope"),
+                        self.session_scope.label(self.locale),
+                        argent_i18n::t(self.locale, "tui.sessions.sort"),
+                        self.session_sort.label(self.locale)
+                    ),
+                    String::new(),
+                ));
+                content.push((
+                    argent_i18n::t(self.locale, "tui.sessions.help_move").to_string(),
+                    String::new(),
+                ));
+                content.push((
+                    argent_i18n::t(self.locale, "tui.sessions.help_actions").to_string(),
                     String::new(),
                 ));
                 (
-                    argent_i18n::t(self.locale, "tui.sessions.title").to_string(),
+                    format!(
+                        "{} · {}",
+                        argent_i18n::t(self.locale, "tui.sessions.title"),
+                        view.len()
+                    ),
                     content,
                 )
             }
@@ -4045,7 +4313,7 @@ impl App {
             &title,
             &content,
             width,
-            self.overlay.as_ref(),
+            self.overlay_selected_row(),
         ))
     }
 }
@@ -4416,7 +4684,7 @@ fn boxed_overlay(
     title: &str,
     content: &[(String, String)],
     width: usize,
-    overlay: Option<&Overlay>,
+    selected: Option<usize>,
 ) -> Vec<Line> {
     let box_width = width.saturating_sub(4).clamp(24, 80);
     let inner = box_width.saturating_sub(4);
@@ -4430,16 +4698,6 @@ fn boxed_overlay(
         Line::plain(clip_to_width(&top, box_width))
             .with_style(Style::dim(crate::theme::current().accent)),
     );
-    let selected = match overlay {
-        Some(Overlay::Sessions { index })
-        | Some(Overlay::Tree { index })
-        | Some(Overlay::Models { index })
-        | Some(Overlay::Thinking { index })
-        | Some(Overlay::Tools { index }) => Some(*index),
-        Some(Overlay::SessionActions { selected, .. }) => Some(*selected),
-        Some(Overlay::SessionInfo { selected }) => Some(SESSION_INFO_ROWS + selected),
-        _ => None,
-    };
     for (position, (left, right)) in content.iter().enumerate() {
         let mut text = if right.is_empty() {
             left.clone()
@@ -4919,7 +5177,7 @@ mod tests {
     }
 
     #[test]
-    fn the_status_line_never_shows_the_opening_hint() {
+    fn the_status_line_shows_the_opening_hint_once() {
         let mut app = App::new(
             Vec::new(),
             crate::prompts::PromptLibrary::new(),
@@ -4931,7 +5189,9 @@ mod tests {
             line.spans.iter().map(|span| span.text.clone()).collect()
         };
         let first = text(app.status_line(100));
-        assert!(!first.contains("Enter 发送"), "{}", first);
+        assert!(first.contains("Enter 发送"), "{}", first);
+        // 提示保留到第一次按键为止，之后状态栏不再重复。
+        app.handle_key(&super::cursor_tests::test_worker(), Key::Tab);
         let second = text(app.status_line(100));
         assert!(!second.contains("Enter 发送"), "{}", second);
     }
@@ -5166,6 +5426,20 @@ mod tests {
         assert_eq!(next_key(&mut bytes), None);
     }
 
+    /// TTFT 只取第一个思考/正文 chunk；后续 chunk 不覆盖。
+    #[test]
+    fn the_channel_sink_times_the_first_stream_chunk() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut sink = ChannelSink::new(tx);
+        sink.emit(AgentEvent::TurnStart { index: 0 });
+        assert_eq!(sink.ttft_ms, None, "turn start is not a token");
+        sink.emit(AgentEvent::Thinking("hmm".to_string()));
+        let first = sink.ttft_ms.expect("thinking starts the clock");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        sink.emit(AgentEvent::AssistantText("answer".to_string()));
+        assert_eq!(sink.ttft_ms, Some(first), "the first chunk wins");
+    }
+
     /// 会话管理 overlay：两次 Ctrl+D 才发删除命令，Ctrl+R 进改名输入。
     #[test]
     fn the_session_manager_needs_a_second_ctrl_d_and_renames_in_place() {
@@ -5180,11 +5454,13 @@ mod tests {
             SessionRow {
                 path: std::path::PathBuf::from("/tmp/one.jsonl"),
                 title: "one".to_string(),
+                cwd: "/tmp".to_string(),
                 updated: "now".to_string(),
             },
             SessionRow {
                 path: std::path::PathBuf::from("/tmp/two.jsonl"),
                 title: "two".to_string(),
+                cwd: "/tmp".to_string(),
                 updated: "now".to_string(),
             },
         ];
@@ -5235,6 +5511,76 @@ mod tests {
             }
             _ => panic!("expected RenameSession"),
         }
+    }
+
+    #[test]
+    fn the_session_picker_filters_scopes_and_sorts() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::En,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.ready = Some(ReadyInfo {
+            cwd: "/work/a".to_string(),
+            ..Default::default()
+        });
+        app.sessions = vec![
+            SessionRow {
+                path: std::path::PathBuf::from("/sessions/alpha-one.jsonl"),
+                title: "Zeta".to_string(),
+                cwd: "/work/a".to_string(),
+                updated: "now".to_string(),
+            },
+            SessionRow {
+                path: std::path::PathBuf::from("/sessions/two.jsonl"),
+                title: "alpha".to_string(),
+                cwd: "/work/b".to_string(),
+                updated: "now".to_string(),
+            },
+            SessionRow {
+                path: std::path::PathBuf::from("/sessions/three.jsonl"),
+                title: "Beta".to_string(),
+                cwd: "/work/a".to_string(),
+                updated: "now".to_string(),
+            },
+        ];
+        app.overlay = Some(Overlay::Sessions { index: 0 });
+        let (command_tx, _command_rx) = std::sync::mpsc::channel();
+        let (_event_tx, event_rx) = std::sync::mpsc::channel();
+        let worker = Worker {
+            commands: command_tx,
+            events: event_rx,
+            abort: argent_agent::AbortHandle::new(),
+            steering: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+        };
+
+        // 文件名也参与过滤，输入时选中项自动落到第一条结果。
+        for ch in "three".chars() {
+            app.handle_key(&worker, Key::Char(ch));
+        }
+        assert_eq!(app.session_view(), vec![2]);
+        assert!(matches!(app.overlay, Some(Overlay::Sessions { index: 2 })));
+
+        app.session_query = "zeta".to_string();
+        assert_eq!(app.session_view(), vec![0]);
+
+        app.session_query.clear();
+        app.reset_session_picker();
+        app.handle_key(&worker, Key::Tab);
+        assert_eq!(app.session_scope, SessionScope::Current);
+        assert_eq!(app.session_view(), vec![0, 2]);
+
+        app.handle_key(&worker, Key::CtrlS);
+        assert_eq!(app.session_sort, SessionSort::Name);
+        assert_eq!(app.session_view(), vec![2, 0]);
+        assert!(matches!(app.overlay, Some(Overlay::Sessions { index: 2 })));
+
+        app.handle_key(&worker, Key::Down);
+        assert!(matches!(app.overlay, Some(Overlay::Sessions { index: 0 })));
+        app.handle_key(&worker, Key::Up);
+        assert!(matches!(app.overlay, Some(Overlay::Sessions { index: 2 })));
     }
 
     /// 临时：把一帧渲染成文本，用于肉眼检查排版。
@@ -5302,7 +5648,7 @@ mod tests {
     }
 
     #[test]
-    fn the_opening_hint_never_appears_in_a_frame() {
+    fn the_opening_hint_survives_until_the_first_key() {
         let mut app = App::new(
             Vec::new(),
             crate::prompts::PromptLibrary::new(),
@@ -5311,9 +5657,44 @@ mod tests {
             crate::keybindings::Bindings::default(),
         );
         let first = app.frame(100, 24).join("\n");
-        assert!(!first.contains("Enter 发送"), "{}", first);
+        assert!(first.contains("Enter 发送"), "{}", first);
+        // 还没按键：重绘帧仍然显示提示，但不会另外再显示一次。
         let second = app.frame(100, 24).join("\n");
-        assert!(!second.contains("Enter 发送"), "{}", second);
+        assert!(second.contains("Enter 发送"), "{}", second);
+        app.handle_key(&super::cursor_tests::test_worker(), Key::Char('x'));
+        let third = app.frame(100, 24).join("\n");
+        assert!(!third.contains("Enter 发送"), "{}", third);
+    }
+
+    #[test]
+    fn the_opening_hint_expires_without_input() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        // 不按键也不该永久占着状态栏。
+        app.opened_at = Instant::now() - Duration::from_secs(9);
+        let frame = app.frame(100, 24).join("\n");
+        assert!(!frame.contains("Enter 发送"), "{}", frame);
+    }
+
+    #[test]
+    fn pasted_text_lands_at_the_cursor_with_newlines_flattened() {
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::Zh,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.input = "ab".chars().collect();
+        app.cursor = 1;
+        app.insert_pasted("X\r\nY");
+        let text: String = app.input.iter().collect();
+        assert_eq!(text, "aX Yb");
     }
 
     #[test]
@@ -5327,9 +5708,10 @@ mod tests {
         );
         let lines = app.frame(80, 24);
         let joined = lines.join("\n");
-        assert!(!joined.contains("Enter 发送"), "{}", joined);
-        // 空会话不再渲染引导文字，也不能再重复键位提示。
+        assert!(joined.contains("Enter 发送"), "{}", joined);
+        // 空会话不再渲染引导文字，键位提示也只出现这一次。
         assert!(!joined.contains("问点什么"), "{}", joined);
+        app.handle_key(&super::cursor_tests::test_worker(), Key::Char('x'));
         let second = app.frame(80, 24).join("\n");
         assert!(!second.contains("Enter 发送"), "{}", second);
     }
@@ -5778,7 +6160,7 @@ mod cursor_tests {
         out
     }
 
-    fn test_worker() -> Worker {
+    pub(super) fn test_worker() -> Worker {
         let (command_tx, _command_rx) = std::sync::mpsc::channel();
         let (_event_tx, event_rx) = std::sync::mpsc::channel();
         Worker {
@@ -6022,11 +6404,13 @@ mod cursor_tests {
             SessionRow {
                 path: std::path::PathBuf::from("/tmp/one.jsonl"),
                 title: "one".to_string(),
+                cwd: "/tmp".to_string(),
                 updated: "now".to_string(),
             },
             SessionRow {
                 path: std::path::PathBuf::from("/tmp/two.jsonl"),
                 title: "two".to_string(),
+                cwd: "/tmp".to_string(),
                 updated: "now".to_string(),
             },
         ];

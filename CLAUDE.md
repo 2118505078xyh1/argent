@@ -27,6 +27,19 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 
 ## Test
 
+Local 4B smoke tests use llama.cpp (no gateway, no network). `scripts/local-4b.ps1`
+starts `llama-server` if needed and points argent at `http://127.0.0.1:8080/v1`:
+
+```powershell
+powershell -File scripts/local-4b.ps1              # one-shot prompt
+powershell -File scripts/local-4b.ps1 -Tui         # interactive TUI
+powershell -File scripts/local-4b.ps1 -Stop        # shut the server down
+```
+
+Defaults: `D:\code\local_text\llama.cpp\llama-server.exe`,
+`D:\code\local_text\models\Spark-X2.6-4B-Q4_K_M.gguf`, port 8080. Override with
+`LOCAL_4B_EXE`, `LOCAL_4B_MODEL`, `LOCAL_4B_PORT`, `ARGENT_BIN`.
+
 ```powershell
 cargo test --workspace
 cargo test -p argent-agent a_token_budget_stops_before_the_next_tool_batch   # single test

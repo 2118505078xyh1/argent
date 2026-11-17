@@ -2169,6 +2169,10 @@ fn usage(args: &[String]) -> Result<i32> {
             Json::num(summary.cache_hit_percent() as f64),
         );
         data.set("requests", Json::num(summary.requests as f64));
+        data.set("ttft_samples", Json::num(summary.ttft_samples as f64));
+        if let Some(ttft) = summary.avg_ttft_ms() {
+            data.set("avg_ttft_ms", Json::num(ttft as f64));
+        }
         data.set("cost", Json::num(summary.cost));
         let mut models = Json::obj();
         for (name, item) in &summary.by_model {
@@ -2203,14 +2207,19 @@ fn usage(args: &[String]) -> Result<i32> {
         "usage: {} turn(s), {} request(s), {}",
         summary.turns, summary.requests, since_label
     );
+    let ttft = summary
+        .avg_ttft_ms()
+        .map(|ms| format!(" · ttft {:.1}s avg", ms as f64 / 1000.0))
+        .unwrap_or_default();
     println!(
-        "prompt {} · completion {} · cached {} ({}%) · missed {} · ${:.4}",
+        "prompt {} · completion {} · cached {} ({}%) · missed {} · ${:.4}{}",
         short_tokens(summary.prompt_tokens),
         short_tokens(summary.completion_tokens),
         short_tokens(summary.cached_tokens),
         hit,
         short_tokens(summary.missed_tokens),
-        summary.cost
+        summary.cost,
+        ttft
     );
     if !summary.by_model.is_empty() {
         println!("by model:");

@@ -4,6 +4,12 @@
 
 图例：`[ ]` 待做，`[~]` 进行中，`[x]` 完成。优先级：P0 立刻、P1 近期、P2 战略/大工程。
 
+## 测试环境
+
+- 本地 4B：`powershell -File scripts/local-4b.ps1`（llama.cpp + `Spark-X2.6-4B-Q4_K_M.gguf`，8080 端口）
+- `-Tui` 进交互，`-Stop` 停服；默认值可用 `LOCAL_4B_EXE/MODEL/PORT`、`ARGENT_BIN` 覆盖。
+- 不再用 3425 网关做功能验证；网关只用于真实缓存/成本观测。
+
 ## 本轮执行
 
 - [x] **P0：缓存浪费（missed tokens）统计**
@@ -14,11 +20,11 @@
 
 ## P0：手感与日常可用性
 
-- [ ] **会话选择器搜索/过滤**
-  - 输入 `/` 后的列表支持逐字过滤（标题 + 文件名）。
-  - `Tab` 切换 scope：当前目录 / 全部；`Ctrl+S` 切换排序：最近 / 名称。
+- [x] **会话选择器搜索/过滤**
+  - 输入逐字过滤标题 + 文件名 + cwd；`Tab` 切当前目录/全部；`Ctrl+S` 切最近/名称。
   - 空结果显示提示；`↑↓` 在过滤结果内移动。
-  - 参考：pi session picker、Claude `/resume`、OpenCode `/sessions`。
+  - 测试：`the_session_picker_filters_scopes_and_sorts`。
+  - 仍可补：搜索词高亮。
 - [ ] **TUI 回归清单自动化**
   - 加一组 snapshot 测试：用户块颜色、思考块展开/收起、流式逐字、摘要行、复制提示。
   - 每次改 TUI 先跑这组，避免“修一个坏一个”。
@@ -32,9 +38,11 @@
 ## P0/P1：缓存与成本
 
 - [x] **P0：missed tokens 统计**（本轮）
-- [ ] **P1：`usage.jsonl` 增加 ttft_ms 与首 token 时间**
-  - TUI/无头/ACP/RPC 各入口统一记账；Thinking 首 delta 也算首 token。
-  - `argent usage` 增加平均/中位 TTFT。
+- [x] **P1：`usage.jsonl` 增加 ttft_ms 与首 token 时间**
+  - 已完成 TUI：`ChannelSink` 在首个 Thinking/AssistantText chunk 计时，`usage.jsonl` 写 `ttft_ms`；`argent usage` 显示 `ttft X.Xs avg`。
+  - 测试：`the_channel_sink_times_the_first_stream_chunk`、usage ledger 断言。
+- [ ] **P1：无头/RPC/ACP 也记 ttft**
+  - 目前这些入口写 `None`；下一步在 `RendererSink`/RPC 事件层补首个 chunk 计时。
 - [ ] **P1：prompt cache warmer**
   - 空闲接近 TTL 时用 `max_tokens=1` 重发最后请求保活；默认关闭，env 开关。
   - 经济性门槛：预计节省 > 成本才 warm；记录 warm 次数/成本。

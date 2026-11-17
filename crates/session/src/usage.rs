@@ -24,6 +24,8 @@ pub struct UsageRecord {
     pub cached_tokens: u64,
     pub requests: u64,
     pub cost: Option<f64>,
+    /// Time to first streamed chunk, when the frontend measured it.
+    pub ttft_ms: Option<u64>,
 }
 
 impl UsageRecord {
@@ -47,6 +49,8 @@ pub struct UsageSummary {
     pub missed_tokens: u64,
     pub requests: u64,
     pub cost: f64,
+    pub ttft_samples: u64,
+    pub ttft_total_ms: u64,
     pub by_model: BTreeMap<String, ModelUsage>,
     pub by_session: BTreeMap<String, ModelUsage>,
 }
@@ -74,6 +78,11 @@ impl UsageSummary {
     pub fn cache_hit_percent(&self) -> u64 {
         hit_percent(self.cached_tokens, self.prompt_tokens)
     }
+
+    /// Average time to first token across turns that reported one.
+    pub fn avg_ttft_ms(&self) -> Option<u64> {
+        self.ttft_total_ms.checked_div(self.ttft_samples)
+    }
 }
 
 impl ModelUsage {
@@ -99,7 +108,27 @@ pub fn record(
     cost: Option<f64>,
 ) -> Result<()> {
     let path = usage_path();
-    record_at(&path, session, model, usage, requests, cost)
+    record_with_ttft_at(&path, session, model, usage, requests, cost, None)
+}
+
+/// The same, with the time to first token measured by an interactive frontend.
+pub fn record_with_ttft(
+    session: &Path,
+    model: &str,
+    usage: &Usage,
+    requests: u64,
+    cost: Option<f64>,
+    ttft_ms: Option<u64>,
+) -> Result<()> {
+    record_with_ttft_at(
+        &usage_path(),
+        session,
+        model,
+        usage,
+        requests,
+        cost,
+        ttft_ms,
+    )
 }
 
 /// The same, against an explicit ledger (used by tests).
@@ -110,6 +139,20 @@ pub fn record_at(
     usage: &Usage,
     requests: u64,
     cost: Option<f64>,
+) -> Result<()> {
+    record_with_ttft_at(path, session, model, usage, requests, cost, None)
+}
+
+/// Append one turn, optionally with the measured time to first token.
+#[allow(clippy::too_many_arguments)]
+pub fn record_with_ttft_at(
+    path: &Path,
+    session: &Path,
+    model: &str,
+    usage: &Usage,
+    requests: u64,
+    cost: Option<f64>,
+    ttft_ms: Option<u64>,
 ) -> Result<()> {
     if usage.total_tokens == 0 && requests == 0 {
         return Ok(());
@@ -132,6 +175,9 @@ pub fn record_at(
     line.set("requests", Json::num(requests as f64));
     if let Some(cost) = cost {
         line.set("cost", Json::num(cost));
+    }
+    if let Some(ttft_ms) = ttft_ms {
+        line.set("ttft_ms", Json::num(ttft_ms as f64));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -172,6 +218,10 @@ pub fn read_at(path: &Path) -> Vec<UsageRecord> {
             cached_tokens: value.num_or("cached", 0.0) as u64,
             requests: value.num_or("requests", 0.0) as u64,
             cost: value.get("cost").and_then(Json::as_f64),
+            ttft_ms: value
+                .get("ttft_ms")
+                .and_then(Json::as_f64)
+                .map(|value| value.max(0.0) as u64),
         });
     }
     records
@@ -186,6 +236,10 @@ pub fn summary(records: &[UsageRecord], since_epoch: u64) -> UsageSummary {
         summary.completion_tokens += record.completion_tokens;
         summary.cached_tokens += record.cached_tokens;
         summary.missed_tokens += record.missed_tokens();
+        if let Some(ttft) = record.ttft_ms {
+            summary.ttft_samples += 1;
+            summary.ttft_total_ms += ttft;
+        }
         summary.requests += record.requests;
         summary.cost += record.cost.unwrap_or(0.0);
         add(&mut summary.by_model, &record.model, record);
@@ -226,20 +280,33 @@ mod tests {
         };
         record_at(&path, Path::new("a.jsonl"), "m1", &usage, 1, Some(0.01)).expect("record");
         record_at(&path, Path::new("b.jsonl"), "m2", &usage, 1, Some(0.02)).expect("record");
+        record_with_ttft_at(
+            &path,
+            Path::new("c.jsonl"),
+            "m1",
+            &usage,
+            1,
+            Some(0.03),
+            Some(1_200),
+        )
+        .expect("record with ttft");
         let records = read_at(&path);
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 3);
         let summary = summary(&records, 0);
-        assert_eq!(summary.turns, 2);
-        assert_eq!(summary.prompt_tokens, 200);
-        assert_eq!(summary.cached_tokens, 120);
-        // 每轮 prompt 100、cached 60 → 40 missed；两轮共 80。
-        assert_eq!(summary.missed_tokens, 80);
+        assert_eq!(summary.turns, 3);
+        assert_eq!(summary.prompt_tokens, 300);
+        assert_eq!(summary.cached_tokens, 180);
+        // 每轮 prompt 100、cached 60 → 40 missed；三轮共 120。
+        assert_eq!(summary.missed_tokens, 120);
         assert_eq!(summary.cache_hit_percent(), 60);
-        assert!((summary.cost - 0.03).abs() < 1e-9);
+        assert!((summary.cost - 0.06).abs() < 1e-9);
         assert_eq!(summary.by_model.len(), 2);
+        // 只有第三轮带 ttft，平均值不能被无样本的轮次稀释。
+        assert_eq!(summary.ttft_samples, 1);
+        assert_eq!(summary.avg_ttft_ms(), Some(1_200));
         let m1 = &summary.by_model["m1"];
-        assert_eq!(m1.cached_tokens, 60);
-        assert_eq!(m1.missed_tokens, 40);
+        assert_eq!(m1.cached_tokens, 120);
+        assert_eq!(m1.missed_tokens, 80);
         assert_eq!(m1.cache_hit_percent(), 60);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -255,6 +322,7 @@ mod tests {
             cached_tokens: 150,
             requests: 1,
             cost: None,
+            ttft_ms: None,
         };
         assert_eq!(record.missed_tokens(), 0);
     }
