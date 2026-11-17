@@ -166,7 +166,10 @@ fn update(
         let key = key.clone();
         move |bytes: &[u8]| verify_catalog(bytes, &key)
     });
-    let bytes = models::refresh(&url, verify.as_ref().map(|f| f as &dyn Fn(&[u8]) -> Result<()>))?;
+    let bytes = models::refresh(
+        &url,
+        verify.as_ref().map(|f| f as &dyn Fn(&[u8]) -> Result<()>),
+    )?;
 
     let fetched = ModelCatalog::parse(&String::from_utf8_lossy(&bytes));
     if fetched.is_empty() {
@@ -338,8 +341,8 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_document_without_a_signature() {
-        let error = verify_catalog(br#"{"models":[{"id":"a"}]}"#, &"00".repeat(32))
-            .expect_err("must fail");
+        let error =
+            verify_catalog(br#"{"models":[{"id":"a"}]}"#, &"00".repeat(32)).expect_err("must fail");
         assert!(error.to_string().contains("signature"), "{}", error);
     }
 }

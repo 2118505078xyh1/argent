@@ -404,15 +404,14 @@ impl ProviderCatalog {
                 Box::new(ResponsesProvider::new(config))
             }
             Protocol::OpenAiChat => {
-                let mut config = OpenAiConfig::new(resolved.provider.base_url.clone())
-                    .with_models(
-                        resolved
-                            .provider
-                            .models
-                            .iter()
-                            .map(ModelSpec::to_model_info)
-                            .collect(),
-                    );
+                let mut config = OpenAiConfig::new(resolved.provider.base_url.clone()).with_models(
+                    resolved
+                        .provider
+                        .models
+                        .iter()
+                        .map(ModelSpec::to_model_info)
+                        .collect(),
+                );
                 if let Some(key) = api_key {
                     config = config.with_api_key(key);
                 }

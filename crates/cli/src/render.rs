@@ -74,7 +74,10 @@ impl Renderer {
                 self.print_output(content);
             }
             AgentEvent::Notice(text) => {
-                argent_core::terminal::write_raw(&format!("\n{}\n", self.paint(ansi::YELLOW, text)));
+                argent_core::terminal::write_raw(&format!(
+                    "\n{}\n",
+                    self.paint(ansi::YELLOW, text)
+                ));
             }
             AgentEvent::Aborted => {
                 argent_core::terminal::write_raw(&format!(

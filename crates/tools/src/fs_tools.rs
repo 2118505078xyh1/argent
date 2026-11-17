@@ -838,10 +838,7 @@ mod tests {
         );
         let out = edit.execute(&ctx, &Json::parse(&args).unwrap()).unwrap();
         assert!(!out.is_error, "{}", out.content);
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "\u{FEFF}gamma\nbeta\n"
-        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "\u{FEFF}gamma\nbeta\n");
 
         // 带 BOM 的写法（read 的第一行可能把它带进来）。
         let args = format!(
@@ -877,11 +874,10 @@ mod tests {
         let out = write.execute(&ctx, &Json::parse(&inside).unwrap()).unwrap();
         assert!(!out.is_error, "{}", out.content);
 
-        let blocked = format!(
-            r#"{{"path":"{}","content":"no"}}"#,
-            json_path(&outside)
-        );
-        let out = write.execute(&ctx, &Json::parse(&blocked).unwrap()).unwrap();
+        let blocked = format!(r#"{{"path":"{}","content":"no"}}"#, json_path(&outside));
+        let out = write
+            .execute(&ctx, &Json::parse(&blocked).unwrap())
+            .unwrap();
         assert!(out.is_error);
         assert!(out.content.contains("sandbox"), "{}", out.content);
         assert!(!outside.exists());

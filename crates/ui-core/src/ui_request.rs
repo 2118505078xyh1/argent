@@ -261,20 +261,21 @@ impl UiBridge {
         let items: Vec<Json> = options.iter().map(Json::string).collect();
         params.set("options", Json::Arr(items));
         let result = self.request(UiMethod::Select, title, params, timeout, emit)?;
-        result.get("value").and_then(Json::as_str).map(str::to_string)
+        result
+            .get("value")
+            .and_then(Json::as_str)
+            .map(str::to_string)
     }
 
-    pub fn input<F>(
-        &self,
-        title: impl Into<String>,
-        timeout: Duration,
-        emit: F,
-    ) -> Option<String>
+    pub fn input<F>(&self, title: impl Into<String>, timeout: Duration, emit: F) -> Option<String>
     where
         F: FnOnce(&UiRequest),
     {
         let result = self.request(UiMethod::Input, title, Json::obj(), timeout, emit)?;
-        result.get("value").and_then(Json::as_str).map(str::to_string)
+        result
+            .get("value")
+            .and_then(Json::as_str)
+            .map(str::to_string)
     }
 }
 
@@ -298,7 +299,10 @@ mod tests {
                         if let Some(parsed) = UiRequest::from_json(request) {
                             let mut result = Json::obj();
                             result.set("value", Json::bool(true));
-                            bridge.respond(&UiResponse { id: parsed.id, result });
+                            bridge.respond(&UiResponse {
+                                id: parsed.id,
+                                result,
+                            });
                             return;
                         }
                     }

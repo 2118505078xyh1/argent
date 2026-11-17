@@ -15,8 +15,8 @@ use argent_tools::{ToolCtx, ToolRegistry};
 
 use crate::events::{AgentEvent, EventSink, FinishReason};
 use crate::guards::{
-    BlockedCall, EffortState, RecentCall, canonical_args, repeat_key,
-    REPEAT_GUARD_MAX_ENTRIES, REPEAT_GUARD_WINDOW,
+    canonical_args, repeat_key, BlockedCall, EffortState, RecentCall, REPEAT_GUARD_MAX_ENTRIES,
+    REPEAT_GUARD_WINDOW,
 };
 
 /// Upper bound on assistant turns in a single run.
@@ -55,20 +55,14 @@ const UNRUN_STEERED: &str =
 /// the method would otherwise be treated as safe to run beside a write. These
 /// are read-only by construction, and a batch of them is the common shape of
 /// exploration: five files read in one turn.
-pub const PARALLEL_SAFE_TOOLS: &[&str] = &[
-    "read",
-    "grep",
-    "find",
-    "lsp",
-    "skill",
-    "web_search",
-];
+pub const PARALLEL_SAFE_TOOLS: &[&str] = &["read", "grep", "find", "lsp", "skill", "web_search"];
 
 /// How many read-only calls run at once.
 ///
 /// The ceiling keeps a twenty-file batch from opening twenty handles at the
 /// same moment; it is also the width a small provider tolerates.
-pub const MAX_PARALLEL_TOOLS: usize = 8;/// Whether a tool may run beside its siblings in the same batch.
+pub const MAX_PARALLEL_TOOLS: usize = 8;
+/// Whether a tool may run beside its siblings in the same batch.
 ///
 /// The built-in list stays authoritative for the core tools; an extension can
 /// additionally opt in through `Tool::parallel_safe`, which the agent checks
@@ -432,9 +426,11 @@ impl Agent {
             FollowUpMode::OneAtATime => queue.pop_front(),
             FollowUpMode::All => {
                 let joined: Vec<String> = queue.drain(..).collect();
-                Some(joined.join("
+                Some(joined.join(
+                    "
 
-"))
+",
+                ))
             }
         }
     }
@@ -451,11 +447,9 @@ impl Agent {
         } else {
             Some(self.system_prompt.as_str())
         };
-        let wire = self
-            .wire
-            .sync(system, &self.history, self.history_revision);
-        let mut request = ChatRequest::new(self.config.model.clone(), Vec::new())
-            .with_wire_messages(wire);
+        let wire = self.wire.sync(system, &self.history, self.history_revision);
+        let mut request =
+            ChatRequest::new(self.config.model.clone(), Vec::new()).with_wire_messages(wire);
         request.max_tokens = Some(1);
         if let Ok(events) = self.provider.chat(&request) {
             for event in events {
@@ -642,7 +636,9 @@ impl Agent {
             return;
         };
         if first.role != argent_ai::Role::System
-            || !first.text().starts_with("Summary of the earlier conversation:")
+            || !first
+                .text()
+                .starts_with("Summary of the earlier conversation:")
         {
             return;
         }
@@ -1432,7 +1428,11 @@ impl Agent {
                     self.audit(
                         &call.name,
                         &call.parsed_args(),
-                        if outcome.is_error { "failed" } else { "allowed" },
+                        if outcome.is_error {
+                            "failed"
+                        } else {
+                            "allowed"
+                        },
                         None,
                     );
                     let post = self.config.post_tool.clone();
@@ -1440,12 +1440,8 @@ impl Agent {
                         post(&call.name, &call.parsed_args(), outcome.is_error);
                     }
                 }
-                let content = bound_tool_output(
-                    &call.name,
-                    &outcome.content,
-                    outcome.is_error,
-                    remaining,
-                );
+                let content =
+                    bound_tool_output(&call.name, &outcome.content, outcome.is_error, remaining);
                 self.history
                     .push(tool_result_message(call, &outcome, content));
             }
@@ -2814,7 +2810,11 @@ mod tests {
         let mut remaining = 300usize;
         let first = bound_with_budgets("read", &big, false, &mut remaining, 1_000, 300);
         assert!(!first.is_empty());
-        assert!(estimate_text_tokens(&first) <= 400, "{}", estimate_text_tokens(&first));
+        assert!(
+            estimate_text_tokens(&first) <= 400,
+            "{}",
+            estimate_text_tokens(&first)
+        );
         assert!(remaining < 100, "remaining {}", remaining);
 
         let second = bound_with_budgets("read", &big, false, &mut remaining, 1_000, 300);
@@ -2975,7 +2975,9 @@ mod tests {
         let _guard = run_lock();
         // 第一条流没有文本也没有工具调用，只有 usage：这是空流，应当重试。
         let registry = Arc::new(ToolRegistry::with_builtins());
-        let provider = Box::new(EmptyFirstProvider { calls: Mutex::new(0) });
+        let provider = Box::new(EmptyFirstProvider {
+            calls: Mutex::new(0),
+        });
         let config = AgentConfig::new("test-model");
         let mut agent = Agent::new(
             provider,
@@ -3053,7 +3055,9 @@ mod tests {
     fn a_partial_stream_keeps_the_tool_call_and_pairs_it() {
         let _guard = run_lock();
         let registry = Arc::new(ToolRegistry::with_builtins());
-        let provider = Box::new(FlakyStreamProvider { calls: Mutex::new(0) });
+        let provider = Box::new(FlakyStreamProvider {
+            calls: Mutex::new(0),
+        });
         let config = AgentConfig::new("test-model");
         let mut agent = Agent::new(
             provider,

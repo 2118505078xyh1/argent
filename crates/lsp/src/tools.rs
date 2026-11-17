@@ -28,7 +28,9 @@ fn with_manager<T>(
     }
     match guard.as_mut() {
         Some(manager) => action(manager),
-        None => Err(argent_core::Error::internal("LSP manager failed to initialise")),
+        None => Err(argent_core::Error::internal(
+            "LSP manager failed to initialise",
+        )),
     }
 }
 
@@ -76,8 +78,10 @@ impl Tool for CodeIntelTool {
     }
 
     fn needs_approval(&self, args: &Json) -> bool {
-        matches!(args.get("action").and_then(Json::as_str), Some("ast_replace"))
-            && args.get("write").and_then(Json::as_bool).unwrap_or(false)
+        matches!(
+            args.get("action").and_then(Json::as_str),
+            Some("ast_replace")
+        ) && args.get("write").and_then(Json::as_bool).unwrap_or(false)
     }
 
     fn execute(&self, ctx: &ToolCtx, args: &Json) -> Result<ToolResult> {
@@ -87,9 +91,11 @@ impl Tool for CodeIntelTool {
             let mut forwarded = args.clone();
             forwarded.set(
                 "action",
-                argent_core::json::Json::string(
-                    if action == "ast_search" { "search" } else { "replace" },
-                ),
+                argent_core::json::Json::string(if action == "ast_search" {
+                    "search"
+                } else {
+                    "replace"
+                }),
             );
             return argent_ast::AstTool.execute(ctx, &forwarded);
         }

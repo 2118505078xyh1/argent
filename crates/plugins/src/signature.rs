@@ -21,8 +21,7 @@ use argent_core::json::Json;
 use crate::manifest::find_manifest;
 
 /// 签名校验级别。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SignatureMode {
     /// 缺少或签名无效时拒绝安装。
     Required,
@@ -32,7 +31,6 @@ pub enum SignatureMode {
     #[default]
     Off,
 }
-
 
 impl SignatureMode {
     pub fn parse(value: &str) -> SignatureMode {
@@ -171,8 +169,8 @@ pub fn verify(root: &Path, policy: &SignaturePolicy) -> SignatureStatus {
 ///
 /// 返回 `(签名文件路径, 十六进制公钥)`。公钥用于写入 `pluginPublicKey`。
 pub fn sign(root: &Path, key_path: &Path) -> Result<(PathBuf, String), String> {
-    let manifest_path = find_manifest(root)
-        .ok_or_else(|| format!("{} 里找不到插件清单", root.display()))?;
+    let manifest_path =
+        find_manifest(root).ok_or_else(|| format!("{} 里找不到插件清单", root.display()))?;
     let bytes = std::fs::read(&manifest_path)
         .map_err(|error| format!("读取 {} 失败：{}", manifest_path.display(), error))?;
     let signature =
@@ -189,7 +187,11 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("argent-plugin-sign-{}-{}", name, std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "argent-plugin-sign-{}-{}",
+            name,
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir

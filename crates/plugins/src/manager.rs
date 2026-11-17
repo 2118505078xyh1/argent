@@ -46,7 +46,6 @@ impl<'a> InstallPolicy<'a> {
     }
 }
 
-
 /// How deep below a root the scanner looks for plugin directories.
 const MAX_DEPTH: usize = 3;
 
@@ -306,21 +305,11 @@ impl PluginManager {
         let mut state = Json::obj();
         state.set(
             "enabled",
-            Json::Arr(
-                enabled_names
-                    .into_iter()
-                    .map(Json::string)
-                    .collect(),
-            ),
+            Json::Arr(enabled_names.into_iter().map(Json::string).collect()),
         );
         state.set(
             "disabled",
-            Json::Arr(
-                disabled_names
-                    .into_iter()
-                    .map(Json::string)
-                    .collect(),
-            ),
+            Json::Arr(disabled_names.into_iter().map(Json::string).collect()),
         );
         settings.set_user("plugins", state)
     }
@@ -420,7 +409,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("argent-plugins-{}-{}", name, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-plugins-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir

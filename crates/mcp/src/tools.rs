@@ -102,10 +102,7 @@ impl Tool for McpPromptTool {
                     for prompt in prompts {
                         let prompt_name = prompt.str_or("name", "");
                         let description = prompt.str_or("description", "");
-                        out.push_str(&format!(
-                            "{}/{}  {}\n",
-                            name, prompt_name, description
-                        ));
+                        out.push_str(&format!("{}/{}  {}\n", name, prompt_name, description));
                     }
                 }
                 if out.is_empty() {
@@ -142,10 +139,7 @@ impl Tool for McpPromptTool {
                         Err(e) => Ok(ToolResult::error(e.to_string())),
                     };
                 }
-                Ok(ToolResult::error(format!(
-                    "no MCP prompt named '{}'",
-                    name
-                )))
+                Ok(ToolResult::error(format!("no MCP prompt named '{}'", name)))
             }
             other => Ok(ToolResult::error(format!(
                 "unknown action '{}'; use list or get",

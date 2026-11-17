@@ -28,8 +28,8 @@ use argent_provider::ProviderCatalog;
 use argent_pty::ServiceTool;
 use argent_session::SessionIndex;
 use argent_tools::{
-    CatalogEntry, DelegateBatch, DelegateHandle, DelegateTool, SkillRegistry, SkillTool,
-    ToolCtx, ToolRegistry, ToolSearchTool,
+    CatalogEntry, DelegateBatch, DelegateHandle, DelegateTool, SkillRegistry, SkillTool, ToolCtx,
+    ToolRegistry, ToolSearchTool,
 };
 
 use session_ctx::SessionContext;
@@ -44,24 +44,24 @@ mod background;
 mod commands;
 mod export;
 mod fallback;
-mod mcp;
-mod structured;
-mod models_cmd;
 mod keybindings;
 pub(crate) mod mainx;
+mod mcp;
+mod models_cmd;
+mod structured;
 pub(crate) use mainx::build::*;
 pub(crate) use mainx::hooks::*;
 pub(crate) use mainx::settings::*;
 pub(crate) use mainx::worktree::*;
 mod prompts;
-mod theme;
 mod render;
 mod rpc;
 mod schema;
 mod serve;
-mod update_cmd;
 pub(crate) mod session_ctx;
+mod theme;
 mod tui;
+mod update_cmd;
 
 use approve::{Decision, TerminalApprover};
 use args::{help_for, Cli};
@@ -122,7 +122,11 @@ pub fn run(raw: &[String]) -> Result<i32> {
             // 等 flag 仍然有效）。
             args.remove(0);
             let has_target = args.first().is_some_and(|arg| !arg.starts_with('-'));
-            let target = if has_target { Some(args.remove(0)) } else { None };
+            let target = if has_target {
+                Some(args.remove(0))
+            } else {
+                None
+            };
             args.insert(0, review_prompt(target.as_deref()));
         }
         Some("acp") => {
@@ -335,10 +339,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
     // 会话亲和键：从会话文件路径导出（同一会话重启后不变），让网关把
     // 每一轮请求送回同一份 KV 前缀。`ARGENT_CACHE_KEY=off` 显式关闭。
     if std::env::var_os("ARGENT_CACHE_KEY").is_none() {
-        let key = argent_core::hash::short_hash(
-            session_path.to_string_lossy().as_bytes(),
-            24,
-        );
+        let key = argent_core::hash::short_hash(session_path.to_string_lossy().as_bytes(), 24);
         std::env::set_var("ARGENT_CACHE_KEY", key);
         std::env::set_var("ARGENT_CACHE_KEY_AUTO", "1");
     }
@@ -493,7 +494,8 @@ pub fn run(raw: &[String]) -> Result<i32> {
 
     // tool_search is the loader itself, so it is the one extra tool that is
     // always live.
-    let promotions: argent_tools::Promotions = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let promotions: argent_tools::Promotions =
+        Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let catalog = Arc::new(
         base_registry
             .names()
@@ -718,7 +720,12 @@ pub fn run(raw: &[String]) -> Result<i32> {
                         args: argent_tools::approval_summary(tool, args),
                         // bash 才有「此命令前缀」选项可给。
                         command: if tool == "bash" {
-                            Some(args.get("command").and_then(Json::as_str).unwrap_or("").to_string())
+                            Some(
+                                args.get("command")
+                                    .and_then(Json::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                            )
                         } else {
                             None
                         },
@@ -1132,7 +1139,11 @@ pub fn run(raw: &[String]) -> Result<i32> {
             // the request text is identical, so the meaning should be too.
             let (attachments, problems) = attach::collect(&prompt, &cli.cwd);
             for problem in &problems {
-                emit_notice(json_sink.as_ref(), &mut renderer, &format!("attachment skipped: {}", problem));
+                emit_notice(
+                    json_sink.as_ref(),
+                    &mut renderer,
+                    &format!("attachment skipped: {}", problem),
+                );
             }
             let message = if attachments.is_empty() {
                 argent_ai::Message::user(prompt.clone())
@@ -1225,9 +1236,15 @@ pub fn run(raw: &[String]) -> Result<i32> {
             {
                 let usage = agent.usage();
                 let mut data = Json::obj();
-                data.set("reason", Json::string(
-                    outcome.as_ref().map(|r| r.describe()).unwrap_or_else(|_| "error".to_string()),
-                ));
+                data.set(
+                    "reason",
+                    Json::string(
+                        outcome
+                            .as_ref()
+                            .map(|r| r.describe())
+                            .unwrap_or_else(|_| "error".to_string()),
+                    ),
+                );
                 data.set("promptTokens", Json::num(usage.prompt_tokens as f64));
                 data.set(
                     "completionTokens",
@@ -1390,8 +1407,10 @@ fn run_repl(
                 .map(|m| format!("[{}] {}", m.role.as_str(), m.text()))
                 .take(4)
                 .collect::<Vec<_>>()
-                .join("
-");
+                .join(
+                    "
+",
+                );
             if exchange.is_empty() {
                 println!("nothing to name yet");
                 continue;
@@ -1520,7 +1539,11 @@ fn editor_command() -> Vec<String> {
     let raw = std::env::var("VISUAL")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| std::env::var("EDITOR").ok().filter(|value| !value.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
     raw.split_whitespace().map(str::to_string).collect()
 }
@@ -1541,23 +1564,29 @@ fn compose_in_editor(draft: &str) -> Result<String> {
     } else {
         format!("{}\n\n# Lines starting with # are stripped.\n", draft)
     };
-    std::fs::write(&scratch, &seed)
-        .map_err(|error| argent_core::Error::io(format!("cannot write {}: {error}", scratch.display())))?;
+    std::fs::write(&scratch, &seed).map_err(|error| {
+        argent_core::Error::io(format!("cannot write {}: {error}", scratch.display()))
+    })?;
     let editor = editor_command();
     let Some((program, args)) = editor.split_first() else {
         let _ = std::fs::remove_file(&scratch);
-        return Err(argent_core::Error::io("no editor found (set $EDITOR)".to_string()));
+        return Err(argent_core::Error::io(
+            "no editor found (set $EDITOR)".to_string(),
+        ));
     };
     let status = std::process::Command::new(program)
         .args(args)
         .arg(&scratch)
         .status()
         .map_err(|error| argent_core::Error::io(format!("cannot run {program}: {error}")))?;
-    let text = std::fs::read_to_string(&scratch)
-        .map_err(|error| argent_core::Error::io(format!("cannot read {}: {error}", scratch.display())))?;
+    let text = std::fs::read_to_string(&scratch).map_err(|error| {
+        argent_core::Error::io(format!("cannot read {}: {error}", scratch.display()))
+    })?;
     let _ = std::fs::remove_file(&scratch);
     if !status.success() {
-        return Err(argent_core::Error::io(format!("{program} exited with {status}")));
+        return Err(argent_core::Error::io(format!(
+            "{program} exited with {status}"
+        )));
     }
     Ok(text)
 }
@@ -1667,7 +1696,11 @@ fn repl_command(
             match index.list() {
                 Ok(rows) if rows.is_empty() => println!("no saved sessions yet"),
                 Ok(rows) => {
-                    println!("{} session(s) in {}:", rows.len(), config.session_dir.display());
+                    println!(
+                        "{} session(s) in {}:",
+                        rows.len(),
+                        config.session_dir.display()
+                    );
                     for (position, (path, header)) in rows.iter().take(50).enumerate() {
                         let name = header.str_or("title", "");
                         let name = if name.is_empty() {
@@ -1678,7 +1711,13 @@ fn repl_command(
                             name
                         };
                         let marker = if path == &session.path { "*" } else { " " };
-                        println!("{}{:>2}. {}  {}", marker, position + 1, name, path.display());
+                        println!(
+                            "{}{:>2}. {}  {}",
+                            marker,
+                            position + 1,
+                            name,
+                            path.display()
+                        );
                     }
                 }
                 Err(error) => println!("cannot list sessions: {}", error),
@@ -1697,20 +1736,24 @@ fn repl_command(
                 println!("usage: /resume <number or name>  (see /sessions)");
                 return ReplAction::Continue;
             }
-            let target = argument.parse::<usize>().ok().and_then(|number| {
-                if number >= 1 && number <= rows.len() {
-                    Some(rows[number - 1].0.clone())
-                } else {
-                    None
-                }
-            }).or_else(|| {
-                rows.iter()
-                    .find(|(path, header)| {
-                        header.str_or("title", "") == argument
-                            || path.to_string_lossy().contains(&argument)
-                    })
-                    .map(|(path, _)| path.clone())
-            });
+            let target = argument
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| {
+                    if number >= 1 && number <= rows.len() {
+                        Some(rows[number - 1].0.clone())
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    rows.iter()
+                        .find(|(path, header)| {
+                            header.str_or("title", "") == argument
+                                || path.to_string_lossy().contains(&argument)
+                        })
+                        .map(|(path, _)| path.clone())
+                });
             match target {
                 Some(path) => match SessionContext::open(path) {
                     Ok(opened) => {
@@ -1725,21 +1768,19 @@ fn repl_command(
                 None => println!("no session matches '{}'", argument),
             }
         }
-        "/bug" => {
-            match crate::mainx::bug_report::write_report(config, cwd) {
-                Ok(path) => println!("bug report written to {}
-attach it manually if you file an issue", path.display()),
-                Err(e) => println!("bug report failed: {}", e),
-            }
-        }
+        "/bug" => match crate::mainx::bug_report::write_report(config, cwd) {
+            Ok(path) => println!(
+                "bug report written to {}
+attach it manually if you file an issue",
+                path.display()
+            ),
+            Err(e) => println!("bug report failed: {}", e),
+        },
         "/compact" => {
             let compact_hook = move || pre_compact_hook(hooks, cwd);
-            if let Some(summary) = compact_if_needed(
-                agent,
-                config,
-                Some(&compact_hook),
-                upgrade_sink.clone(),
-            ) {
+            if let Some(summary) =
+                compact_if_needed(agent, config, Some(&compact_hook), upgrade_sink.clone())
+            {
                 println!("compacted:\n{}", summary);
             } else {
                 println!("nothing to compact yet");
@@ -1855,7 +1896,10 @@ fn header_line(session: &std::path::Path, model: &str, cwd: &std::path::Path) ->
         argent_core::json::Json::string(session.display().to_string()),
     );
     data.set("model", argent_core::json::Json::string(model));
-    data.set("cwd", argent_core::json::Json::string(cwd.display().to_string()));
+    data.set(
+        "cwd",
+        argent_core::json::Json::string(cwd.display().to_string()),
+    );
     let mut line = argent_core::json::Json::obj();
     line.set("type", argent_core::json::Json::string("session"));
     line.set("data", data);
@@ -2017,7 +2061,9 @@ fn launch_gui() -> Result<i32> {
     }
     let child = std::process::Command::new(&candidate)
         .spawn()
-        .map_err(|e| argent_core::Error::io(format!("cannot start {}: {}", candidate.display(), e)))?;
+        .map_err(|e| {
+            argent_core::Error::io(format!("cannot start {}: {}", candidate.display(), e))
+        })?;
     println!("argent-native started (pid {})", child.id());
     Ok(0)
 }
@@ -2110,12 +2156,11 @@ fn compact_if_needed(
     }
     // The configured window is a guess. Using it for a 1M model compacts far
     // too early; for a 32k model it compacts too late. The provider knows.
-    let max_context = argent_session::controller::model_context_window(
-        agent,
-        config.max_context_tokens,
-    );
+    let max_context =
+        argent_session::controller::model_context_window(agent, config.max_context_tokens);
     let reserved = argent_session::effective_reserved(max_context, config.reserved_context_tokens);
-    let used = argent_agent::estimate_tokens(agent.history()).max(agent.last_prompt_tokens() as usize);
+    let used =
+        argent_agent::estimate_tokens(agent.history()).max(agent.last_prompt_tokens() as usize);
     let should = match config.compact_threshold_tokens {
         // An explicit line replaces the window arithmetic: used >= line
         // compacts, regardless of what the provider reports.
@@ -2159,7 +2204,6 @@ fn compact_if_needed(
     Some(summary)
 }
 
-
 /// 本会话的花费与上下文占用，供 `/cost` 与 TUI 共用。
 /// Pi-style `/session` report: the file, title, message count and usage.
 pub(crate) fn session_header(session: &SessionContext) -> String {
@@ -2177,11 +2221,7 @@ pub(crate) fn session_header(session: &SessionContext) -> String {
     )
 }
 
-pub(crate) fn session_info(
-    session: &SessionContext,
-    agent: &Agent,
-    config: &Config,
-) -> String {
+pub(crate) fn session_info(session: &SessionContext, agent: &Agent, config: &Config) -> String {
     format!(
         "{}\n{}",
         session_header(session),
@@ -2193,13 +2233,11 @@ pub(crate) fn session_info(
 /// Shared by the TUI's `/changelog` and the REPL's `/changelog`.
 pub(crate) fn changelog_for_current_version() -> String {
     let version = env!("CARGO_PKG_VERSION");
-    let text = std::fs::read_to_string("CHANGELOG.md")
-        .ok()
-        .or_else(|| {
-            // The binary may be launched from another directory.
-            let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-            std::fs::read_to_string(manifest.join("../../CHANGELOG.md")).ok()
-        });
+    let text = std::fs::read_to_string("CHANGELOG.md").ok().or_else(|| {
+        // The binary may be launched from another directory.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(manifest.join("../../CHANGELOG.md")).ok()
+    });
     let Some(text) = text else {
         return format!("argent {version}: no CHANGELOG.md found");
     };
@@ -2247,8 +2285,11 @@ pub(crate) fn cost_report(agent: &Agent, max_context: usize) -> String {
         Some(cost) => format!("${:.4}", cost),
         None => "unknown (set priceInputPerMtok / priceOutputPerMtok)".to_string(),
     };
-    out.push_str(&format!("
-cost     {}", cost));
+    out.push_str(&format!(
+        "
+cost     {}",
+        cost
+    ));
     out.push_str(&format!(
         "
 context  {} tokens of {} ({:.1}%)",
@@ -2256,8 +2297,11 @@ context  {} tokens of {} ({:.1}%)",
         format_count(max_context as u64),
         percent
     ));
-    out.push_str(&format!("
-requests {}", agent.requests()));
+    out.push_str(&format!(
+        "
+requests {}",
+        agent.requests()
+    ));
     out
 }
 
@@ -2280,9 +2324,17 @@ fn format_count(value: u64) -> String {
 /// 一律提 `login` 反而是噪音。
 fn suggest_login_if_credentials(message: &str) {
     let lowered = message.to_ascii_lowercase();
-    let looks_like_auth = ["401", "403", "unauthorized", "invalid api key", "invalid x-api-key", "missing credentials", "authentication"]
-        .iter()
-        .any(|needle| lowered.contains(needle));
+    let looks_like_auth = [
+        "401",
+        "403",
+        "unauthorized",
+        "invalid api key",
+        "invalid x-api-key",
+        "missing credentials",
+        "authentication",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle));
     if looks_like_auth {
         eprintln!(
             "hint: the provider rejected the credentials. Run `argent login` to store a key, or set ARGENT_API_KEY."
@@ -2368,7 +2420,9 @@ pub(crate) fn doctor() -> Result<i32> {
                 .unwrap_or(0);
             println!("hook grants        : {}", trust);
             let bg_on = settings.get("backgroundIntelligence").is_some_and(|v| {
-                v.as_str().map(|s| s == "true" || s == "on").unwrap_or(false)
+                v.as_str()
+                    .map(|s| s == "true" || s == "on")
+                    .unwrap_or(false)
             });
             let bg_model = settings
                 .string("backgroundModel")
@@ -2444,7 +2498,8 @@ pub(crate) fn doctor() -> Result<i32> {
                 argent_tools::ShellFlavor::WindowsCmd => {
                     warnings.push(
                         "no POSIX shell and no PowerShell found; bash commands fall back to
-                         cmd.exe, which understands neither pipes nor globs reliably.".to_string(),
+                         cmd.exe, which understands neither pipes nor globs reliably."
+                            .to_string(),
                     );
                 }
                 argent_tools::ShellFlavor::PowerShell => {}
@@ -2490,9 +2545,6 @@ fn start_background(raw_args: &[String], cli: &Cli, config: &Config) -> Result<i
     Ok(0)
 }
 
-
-
-
 /// Print the stored sessions.
 fn list_sessions(index: &SessionIndex) -> Result<i32> {
     // Drop placeholders left by failed or abandoned runs before showing the
@@ -2520,7 +2572,9 @@ fn list_sessions(index: &SessionIndex) -> Result<i32> {
 /// expose `/models`, and asking it would turn `--models` into a network error.
 fn list_profiles(profiles: &argent_profiles::ProfileRegistry) -> Result<i32> {
     if profiles.is_empty() {
-        println!("no profiles; add .argent/profiles/<name>.md or a 'profiles' block in argent.json");
+        println!(
+            "no profiles; add .argent/profiles/<name>.md or a 'profiles' block in argent.json"
+        );
         return Ok(0);
     }
     for profile in profiles.list() {
@@ -2597,7 +2651,9 @@ mod tests {
                      - 先补测试\n\
                      # trailing note from the user is not stripped mid-way\n";
         let stripped = strip_editor_comments(saved);
-        assert!(stripped.trim_start().starts_with("请帮我把这个函数重构成可测试的形态"));
+        assert!(stripped
+            .trim_start()
+            .starts_with("请帮我把这个函数重构成可测试的形态"));
         assert!(stripped.contains("保留公开 API"));
         assert!(!stripped.contains("Lines starting with #"));
         // Only lines whose first non-blank character is # are comments.
@@ -2770,10 +2826,8 @@ mod tests {
 
     #[test]
     fn notification_hook_carries_its_message_into_the_environment() {
-        let root = std::env::temp_dir().join(format!(
-            "argent-notification-hook-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("argent-notification-hook-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("mkdir");
         let path = root.join("hooks.json");
@@ -2830,9 +2884,10 @@ mod tests {
 
         // danger-full-access 仍然保持无边界的旧行为。
         let mut config = Config::default();
-        config
-            .extra
-            .insert("sandboxMode".to_string(), Json::string("danger-full-access"));
+        config.extra.insert(
+            "sandboxMode".to_string(),
+            Json::string("danger-full-access"),
+        );
         let ctx = build_ctx(&config, &PathBuf::from("/work"));
         assert!(ctx.write_roots.is_empty());
     }

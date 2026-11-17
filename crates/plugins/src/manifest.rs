@@ -349,7 +349,10 @@ fn parse_script(value: Option<&Json>, root: &Path) -> Option<ScriptDecl> {
     };
     Some(ScriptDecl {
         module,
-        operations: script.get("operations").and_then(Json::as_i64).map(|n| n as u64),
+        operations: script
+            .get("operations")
+            .and_then(Json::as_i64)
+            .map(|n| n as u64),
     })
 }
 
@@ -373,7 +376,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("argent-plugin-{}-{}", name, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-plugin-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir

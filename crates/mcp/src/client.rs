@@ -237,7 +237,8 @@ impl McpClient {
                 if let Some(session) = &auth {
                     if let Ok(mut guard) = session.lock() {
                         if let Some(token) = guard.bearer() {
-                            headers.push(("Authorization".to_string(), format!("Bearer {}", token)));
+                            headers
+                                .push(("Authorization".to_string(), format!("Bearer {}", token)));
                         }
                     }
                 }
@@ -502,8 +503,8 @@ mod tests {
     #[test]
     fn a_tool_without_annotations_is_mutating() {
         // MCP 规范里 readOnlyHint 默认 false；没声明就必须审批。
-        let item =
-            Json::parse(r#"{"name":"write_file","description":"writes","inputSchema":{}}"#).unwrap();
+        let item = Json::parse(r#"{"name":"write_file","description":"writes","inputSchema":{}}"#)
+            .unwrap();
         let tool = parse_tool(&item, "fs").expect("tool");
         assert!(!tool.read_only);
     }

@@ -1,6 +1,5 @@
 //! `--worktree`: create or reuse a linked worktree and switch cwd to it.
 
-
 use crate::*;
 /// `--worktree`：创建或复用 worktree，并把本次运行的 cwd 切过去。
 pub(crate) fn enter_worktree(cli: &mut Cli) -> Result<()> {
@@ -35,8 +34,9 @@ pub(crate) fn enter_worktree(cli: &mut Cli) -> Result<()> {
         .join(&name);
     if !target.is_dir() {
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| argent_core::Error::io(format!("create {} failed: {}", parent.display(), e)))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                argent_core::Error::io(format!("create {} failed: {}", parent.display(), e))
+            })?;
         }
         let branch = format!("argent/{}", name);
         // 新分支是常态；同名分支已存在时复用，而不是报错。

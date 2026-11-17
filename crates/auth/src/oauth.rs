@@ -377,9 +377,8 @@ mod tests {
                     Ok(read) => {
                         request.extend_from_slice(&chunk[..read]);
                         if expected.is_none() {
-                            if let Some(split) = request
-                                .windows(4)
-                                .position(|window| window == b"\r\n\r\n")
+                            if let Some(split) =
+                                request.windows(4).position(|window| window == b"\r\n\r\n")
                             {
                                 let head = String::from_utf8_lossy(&request[..split]);
                                 let length = head

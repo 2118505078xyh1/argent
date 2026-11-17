@@ -406,14 +406,7 @@ mod tests {
         let registry = ToolRegistry::with_builtins();
         let names = registry.names();
         for expected in [
-            "read",
-            "write",
-            "edit",
-            "bash",
-            "grep",
-            "find",
-            "todo",
-            "ask",
+            "read", "write", "edit", "bash", "grep", "find", "todo", "ask",
         ] {
             assert!(
                 names.contains(&expected.to_string()),

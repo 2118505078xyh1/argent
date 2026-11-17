@@ -884,7 +884,11 @@ mod imp {
             let mut env_block_aligned = vec![0u32; env_block.len().div_ceil(2)];
             for (index, chunk) in env_block.chunks(2).enumerate() {
                 let lo = chunk[0] as u32;
-                let hi = if chunk.len() > 1 { (chunk[1] as u32) << 16 } else { 0 };
+                let hi = if chunk.len() > 1 {
+                    (chunk[1] as u32) << 16
+                } else {
+                    0
+                };
                 env_block_aligned[index] = lo | hi;
             }
             let _ = &env_block;
@@ -1030,9 +1034,7 @@ mod imp {
         }
     }
 
-    pub fn spawn_jailed(
-        _spec: &crate::process::CommandSpec,
-    ) -> Result<JailedChild> {
+    pub fn spawn_jailed(_spec: &crate::process::CommandSpec) -> Result<JailedChild> {
         Err(Error::io("fs jail: not implemented on this platform"))
     }
 }
@@ -1106,7 +1108,10 @@ mod jail_tests {
                 &mut out,
                 &mut length,
             );
-            assert_ne!(ok, 0, "ConvertSecurityDescriptorToStringSecurityDescriptorW");
+            assert_ne!(
+                ok, 0,
+                "ConvertSecurityDescriptorToStringSecurityDescriptorW"
+            );
             let text = String::from_utf16_lossy(std::slice::from_raw_parts(out, length as usize));
             LocalFree(out as isize);
             LocalFree(descriptor as isize);
@@ -1125,11 +1130,19 @@ mod jail_tests {
 
         grant_workspace(&dir).expect("grant");
         let sddl = acl_sddl(&dir);
-        assert!(sddl.contains(";;;LW)"), "no low-integrity ACE after grant: {}", sddl);
+        assert!(
+            sddl.contains(";;;LW)"),
+            "no low-integrity ACE after grant: {}",
+            sddl
+        );
 
         revoke_workspace(&dir).expect("revoke");
         let sddl = acl_sddl(&dir);
-        assert!(!sddl.contains(";;;LW)"), "LW ACE still present after revoke: {}", sddl);
+        assert!(
+            !sddl.contains(";;;LW)"),
+            "LW ACE still present after revoke: {}",
+            sddl
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1145,27 +1158,28 @@ mod jail_tests {
     #[test]
     #[ignore = "shells cannot start under pure Low IL; see module docs"]
     fn a_jailed_child_writes_the_root_and_is_denied_elsewhere() {
-        let shell = ["bash.exe", "sh.exe"]
-            .iter()
-            .find_map(|name| {
-                let output = std::process::Command::new("where").arg(name).output().ok()?;
-                if output.status.success() {
-                    let first = String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .next()?
-                        .trim()
-                        .to_string();
-                    // `where bash` on Windows may hit the WSL alias, which is
-                    // useless under the jail.
-                    if first.contains("WindowsApps") {
-                        None
-                    } else {
-                        Some(std::path::PathBuf::from(first))
-                    }
-                } else {
+        let shell = ["bash.exe", "sh.exe"].iter().find_map(|name| {
+            let output = std::process::Command::new("where")
+                .arg(name)
+                .output()
+                .ok()?;
+            if output.status.success() {
+                let first = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()?
+                    .trim()
+                    .to_string();
+                // `where bash` on Windows may hit the WSL alias, which is
+                // useless under the jail.
+                if first.contains("WindowsApps") {
                     None
+                } else {
+                    Some(std::path::PathBuf::from(first))
                 }
-            });
+            } else {
+                None
+            }
+        });
         let Some(shell) = shell else {
             eprintln!("skipping: no POSIX shell outside WindowsApps");
             return;
@@ -1217,7 +1231,10 @@ mod jail_tests {
         let _ = cmd_child;
         eprintln!(
             "fs-jail: cmd probe wrote={} exit={:?} stdout={} stderr={}",
-            cmd_wrote, cmd_exit, cmd_out.trim(), cmd_err.trim()
+            cmd_wrote,
+            cmd_exit,
+            cmd_out.trim(),
+            cmd_err.trim()
         );
 
         let script = format!(

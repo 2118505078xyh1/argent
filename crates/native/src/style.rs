@@ -4,10 +4,10 @@
 //! terminal and the webview use. The native frontend therefore follows the
 //! `theme` setting instead of hard-coding a look of its own.
 
+use argent_ui_core::{Palette, Rgb};
 use iced::widget::overlay::menu;
 use iced::widget::{button, container, pick_list, text_editor, text_input};
 use iced::{Background, Border, Color, Font, Theme};
-use argent_ui_core::{Palette, Rgb};
 
 /// The UI face. Windows' Microsoft YaHei covers Latin and CJK; relying on
 /// fallback for one of the two scripts would show tofu.
@@ -146,13 +146,13 @@ pub fn row_button(
     }
 }
 
-pub fn accent_button(
-    p: Palette,
-) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
+pub fn accent_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
     move |_, status| {
         let (background, ink) = match status {
             button::Status::Hovered => (color(p.accent.mix(p.strong, 0.18)), color(p.background)),
-            button::Status::Pressed => (color(p.accent.mix(p.background, 0.18)), color(p.background)),
+            button::Status::Pressed => {
+                (color(p.accent.mix(p.background, 0.18)), color(p.background))
+            }
             button::Status::Disabled => (color(p.element), color(p.dim)),
             button::Status::Active => (color(p.accent), color(p.background)),
         };
@@ -165,9 +165,7 @@ pub fn accent_button(
     }
 }
 
-pub fn ghost_button(
-    p: Palette,
-) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
+pub fn ghost_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
     move |_, status| {
         let (background, ink) = match status {
             button::Status::Hovered => (Some(Background::Color(color(p.element))), color(p.strong)),
@@ -187,9 +185,7 @@ pub fn ghost_button(
     }
 }
 
-pub fn danger_button(
-    p: Palette,
-) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
+pub fn danger_button(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
     move |_, status| {
         let background = match status {
             button::Status::Hovered => color(p.error.mix(p.strong, 0.12)),
@@ -211,20 +207,14 @@ pub fn danger_button(
 }
 
 /// The model and effort pickers, styled as chips rather than as form fields.
-pub fn picker(
-    p: Palette,
-) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style + 'static {
+pub fn picker(p: Palette) -> impl Fn(&Theme, pick_list::Status) -> pick_list::Style + 'static {
     move |_, status| {
         let opened = matches!(status, pick_list::Status::Opened { .. });
         pick_list::Style {
             text_color: color(p.text),
             placeholder_color: color(p.dim),
             handle_color: color(p.dim),
-            background: Background::Color(color(if opened {
-                p.element
-            } else {
-                p.surface
-            })),
+            background: Background::Color(color(if opened { p.element } else { p.surface })),
             border: Border {
                 color: if opened {
                     alpha(p.accent, 0.55)
@@ -308,9 +298,7 @@ pub fn path_input(
 }
 
 /// The composer.
-pub fn editor(
-    p: Palette,
-) -> impl Fn(&Theme, text_editor::Status) -> text_editor::Style + 'static {
+pub fn editor(p: Palette) -> impl Fn(&Theme, text_editor::Status) -> text_editor::Style + 'static {
     move |_, status| text_editor::Style {
         background: Background::Color(color(if matches!(status, text_editor::Status::Hovered) {
             p.element.mix(p.border_subtle, 0.6)

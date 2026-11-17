@@ -177,7 +177,10 @@ fn login(cwd: &Path, name: &str, no_browser: bool) -> Result<i32> {
             Ok(0)
         }
         Err(error) => {
-            eprintln!("OAuth login failed for MCP server '{}': {}", server.name, error);
+            eprintln!(
+                "OAuth login failed for MCP server '{}': {}",
+                server.name, error
+            );
             Ok(1)
         }
     }

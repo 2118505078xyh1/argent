@@ -88,7 +88,12 @@ impl LoadedScript {
         input.set("payload", payload.clone());
         let output: Dynamic = self
             .engine
-            .call_fn(&mut scope, &self.ast, "arg_event", (json_to_dynamic(&input),))
+            .call_fn(
+                &mut scope,
+                &self.ast,
+                "arg_event",
+                (json_to_dynamic(&input),),
+            )
             .map_err(|e| Error::config(format!("script plugin arg_event failed: {e}")))?;
         Ok(Some(dynamic_to_json(&output)))
     }
@@ -97,7 +102,8 @@ impl LoadedScript {
 use rhai::Dynamic;
 
 fn map_string(map: &rhai::Map, key: &str) -> Option<String> {
-    map.get(key).and_then(|value| value.clone().try_cast::<String>())
+    map.get(key)
+        .and_then(|value| value.clone().try_cast::<String>())
 }
 
 /// Load a `.rhai` script, instantiate an engine with host functions, and ask
@@ -110,8 +116,12 @@ pub fn load(
     registry: Arc<ToolRegistry>,
     ctx: ToolCtx,
 ) -> ArgentResult<Arc<LoadedScript>> {
-    let source = std::fs::read_to_string(module)
-        .map_err(|e| Error::config(format!("cannot read script plugin {}: {e}", module.display())))?;
+    let source = std::fs::read_to_string(module).map_err(|e| {
+        Error::config(format!(
+            "cannot read script plugin {}: {e}",
+            module.display()
+        ))
+    })?;
 
     let mut engine = Engine::new();
     // Declarations contain deeply nested maps (tool schemas); the default
@@ -143,7 +153,12 @@ pub fn load(
     }))
 }
 
-fn register_host_functions(engine: &mut Engine, name: &str, registry: Arc<ToolRegistry>, ctx: ToolCtx) {
+fn register_host_functions(
+    engine: &mut Engine,
+    name: &str,
+    registry: Arc<ToolRegistry>,
+    ctx: ToolCtx,
+) {
     // argent_log(#{ level, message })
     let plugin_name = name.to_string();
     engine.register_fn("argent_log", move |input: rhai::Map| {

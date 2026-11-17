@@ -525,7 +525,8 @@ pub fn run(task: &Automation, store: &mut AutomationStore, now: i64) -> Result<R
     spec.env
         .push(("ARGENT_APPROVAL".to_string(), "never".to_string()));
     if let Some(profile) = &task.profile {
-        spec.env.push(("ARGENT_PROFILE".to_string(), profile.clone()));
+        spec.env
+            .push(("ARGENT_PROFILE".to_string(), profile.clone()));
     }
     if let Some(cwd) = &task.cwd {
         spec.cwd = Some(cwd.display().to_string());

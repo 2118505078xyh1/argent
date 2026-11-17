@@ -9,7 +9,5 @@ pub mod convert;
 pub mod loader;
 pub mod tool;
 
-pub use loader::{
-    load, Declarations, LoadedScript, ScriptCommandDecl, ScriptToolDecl,
-};
+pub use loader::{load, Declarations, LoadedScript, ScriptCommandDecl, ScriptToolDecl};
 pub use tool::ScriptTool;

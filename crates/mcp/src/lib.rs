@@ -14,11 +14,11 @@ pub mod transport;
 
 pub mod tools;
 pub use client::{McpClient, McpTool, ServerInfo, ServerSpec};
-pub use tools::{ClientSlot, McpPromptTool, McpResourceTool};
 pub use config::{McpConfig, McpToolAdapter, ServerConfig, ServerStatus};
 pub use oauth::{
     generate_pkce, generate_state, validate_state, LoginOptions, McpLogin, OAuthConfig,
     OAuthSession, Pkce,
 };
 pub use token_store::{AuthStatus, McpAuthStore, StoredCredential};
+pub use tools::{ClientSlot, McpPromptTool, McpResourceTool};
 pub use transport::{HttpTransport, SseTransport, StdioTransport, Transport, TransportKind};

@@ -210,7 +210,8 @@ TUI 里输入 `/help` 看键位与全部命令。最常用的几个：
 ```
 
 非全屏 REPL 同样支持会话管理：`/session`（当前文件、标题、消息数、token/花费）、
-`/sessions`（列出本机会话）、`/resume <编号|名字>`（切换会话）、`/reload`、`/changelog`。
+`/sessions`（列出本机会话，支持输入过滤、`Tab` 切当前目录/全部、`Ctrl+S` 排序）、
+`/resume <编号|名字>`（切换会话）、`/reload`、`/changelog`。
 
 消息里写 `@src/main.rs` 会把文件内容附给模型（最多三个）。写类工具会弹审批：
 `y` 允许一次、`a` 本轮全允、`n` 拒绝；Policy 规则是硬门，审批点不掉。

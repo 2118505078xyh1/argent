@@ -15,9 +15,9 @@
 
 use std::path::{Path, PathBuf};
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use argent_core::error::{Error, Result};
 use argent_core::json::Json;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand_core::OsRng;
 
 pub mod channel;
@@ -379,7 +379,8 @@ mod tests {
 
     #[test]
     fn detached_signatures_round_trip_and_reject_tampering() {
-        let dir = std::env::temp_dir().join(format!("argent-update-detached-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-update-detached-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let key_path = keygen(&dir).expect("keygen");

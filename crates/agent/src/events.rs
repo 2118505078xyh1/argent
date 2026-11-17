@@ -243,10 +243,7 @@ mod tests {
                 }
                 (AgentEvent::AssistantText(a), AgentEvent::AssistantText(b)) => assert_eq!(a, b),
                 (AgentEvent::Thinking(a), AgentEvent::Thinking(b)) => assert_eq!(a, b),
-                (
-                    AgentEvent::ToolRequested(a),
-                    AgentEvent::ToolRequested(b),
-                ) => {
+                (AgentEvent::ToolRequested(a), AgentEvent::ToolRequested(b)) => {
                     assert_eq!(a.id, b.id);
                     assert_eq!(a.name, b.name);
                     assert_eq!(a.arguments, b.arguments);

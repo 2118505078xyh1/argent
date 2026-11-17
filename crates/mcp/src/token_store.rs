@@ -291,8 +291,9 @@ impl McpAuthStore {
                 })?;
             }
         }
-        std::fs::write(&self.path, text)
-            .map_err(|error| Error::io(format!("write {} failed: {}", self.path.display(), error)))?;
+        std::fs::write(&self.path, text).map_err(|error| {
+            Error::io(format!("write {} failed: {}", self.path.display(), error))
+        })?;
         restrict_permissions(&self.path);
         Ok(())
     }
@@ -331,7 +332,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("argent-mcp-auth-{}-{}", name, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-mcp-auth-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir.join(FILE_NAME)
@@ -356,7 +358,10 @@ mod tests {
     fn stores_and_reloads_a_token() {
         let path = scratch("roundtrip");
         let mut store = McpAuthStore::at(&path);
-        assert_eq!(store.status("demo", "http://x/mcp"), AuthStatus::NotSignedIn);
+        assert_eq!(
+            store.status("demo", "http://x/mcp"),
+            AuthStatus::NotSignedIn
+        );
         store
             .set(credential("demo", "http://x/mcp", "at-1"))
             .expect("set");
@@ -366,9 +371,18 @@ mod tests {
         assert_eq!(entry.access_token, "at-1");
         assert_eq!(entry.refresh_token.as_deref(), Some("refresh"));
         assert_eq!(entry.scopes, vec!["read".to_string()]);
-        assert_eq!(reloaded.status("demo", "http://x/mcp"), AuthStatus::SignedIn);
-        assert_eq!(reloaded.status("other", "http://x/mcp"), AuthStatus::NotSignedIn);
-        assert_eq!(reloaded.status("demo", "http://y/mcp"), AuthStatus::NotSignedIn);
+        assert_eq!(
+            reloaded.status("demo", "http://x/mcp"),
+            AuthStatus::SignedIn
+        );
+        assert_eq!(
+            reloaded.status("other", "http://x/mcp"),
+            AuthStatus::NotSignedIn
+        );
+        assert_eq!(
+            reloaded.status("demo", "http://y/mcp"),
+            AuthStatus::NotSignedIn
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -384,7 +398,9 @@ mod tests {
             .expect("set");
         assert_eq!(store.entries().len(), 1);
         assert_eq!(
-            store.get("demo", "http://x/mcp").map(|e| e.access_token.clone()),
+            store
+                .get("demo", "http://x/mcp")
+                .map(|e| e.access_token.clone()),
             Some("new".to_string())
         );
         let _ = std::fs::remove_file(&path);
@@ -397,7 +413,10 @@ mod tests {
         let store = McpAuthStore::at(&path);
         assert!(store.entries().is_empty());
         assert!(store.load_error().is_some());
-        assert_eq!(store.status("demo", "http://x/mcp"), AuthStatus::NotSignedIn);
+        assert_eq!(
+            store.status("demo", "http://x/mcp"),
+            AuthStatus::NotSignedIn
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -407,7 +426,10 @@ mod tests {
         let store = McpAuthStore::at(&path);
         assert!(store.entries().is_empty());
         assert!(store.load_error().is_none());
-        assert_eq!(store.status("demo", "http://x/mcp"), AuthStatus::NotSignedIn);
+        assert_eq!(
+            store.status("demo", "http://x/mcp"),
+            AuthStatus::NotSignedIn
+        );
     }
 
     #[test]

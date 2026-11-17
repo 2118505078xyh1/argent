@@ -208,7 +208,8 @@ mod tests {
         // 从第一条 user 消息分叉：重放只有分叉点之前的路径。
         let replayed = ctx.fork_at(&one_id).expect("fork");
         assert_eq!(replayed.len(), 1);
-        ctx.record(Message::assistant("alternative")).expect("record");
+        ctx.record(Message::assistant("alternative"))
+            .expect("record");
         ctx.close();
 
         // 重开：分支结构保留，active 停在新分支上。
@@ -216,7 +217,10 @@ mod tests {
         let messages = reopened.messages();
         assert_eq!(messages.len(), 2, "one -> alternative");
         assert_eq!(messages[1].text(), "alternative");
-        assert!(!reopened.tree.branch_points().is_empty(), "one is a branch point");
+        assert!(
+            !reopened.tree.branch_points().is_empty(),
+            "one is a branch point"
+        );
         assert_eq!(reopened.tree.ids().len(), 3, "one + two + alternative");
     }
 
@@ -229,7 +233,9 @@ mod tests {
         store
             .append(&Entry::Header(argent_core::Json::parse("{}").unwrap()))
             .expect("header");
-        store.append(&Entry::Message(Message::user("old one"))).expect("m1");
+        store
+            .append(&Entry::Message(Message::user("old one")))
+            .expect("m1");
         store
             .append(&Entry::Message(Message::assistant("old two")))
             .expect("m2");

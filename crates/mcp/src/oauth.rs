@@ -362,7 +362,12 @@ impl<'a> McpLogin<'a> {
         metadata: &AuthServerMetadata,
         redirect_uri: &str,
     ) -> Result<ClientCredentials> {
-        if let Some(client_id) = self.oauth.client_id.clone().filter(|id| !id.trim().is_empty()) {
+        if let Some(client_id) = self
+            .oauth
+            .client_id
+            .clone()
+            .filter(|id| !id.trim().is_empty())
+        {
             let client_secret = match &self.oauth.client_secret {
                 Some(raw) if !raw.trim().is_empty() => Some(resolve_secret(raw)?),
                 _ => None,
@@ -559,8 +564,8 @@ fn register_client(
     if !scopes.is_empty() {
         body.set("scope", Json::string(scopes.join(" ")));
     }
-    let request =
-        http::Request::post_json(registration_url, &body.dump()).header("Accept", "application/json");
+    let request = http::Request::post_json(registration_url, &body.dump())
+        .header("Accept", "application/json");
     let response = http::send(&request)?;
     if !response.is_success() {
         return Err(Error::provider(format!(
@@ -602,7 +607,10 @@ pub fn resolve_metadata(oauth: &OAuthConfig, server_url: &str) -> Result<AuthSer
         return fetch_metadata(url);
     }
     if let (Some(authorize), Some(token)) = (
-        oauth.authorization_url.as_deref().filter(|v| !v.trim().is_empty()),
+        oauth
+            .authorization_url
+            .as_deref()
+            .filter(|v| !v.trim().is_empty()),
         oauth.token_url.as_deref().filter(|v| !v.trim().is_empty()),
     ) {
         return Ok(AuthServerMetadata {
@@ -638,7 +646,10 @@ pub fn resolve_metadata(oauth: &OAuthConfig, server_url: &str) -> Result<AuthSer
 /// 读取一份授权服务器元数据文档。
 fn fetch_metadata(url: &str) -> Result<AuthServerMetadata> {
     let value = fetch_json(url)?;
-    let authorization_endpoint = value.str_or("authorization_endpoint", "").trim().to_string();
+    let authorization_endpoint = value
+        .str_or("authorization_endpoint", "")
+        .trim()
+        .to_string();
     let token_endpoint = value.str_or("token_endpoint", "").trim().to_string();
     if authorization_endpoint.is_empty() || token_endpoint.is_empty() {
         return Err(Error::config(format!(
@@ -849,7 +860,10 @@ impl OAuthSession {
             return Some(entry.access_token);
         }
         match self.refresh() {
-            Ok(true) => self.current.as_ref().map(|entry| entry.access_token.clone()),
+            Ok(true) => self
+                .current
+                .as_ref()
+                .map(|entry| entry.access_token.clone()),
             // 刷新失败就当作未登录：调用方会给出 `argent mcp login` 的提示。
             Ok(false) | Err(_) => None,
         }
@@ -951,8 +965,12 @@ fn bind_callback(oauth: &OAuthConfig) -> Result<(TcpListener, String)> {
     };
     let address = SocketAddr::from_str(&format!("{}:{}", bind_host, port))
         .map_err(|error| Error::config(format!("invalid callback address: {}", error)))?;
-    let listener = TcpListener::bind(address)
-        .map_err(|error| Error::io(format!("cannot bind OAuth callback on {}: {}", address, error)))?;
+    let listener = TcpListener::bind(address).map_err(|error| {
+        Error::io(format!(
+            "cannot bind OAuth callback on {}: {}",
+            address, error
+        ))
+    })?;
     let bound = listener
         .local_addr()
         .map_err(|error| Error::io(format!("cannot read callback port: {}", error)))?
@@ -1237,7 +1255,10 @@ fn open_url(url: &str) -> Result<()> {
         }
         #[cfg(target_os = "macos")]
         {
-            std::process::Command::new("open").arg(url).spawn().map(|_| ())
+            std::process::Command::new("open")
+                .arg(url)
+                .spawn()
+                .map(|_| ())
         }
         #[cfg(all(unix, not(target_os = "macos")))]
         {
@@ -1290,7 +1311,8 @@ mod tests {
                 Ok(read) => {
                     buffer.extend_from_slice(&chunk[..read]);
                     if expected.is_none() {
-                        if let Some(split) = buffer.windows(4).position(|window| window == b"\r\n\r\n")
+                        if let Some(split) =
+                            buffer.windows(4).position(|window| window == b"\r\n\r\n")
                         {
                             let head = String::from_utf8_lossy(&buffer[..split]);
                             let length = head
@@ -1371,7 +1393,8 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("argent-mcp-oauth-{}-{}", name, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-mcp-oauth-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir
@@ -1458,8 +1481,14 @@ mod tests {
     #[test]
     fn resolves_environment_and_command_secrets() {
         std::env::set_var("ARGENT_MCP_TEST_SECRET", "s3cret");
-        assert_eq!(resolve_secret("${ARGENT_MCP_TEST_SECRET}").expect("braced"), "s3cret");
-        assert_eq!(resolve_secret("$ARGENT_MCP_TEST_SECRET").expect("bare"), "s3cret");
+        assert_eq!(
+            resolve_secret("${ARGENT_MCP_TEST_SECRET}").expect("braced"),
+            "s3cret"
+        );
+        assert_eq!(
+            resolve_secret("$ARGENT_MCP_TEST_SECRET").expect("bare"),
+            "s3cret"
+        );
         assert_eq!(resolve_secret("plain-value").expect("plain"), "plain-value");
     }
 
@@ -1554,7 +1583,10 @@ mod tests {
             } else if path.starts_with("/register") {
                 assert!(raw.contains("\"client_name\":\"argent-test\""), "{}", raw);
                 assert!(raw.contains("redirect_uris"), "{}", raw);
-                http_response(201, r#"{"client_id":"dcr-client","client_secret":"dcr-secret"}"#)
+                http_response(
+                    201,
+                    r#"{"client_id":"dcr-client","client_secret":"dcr-secret"}"#,
+                )
             } else {
                 assert!(raw.contains("client_id=dcr-client"), "{}", raw);
                 assert!(
@@ -1671,8 +1703,8 @@ mod tests {
             &url,
             OAuthConfig::default(),
         )));
-        let mut transport =
-            HttpTransport::new("demo", &url, Vec::new(), Duration::from_secs(5)).with_oauth(session);
+        let mut transport = HttpTransport::new("demo", &url, Vec::new(), Duration::from_secs(5))
+            .with_oauth(session);
         let result = transport.request(1, "initialize", None).expect("request");
         assert_eq!(result.str_or("protocolVersion", ""), "2024-11-05");
 
@@ -1708,12 +1740,16 @@ mod tests {
             &url,
             OAuthConfig::default(),
         )));
-        let mut transport =
-            HttpTransport::new("demo", &url, Vec::new(), Duration::from_secs(5)).with_oauth(session);
+        let mut transport = HttpTransport::new("demo", &url, Vec::new(), Duration::from_secs(5))
+            .with_oauth(session);
         let error = transport
             .request(1, "initialize", None)
             .expect_err("must fail");
-        assert!(error.to_string().contains("argent mcp login demo"), "{}", error);
+        assert!(
+            error.to_string().contains("argent mcp login demo"),
+            "{}",
+            error
+        );
 
         let seen = server.join().expect("server");
         let mcp: Vec<&String> = seen
@@ -1779,4 +1815,3 @@ mod tests {
         );
     }
 }
-

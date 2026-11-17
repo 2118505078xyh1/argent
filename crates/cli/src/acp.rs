@@ -10,8 +10,8 @@
 //! streaming update variants for text, thinking, tool calls and usage.
 
 use std::collections::HashMap;
-use std::io::{BufRead, Write};
 use std::collections::VecDeque;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};

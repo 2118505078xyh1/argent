@@ -34,7 +34,8 @@ impl PromptTemplate {
     /// Parse a template from markdown text.
     pub fn parse(text: &str, path: &Path) -> Option<PromptTemplate> {
         let text = text.trim_start_matches('\u{feff}');
-        let (frontmatter, body) = argent_tools::skills::split_frontmatter(text).unwrap_or(("", text));
+        let (frontmatter, body) =
+            argent_tools::skills::split_frontmatter(text).unwrap_or(("", text));
         let fields = argent_tools::skills::parse_fields(frontmatter);
         let lookup = |key: &str| -> String {
             fields

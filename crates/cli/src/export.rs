@@ -47,7 +47,9 @@ pub fn render(meta: &ExportMeta<'_>, messages: &[Message]) -> String {
                 html.push_str("</section>\n");
             }
             Role::Assistant => {
-                html.push_str("<section class=\"turn assistant\">\n<div class=\"who\">argent</div>\n");
+                html.push_str(
+                    "<section class=\"turn assistant\">\n<div class=\"who\">argent</div>\n",
+                );
                 render_content(&mut html, message);
                 for call in &message.tool_calls {
                     html.push_str("<details class=\"call\">");

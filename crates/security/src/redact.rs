@@ -158,7 +158,8 @@ fn placeholder(kind: &str) -> &'static str {
 pub fn redact_json(value: &argent_core::json::Json) -> argent_core::json::Json {
     let text = value.dump();
     let scrubbed = redact_text(&text);
-    argent_core::json::Json::parse(&scrubbed).unwrap_or_else(|_| argent_core::json::Json::string(scrubbed))
+    argent_core::json::Json::parse(&scrubbed)
+        .unwrap_or_else(|_| argent_core::json::Json::string(scrubbed))
 }
 
 #[cfg(test)]
@@ -196,7 +197,8 @@ mod tests {
     #[test]
     fn json_keeps_its_shape() {
         let value =
-            argent_core::json::Json::parse(r#"{"path":"a.txt","key":"sk-abcdef0123456789"}"#).unwrap();
+            argent_core::json::Json::parse(r#"{"path":"a.txt","key":"sk-abcdef0123456789"}"#)
+                .unwrap();
         let out = redact_json(&value);
         assert_eq!(out.str_or("path", ""), "a.txt");
         assert!(!out.dump().contains("abcdef0123456789"));

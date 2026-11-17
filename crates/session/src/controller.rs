@@ -10,8 +10,8 @@
 //! This module owns the agent-side half. Frontends keep their own UI events;
 //! they call one of these methods and then render whatever they need.
 
-use argent_ai::Message;
 use argent_agent::Agent;
+use argent_ai::Message;
 
 /// How a conversation is being replaced.
 #[derive(Debug, Clone)]
@@ -21,7 +21,10 @@ pub enum HistoryChange {
     /// The same session is being emptied.
     Clear,
     /// The same session is rewritten in place; usage and request counts stay.
-    Compact { messages: Vec<Message>, summary: String },
+    Compact {
+        messages: Vec<Message>,
+        summary: String,
+    },
 }
 
 /// Apply one transition to the agent.
@@ -61,15 +64,12 @@ pub fn clear(agent: &mut Agent) {
 /// Frontends that cache the catalog can pass its number to `context_window`
 /// directly instead.
 pub fn model_context_window(agent: &Agent, configured: usize) -> usize {
-    let model_window = agent
-        .models()
-        .ok()
-        .and_then(|models| {
-            models
-                .into_iter()
-                .find(|model| model.id == agent.model())
-                .map(|model| model.context_length)
-        });
+    let model_window = agent.models().ok().and_then(|models| {
+        models
+            .into_iter()
+            .find(|model| model.id == agent.model())
+            .map(|model| model.context_length)
+    });
     context_window(configured, model_window)
 }
 

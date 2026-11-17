@@ -244,7 +244,12 @@ impl HookOutcome {
     pub fn as_notice(&self) -> String {
         let detail = clip_hook_output(&self.stdout, &self.stderr);
         if self.success {
-            format!("{} hook (async) {}: {}", self.event.name(), self.command, detail)
+            format!(
+                "{} hook (async) {}: {}",
+                self.event.name(),
+                self.command,
+                detail
+            )
         } else {
             format!(
                 "{} hook (async) failed for {}: {}",
@@ -306,11 +311,7 @@ impl AsyncHookRun {
 ///
 /// Sync hooks are intentionally excluded: callers must run those through
 /// [`run`] so their block/allow decision stays synchronous.
-pub fn run_async(
-    config: &HookConfig,
-    event: HookEvent,
-    ctx: &HookContext,
-) -> AsyncHookRun {
+pub fn run_async(config: &HookConfig, event: HookEvent, ctx: &HookContext) -> AsyncHookRun {
     let handles = config
         .for_event(event, ctx.tool_name.as_deref())
         .into_iter()
@@ -721,7 +722,12 @@ mod tests {
     fn every_event_name_round_trips() {
         assert_eq!(HookEvent::ALL.len(), 11);
         for event in HookEvent::ALL {
-            assert_eq!(HookEvent::parse(event.name()), Some(event), "{}", event.name());
+            assert_eq!(
+                HookEvent::parse(event.name()),
+                Some(event),
+                "{}",
+                event.name()
+            );
         }
     }
 

@@ -141,9 +141,8 @@ fn hex_to_fixed(hex: &str) -> argent_core::error::Result<Color> {
         )));
     }
     let channel = |at: usize| -> argent_core::error::Result<u8> {
-        u8::from_str_radix(&digits[at..at + 2], 16).map_err(|_| {
-            argent_core::error::Error::config(format!("color '{}' is not hex", hex))
-        })
+        u8::from_str_radix(&digits[at..at + 2], 16)
+            .map_err(|_| argent_core::error::Error::config(format!("color '{}' is not hex", hex)))
     };
     let (r, g, b) = (channel(0)?, channel(2)?, channel(4)?);
     // 6x6x6 立方 + 灰阶，取最近的：足够接近，且不依赖终端调色板。
@@ -152,8 +151,7 @@ fn hex_to_fixed(hex: &str) -> argent_core::error::Result<Color> {
         scaled.min(5)
     };
     let cube = 16 + 36 * level(r) + 6 * level(g) + level(b);
-    let gray = 232
-        + ((r as f32 + g as f32 + b as f32) / 3.0 / 255.0 * 23.0).round() as u8;
+    let gray = 232 + ((r as f32 + g as f32 + b as f32) / 3.0 / 255.0 * 23.0).round() as u8;
     let spread = r.max(g).max(b) - r.min(g).min(b);
     Ok(Color::Fixed(if spread < 12 { gray } else { cube }))
 }
@@ -177,7 +175,10 @@ pub fn load(name: &str, cwd: &Path) -> Theme {
     let base = base.unwrap_or_else(|| Theme::builtin("dark").expect("dark is built in"));
     let paths = argent_config::Paths::new(cwd);
     // 项目级覆盖用户级。
-    for root in [paths.storage().join("themes"), cwd.join(".argent").join("themes")] {
+    for root in [
+        paths.storage().join("themes"),
+        cwd.join(".argent").join("themes"),
+    ] {
         let file = root.join(format!("{}.json", name));
         if !file.is_file() {
             continue;
@@ -208,7 +209,10 @@ pub fn load(name: &str, cwd: &Path) -> Theme {
 pub fn names(cwd: &Path) -> Vec<String> {
     let mut out = vec!["dark".to_string(), "light".to_string()];
     let paths = argent_config::Paths::new(cwd);
-    for root in [paths.storage().join("themes"), cwd.join(".argent").join("themes")] {
+    for root in [
+        paths.storage().join("themes"),
+        cwd.join(".argent").join("themes"),
+    ] {
         let Ok(entries) = std::fs::read_dir(&root) else {
             continue;
         };

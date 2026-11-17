@@ -23,8 +23,8 @@ use argent_core::json::Json;
 use argent_provider::ProviderCatalog;
 use argent_session::{entries_to_messages, Entry, SessionIndex, SessionStore};
 use argent_tools::{
-    CatalogEntry, CheckpointStore, DelegateBatch, DelegateHandle, DelegateTool,
-    SkillRegistry, SkillTool, ToolCtx, ToolRegistry, ToolSearchTool,
+    CatalogEntry, CheckpointStore, DelegateBatch, DelegateHandle, DelegateTool, SkillRegistry,
+    SkillTool, ToolCtx, ToolRegistry, ToolSearchTool,
 };
 use argent_ui_core::Command;
 
@@ -455,7 +455,8 @@ pub fn prepare_config_with_profile(
 ) -> Result<Config, String> {
     let mut config = Config::load(cwd).map_err(|e| e.to_string())?;
     let settings = Settings::load(cwd).map_err(|e| e.to_string())?;
-    let profiles = argent_profiles::ProfileRegistry::load(cwd, &settings).map_err(|e| e.to_string())?;
+    let profiles =
+        argent_profiles::ProfileRegistry::load(cwd, &settings).map_err(|e| e.to_string())?;
     let profile_name = profile_override
         .map(str::to_string)
         .or_else(|| {
@@ -770,7 +771,10 @@ fn build_agent(
     for tool in argent_plugin::loader::load_all(cwd) {
         registry.register(tool);
     }
-    registry.register_plugin_tool(argent_tools::plugin::CODEINTEL, Box::new(argent_lsp::CodeIntelTool));
+    registry.register_plugin_tool(
+        argent_tools::plugin::CODEINTEL,
+        Box::new(argent_lsp::CodeIntelTool),
+    );
     registry.register_plugin_tool(argent_tools::plugin::JOBS, Box::new(argent_jobs::JobsTool));
     // 先占位：装配完门禁后换成带工厂的真实现（见下方 replace_delegate）。
     registry.register_plugin_tool(
@@ -904,7 +908,8 @@ fn build_agent(
                 .into_iter()
                 .filter(|hook| !hook.async_hook)
             {
-                let outcome = argent_hooks::run_command(argent_hooks::HookEvent::PreToolUse, hook, &ctx);
+                let outcome =
+                    argent_hooks::run_command(argent_hooks::HookEvent::PreToolUse, hook, &ctx);
                 if !outcome.success {
                     let _ = event_for_pre.send(UiEvent::Agent(AgentEvent::Notice(format!(
                         "PreToolUse hook failed for {}: {}",
@@ -1065,9 +1070,11 @@ fn build_agent(
         post_tool: agent_config.post_tool.clone(),
         approve: agent_config.approve.clone(),
         approval_scope: agent_config.approval_scope,
-        progress: Some(std::sync::Arc::new(move |event: argent_tools::SubagentEvent| {
-            let _ = event_tx.send(UiEvent::Agent(AgentEvent::Notice(event.describe())));
-        })),
+        progress: Some(std::sync::Arc::new(
+            move |event: argent_tools::SubagentEvent| {
+                let _ = event_tx.send(UiEvent::Agent(AgentEvent::Notice(event.describe())));
+            },
+        )),
         // 子代理的写入记在父运行名下，回滚一次撤掉整轮。
         checkpoints: Some(checkpoints.clone()),
         promotions: Some(std::sync::Arc::clone(&promotions)),
@@ -1205,10 +1212,8 @@ pub fn catalog(config: &Config) -> (usize, Vec<(String, usize)>) {
         .iter()
         .find(|(id, _)| id == &config.model)
         .map(|(_, length)| *length);
-    let context = argent_session::controller::context_window(
-        config.max_context_tokens,
-        model_window,
-    );
+    let context =
+        argent_session::controller::context_window(config.max_context_tokens, model_window);
     (context, entries)
 }
 
@@ -1292,12 +1297,7 @@ mod session_worker_tests {
             session_dir: dir.clone(),
             ..Config::default()
         };
-        let engine = start_session(
-            config,
-            dir.clone(),
-            None,
-            Arc::new(AtomicU64::new(1)),
-        );
+        let engine = start_session(config, dir.clone(), None, Arc::new(AtomicU64::new(1)));
         let _ = engine.commands.send(Command::Rewind { steps: 1 });
 
         let deadline = std::time::Instant::now() + Duration::from_secs(10);

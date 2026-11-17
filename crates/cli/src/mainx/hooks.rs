@@ -1,6 +1,5 @@
 //! Hook dispatch: permission, notification, pre-compaction, session end.
 
-
 use crate::*;
 
 /// Run `PermissionRequest` hooks and return a blocking reason, if any.
@@ -31,7 +30,10 @@ pub(crate) fn permission_hook_block(
 /// Claude Code 用这个事件做“需要你操作”的提醒（桌面通知、声音等）。
 /// 失败不影响审批流程，所以结果直接丢弃。
 pub(crate) fn notification_hook(config: &HookConfig, cwd: &Path, tool: &str, args: &Json) {
-    if config.for_event(HookEvent::Notification, Some(tool)).is_empty() {
+    if config
+        .for_event(HookEvent::Notification, Some(tool))
+        .is_empty()
+    {
         return;
     }
     let ctx = HookContext {
@@ -76,9 +78,15 @@ pub(crate) fn workspace_hook_files(plugins: &PluginManager, cwd: &Path) -> Vec<P
 /// trust check is the whole point: a plugin hook is arbitrary shell code.
 pub(crate) fn load_hooks(plugins: &PluginManager, cwd: &Path) -> HookConfig {
     let paths = Paths::new(cwd);
-    argent_plugins::load_trusted_hooks(plugins, cwd, paths.storage(), &paths.hook_trust(), &mut |line| {
-        eprintln!("{}", line);
-    })
+    argent_plugins::load_trusted_hooks(
+        plugins,
+        cwd,
+        paths.storage(),
+        &paths.hook_trust(),
+        &mut |line| {
+            eprintln!("{}", line);
+        },
+    )
 }
 
 pub(crate) fn clip_hook_output(stdout: &str, stderr: &str) -> String {

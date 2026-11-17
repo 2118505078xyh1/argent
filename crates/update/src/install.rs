@@ -76,8 +76,13 @@ fn collect_binaries(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 ///
 /// 不是 zip 的包被当成裸的可执行文件，直接放进去。
 pub fn extract(archive: &Path, destination: &Path) -> Result<()> {
-    std::fs::create_dir_all(destination)
-        .map_err(|error| Error::io(format!("create {} failed: {}", destination.display(), error)))?;
+    std::fs::create_dir_all(destination).map_err(|error| {
+        Error::io(format!(
+            "create {} failed: {}",
+            destination.display(),
+            error
+        ))
+    })?;
     let bytes = std::fs::read(archive)
         .map_err(|error| Error::io(format!("read {} failed: {}", archive.display(), error)))?;
     if bytes.starts_with(b"PK") {
@@ -168,9 +173,8 @@ pub fn swap_binary(source: &Path, target: &Path) -> Result<Option<PathBuf>> {
             let _ = std::fs::remove_file(&backup);
         }
         // 先改名再覆盖：Windows 上正在运行的 exe 不能被写，但可以改名。
-        std::fs::rename(target, &backup).map_err(|error| {
-            Error::io(format!("backup {} failed: {}", target.display(), error))
-        })?;
+        std::fs::rename(target, &backup)
+            .map_err(|error| Error::io(format!("backup {} failed: {}", target.display(), error)))?;
     }
     match std::fs::copy(source, target) {
         Ok(_) => Ok(if had_target { Some(backup) } else { None }),
@@ -247,7 +251,9 @@ mod tests {
         let target = root.join("argent.exe");
         std::fs::write(&target, "old").unwrap();
 
-        let backup = swap_binary(&source, &target).expect("swap").expect("backup");
+        let backup = swap_binary(&source, &target)
+            .expect("swap")
+            .expect("backup");
         assert_eq!(backup, root.join("argent.bak"));
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), "old");

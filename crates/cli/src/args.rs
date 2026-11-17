@@ -253,6 +253,7 @@ OPTIONS:
         --output-schema <F> Force the final answer to be JSON matching this schema
                             (a file path, or inline JSON beginning with '{')
         --bg                Run in the background; prints an id, then `logs <id>`
+                            (auto-approves tools unless --approval is given)
         --worktree[=NAME]   Run in a fresh git worktree (auto-named if omitted)
         --sandbox-mode <M>  File-tool policy: read-only | workspace-write (default) |
                             danger-full-access. workspace-write confines write/edit
@@ -374,6 +375,7 @@ pub const HELP_ZH: &str = r#"argent — Rust 编写的 coding agent
         --output-schema <F> 要求最终回答是符合该 schema 的 JSON
                             （文件路径，或以 '{' 开头的内联 JSON）
         --bg                后台运行；立即打印 id，之后用 `logs <id>` 查看
+                            （未指定 --approval 时自动批准所有工具）
         --worktree[=NAME]   在新的 git worktree 中运行（省略名字则自动生成）
         --sandbox-mode <M>  文件工具策略：read-only | workspace-write（默认）|
                             danger-full-access。workspace-write 把 write/edit
@@ -470,7 +472,8 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             }
             "--config" => {
                 let value = next_value(args, &mut index, "--config")?;
-                cli.config_overrides.push(split_override(&value, "--config")?);
+                cli.config_overrides
+                    .push(split_override(&value, "--config")?);
             }
             "--fallback-model" => {
                 cli.fallback_model = Some(next_value(args, &mut index, "--fallback-model")?);

@@ -17,9 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use argent_core::json::Json;
 use argent_core::path::expand_home;
 
-use crate::tool::{
-    arg_bool_opt, arg_str_opt, schema_object, Tool, ToolCtx, ToolResult,
-};
+use crate::tool::{arg_bool_opt, arg_str_opt, schema_object, Tool, ToolCtx, ToolResult};
 
 const INDEX_VERSION: u32 = 1;
 const CACHE_TTL_SECS: u64 = 300;
@@ -106,11 +104,7 @@ impl RepoMap {
                 continue;
             }
             let mut symbols = Vec::new();
-            for symbol in entry
-                .get("symbols")
-                .and_then(Json::as_array)
-                .unwrap_or(&[])
-            {
+            for symbol in entry.get("symbols").and_then(Json::as_array).unwrap_or(&[]) {
                 let name = symbol.str_or("name", "");
                 if name.is_empty() {
                     continue;
@@ -236,7 +230,10 @@ fn write_cache(path: &Path, map: &RepoMap) {
 fn index_path(root: &Path) -> PathBuf {
     let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    canonical.to_string_lossy().to_ascii_lowercase().hash(&mut hasher);
+    canonical
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .hash(&mut hasher);
     let name = canonical
         .file_name()
         .and_then(|name| name.to_str())
@@ -250,7 +247,11 @@ fn index_path(root: &Path) -> PathBuf {
             }
         })
         .collect::<String>();
-    expand_home(Path::new("~/.argent/index")).join(format!("{:016x}-{}.json", hasher.finish(), name))
+    expand_home(Path::new("~/.argent/index")).join(format!(
+        "{:016x}-{}.json",
+        hasher.finish(),
+        name
+    ))
 }
 
 fn build_map(root: &Path) -> RepoMap {
@@ -268,10 +269,9 @@ fn build_map(root: &Path) -> RepoMap {
             .unwrap_or(&entry.path)
             .to_string_lossy()
             .replace('\\', "/");
-        if relative
-            .split('/')
-            .any(|part| part == ".git" || part == ".argent" || part == "node_modules" || part == "target")
-        {
+        if relative.split('/').any(|part| {
+            part == ".git" || part == ".argent" || part == "node_modules" || part == "target"
+        }) {
             continue;
         }
         let extension = entry
@@ -388,11 +388,7 @@ fn rust_symbol(line: &str) -> Option<(String, String)> {
         if rest.is_empty() {
             return None;
         }
-        let target = rest
-            .split(['{', '('])
-            .next()
-            .unwrap_or(rest)
-            .trim();
+        let target = rest.split(['{', '(']).next().unwrap_or(rest).trim();
         return (!target.is_empty()).then(|| (clip(target, 80), "impl".to_string()));
     }
     for (prefix, kind) in [
@@ -471,7 +467,9 @@ fn go_symbol(line: &str) -> Option<(String, String)> {
     if let Some(rest) = line.strip_prefix("func ") {
         let rest = rest.trim_start();
         let rest = if rest.starts_with('(') {
-            rest.split_once(')').map(|(_, tail)| tail.trim_start()).unwrap_or(rest)
+            rest.split_once(')')
+                .map(|(_, tail)| tail.trim_start())
+                .unwrap_or(rest)
         } else {
             rest
         };
@@ -479,7 +477,11 @@ fn go_symbol(line: &str) -> Option<(String, String)> {
             return Some((name, "fn".to_string()));
         }
     }
-    for (prefix, kind) in [("type ", "type"), ("struct ", "struct"), ("interface ", "interface")] {
+    for (prefix, kind) in [
+        ("type ", "type"),
+        ("struct ", "struct"),
+        ("interface ", "interface"),
+    ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             if let Some(name) = identifier(rest) {
                 return Some((name, kind.to_string()));
@@ -583,12 +585,21 @@ fn stats(map: &RepoMap) -> String {
         map.files.len(),
         map.symbol_count(),
         age,
-        if age > CACHE_TTL_SECS { " — stale, use refresh" } else { "" }
+        if age > CACHE_TTL_SECS {
+            " — stale, use refresh"
+        } else {
+            ""
+        }
     );
     for (kind, (files, symbols)) in by_kind {
-        out.push_str(&format!("{:<12} {:>4} files  {:>5} symbols\n", kind, files, symbols));
+        out.push_str(&format!(
+            "{:<12} {:>4} files  {:>5} symbols\n",
+            kind, files, symbols
+        ));
     }
-    out.push_str("use {\"query\":\"name\"} to find a symbol, or {\"path\":\"file\"} for an outline");
+    out.push_str(
+        "use {\"query\":\"name\"} to find a symbol, or {\"path\":\"file\"} for an outline",
+    );
     out
 }
 
@@ -661,9 +672,11 @@ fn outline(map: &RepoMap, requested: &str) -> String {
         .iter()
         .find(|file| file.path.eq_ignore_ascii_case(requested))
         .or_else(|| {
-            map.files
-                .iter()
-                .find(|file| file.path.to_ascii_lowercase().ends_with(&requested.to_ascii_lowercase()))
+            map.files.iter().find(|file| {
+                file.path
+                    .to_ascii_lowercase()
+                    .ends_with(&requested.to_ascii_lowercase())
+            })
         });
     let Some(file) = file else {
         return format!(
@@ -679,7 +692,10 @@ fn outline(map: &RepoMap, requested: &str) -> String {
         file.symbols.len()
     );
     for symbol in file.symbols.iter().take(160) {
-        out.push_str(&format!("{:>6}  {} {}\n", symbol.line, symbol.kind, symbol.name));
+        out.push_str(&format!(
+            "{:>6}  {} {}\n",
+            symbol.line, symbol.kind, symbol.name
+        ));
     }
     if !file.imports.is_empty() {
         out.push_str("imports:\n");

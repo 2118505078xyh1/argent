@@ -141,10 +141,7 @@ pub(crate) fn run(args: &[String]) -> Result<i32> {
     let last = last_check(&state_path);
     if !parsed.force && !should_check(last.as_ref(), now_epoch(), DEFAULT_CHECK_INTERVAL_SECS) {
         let hours = DEFAULT_CHECK_INTERVAL_SECS / 3600;
-        println!(
-            "距离上次检查未满 {} 小时（用 --force 跳过）",
-            hours
-        );
+        println!("距离上次检查未满 {} 小时（用 --force 跳过）", hours);
         return Ok(0);
     }
 
@@ -175,10 +172,7 @@ fn report(check: &UpdateCheck, json: bool) {
         return;
     }
     println!("update check");
-    println!(
-        "  available {}",
-        if check.available { "yes" } else { "no" }
-    );
+    println!("  available {}", if check.available { "yes" } else { "no" });
     println!("  current   {}", check.current);
     println!("  latest    {}", check.latest);
     if let Some(published) = &check.published_at {
@@ -318,13 +312,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         // 嵌套键。
-        let settings =
-            settings_from(&dir, r#"{"update":{"manifestUrl":"https://n/x.json","publicKey":"nestedkey"}}"#);
+        let settings = settings_from(
+            &dir,
+            r#"{"update":{"manifestUrl":"https://n/x.json","publicKey":"nestedkey"}}"#,
+        );
         assert_eq!(
             resolve_manifest(&settings, None).as_deref(),
             Some("https://n/x.json")
         );
-        assert_eq!(resolve_public_key(&settings, None).as_deref(), Some("nestedkey"));
+        assert_eq!(
+            resolve_public_key(&settings, None).as_deref(),
+            Some("nestedkey")
+        );
         // CLI 覆盖设置。
         assert_eq!(
             resolve_manifest(&settings, Some("cli-url".to_string())).as_deref(),
@@ -332,12 +331,18 @@ mod tests {
         );
 
         // 扁平键。
-        let settings = settings_from(&dir, r#"{"manifestUrl":"https://f/x.json","publicKey":"flatkey"}"#);
+        let settings = settings_from(
+            &dir,
+            r#"{"manifestUrl":"https://f/x.json","publicKey":"flatkey"}"#,
+        );
         assert_eq!(
             resolve_manifest(&settings, None).as_deref(),
             Some("https://f/x.json")
         );
-        assert_eq!(resolve_public_key(&settings, None).as_deref(), Some("flatkey"));
+        assert_eq!(
+            resolve_public_key(&settings, None).as_deref(),
+            Some("flatkey")
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

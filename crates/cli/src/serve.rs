@@ -269,11 +269,9 @@ impl ServerRef {
             .map_err(|e| Error::io(format!("flush failed: {}", e)))?;
 
         let mut sink = SseSink {
-            stream: Some(Arc::new(Mutex::new(
-                stream
-                    .try_clone()
-                    .map_err(|e| Error::io(format!("cannot clone the socket: {}", e)))?,
-            ))),
+            stream: Some(Arc::new(Mutex::new(stream.try_clone().map_err(|e| {
+                Error::io(format!("cannot clone the socket: {}", e))
+            })?))),
             bus: Arc::clone(&self.bus),
         };
         let mut guard = self
@@ -313,10 +311,8 @@ impl ServerRef {
                 break;
             }
             let _ = stream.flush();
-            // 会话结束就关掉流：attach 跟着会话走完，不用人为退出。
-            if frame.starts_with("event: finished") {
-                break;
-            }
+            // 一轮结束也不关流：attach 要能继续看到下一轮、继续发话。
+            // 连接只在客户端断开或服务进程退出时结束。
         }
         Ok(())
     }
@@ -749,7 +745,9 @@ mod tests {
         let bus = EventBus::new();
         let receiver = bus.subscribe();
         bus.publish("event: text\ndata: {}\n\n".to_string());
-        let frame = receiver.recv_timeout(std::time::Duration::from_secs(1)).expect("frame");
+        let frame = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("frame");
         assert!(frame.starts_with("event: text"));
     }
 

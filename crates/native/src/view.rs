@@ -142,7 +142,9 @@ fn sidebar(app: &App) -> Element<'_, Message> {
     // empty entry behind.
     if let Some(task) = &app.pending_task {
         let content = column![
-            text(t(locale, "ui.new_task_title")).size(12).color(style::color(p.strong)),
+            text(t(locale, "ui.new_task_title"))
+                .size(12)
+                .color(style::color(p.strong)),
             text(meta(&task.folder.display().to_string(), &now_stamp()))
                 .size(9)
                 .color(style::color(p.dim)),
@@ -167,11 +169,9 @@ fn sidebar(app: &App) -> Element<'_, Message> {
         for (index, row) in app.sessions.iter().enumerate() {
             let selected = app.active.as_ref() == Some(&row.path);
             let content = column![
-                text(clip(&row.title, 26)).size(12).color(style::color(if selected {
-                    p.strong
-                } else {
-                    p.text
-                })),
+                text(clip(&row.title, 26))
+                    .size(12)
+                    .color(style::color(if selected { p.strong } else { p.text })),
                 text(meta(&row.cwd, &row.updated_local))
                     .size(9)
                     .color(style::color(p.dim)),
@@ -214,9 +214,7 @@ fn automation_page(app: &App) -> Element<'_, Message> {
             .spacing(1),
             space().width(Length::Fill),
             match &app.automation_status {
-                Some(status) => text(status.clone())
-                    .size(10)
-                    .color(style::color(p.dim)),
+                Some(status) => text(status.clone()).size(10).color(style::color(p.dim)),
                 None => text(""),
             },
         ]
@@ -237,10 +235,7 @@ fn automation_page(app: &App) -> Element<'_, Message> {
     });
 
     let mut form = Column::new().spacing(7);
-    form = form.push(
-        text(t(locale, "ui.new_automation"))
-            .size(12),
-    );
+    form = form.push(text(t(locale, "ui.new_automation")).size(12));
     form = form.push(
         text_input(t(locale, "ui.automation_name"), &app.automation_name)
             .size(11)
@@ -275,11 +270,7 @@ fn automation_page(app: &App) -> Element<'_, Message> {
             .color(style::color(p.dim)),
     );
     if let Some(error) = &app.automation_error {
-        form = form.push(
-            text(error.clone())
-                .size(10)
-                .color(style::color(p.error)),
-        );
+        form = form.push(text(error.clone()).size(10).color(style::color(p.error)));
     }
     form = form.push(
         row![
@@ -546,9 +537,7 @@ fn folder_overlay(app: &App) -> Element<'_, Message> {
             .unwrap_or_else(|| folder.clone());
         let content = column![
             text(name).size(12),
-            text(clip(folder, 48))
-                .size(9)
-                .color(style::color(p.dim)),
+            text(clip(folder, 48)).size(9).color(style::color(p.dim)),
         ]
         .spacing(1);
         folders = folders.push(
@@ -561,10 +550,7 @@ fn folder_overlay(app: &App) -> Element<'_, Message> {
     }
 
     let mut form = Column::new().spacing(9);
-    form = form.push(
-        text(t(locale, "ui.choose_folder"))
-            .size(15),
-    );
+    form = form.push(text(t(locale, "ui.choose_folder")).size(15));
     form = form.push(
         text(t(locale, "ui.folder_hint"))
             .size(11)
@@ -627,11 +613,7 @@ fn folder_overlay(app: &App) -> Element<'_, Message> {
         }
     }
     if let Some(error) = &picker.error {
-        form = form.push(
-            text(error.clone())
-                .size(11)
-                .color(style::color(p.error)),
-        );
+        form = form.push(text(error.clone()).size(11).color(style::color(p.error)));
     }
     form = form.push(
         row![
@@ -819,9 +801,7 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
         Entry::User(message) => {
             let bubble = container(
                 column![
-                    text(t(locale, "ui.you"))
-                        .size(9)
-                        .color(style::color(p.dim)),
+                    text(t(locale, "ui.you")).size(9).color(style::color(p.dim)),
                     text(message.clone()).size(13),
                 ]
                 .spacing(2),
@@ -851,9 +831,7 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
                 text(t(locale, "ui.thinking"))
                     .size(9)
                     .color(style::color(p.dim)),
-                text(message.clone())
-                    .size(12)
-                    .color(style::color(p.dim)),
+                text(message.clone()).size(12).color(style::color(p.dim)),
             ]
             .spacing(2),
         )
@@ -1096,11 +1074,7 @@ fn status_bar(app: &App) -> Element<'_, Message> {
 
     if let Some(profile) = &app.profile {
         bar = bar.push(text("·").size(10).color(style::color(p.dim)));
-        bar = bar.push(
-            text(profile.clone())
-                .size(10)
-                .color(style::color(p.accent)),
-        );
+        bar = bar.push(text(profile.clone()).size(10).color(style::color(p.accent)));
     }
 
     bar = bar.push(space().width(Length::Fill));

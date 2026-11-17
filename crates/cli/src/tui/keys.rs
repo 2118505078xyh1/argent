@@ -28,10 +28,26 @@ pub enum Key {
     /// 鼠标左键（屏幕行/列，0 基）。按下→拖→松开由 TUI 自己处理：
     /// 原地松开 = 点击（展开/收起思考块），拖动 = 选中并复制文字。
     #[allow(dead_code)] // 仅在鼠标事件解析接线后由 TUI 构造
-    MouseClick { row: u16, col: u16 },
-    MousePress { row: u16, col: u16 },
-    MouseDrag { row: u16, col: u16 },
-    MouseRelease { row: u16, col: u16 },
+    MouseClick {
+        row: u16,
+        col: u16,
+    },
+    MousePress {
+        row: u16,
+        col: u16,
+    },
+    MouseDrag {
+        row: u16,
+        col: u16,
+    },
+    MouseRelease {
+        row: u16,
+        col: u16,
+    },
+    /// 右键：读系统剪贴板并插入输入框。
+    ///
+    /// 鼠标模式下终端自己的右键菜单不再出现，所以粘贴必须由 TUI 接管。
+    PasteClipboard,
     Home,
     End,
     PageUp,
@@ -44,6 +60,7 @@ pub enum Key {
     CtrlP,
     CtrlN,
     CtrlR,
+    CtrlS,
     /// Alt+Enter: queue the input as a follow-up instead of sending it.
     AltEnter,
     /// Alt+Up: take the last queued follow-up back into the editor.
@@ -252,7 +269,12 @@ pub(crate) fn handle_paste_key(
             // 左键按下 0。必须先于 8 字符上限处理——报告动辄 10+ 字符。
             if c == 'M' || c == 'm' {
                 let full: String = collected.iter().collect();
-                if let Some((body, press)) = full.split_at(full.len() - 1).0.strip_prefix('<').map(|b| (b, c == 'M')) {
+                if let Some((body, press)) = full
+                    .split_at(full.len() - 1)
+                    .0
+                    .strip_prefix('<')
+                    .map(|b| (b, c == 'M'))
+                {
                     if let Some(key) = parse_sgr_mouse(body, press) {
                         *mode = PasteMode::Normal;
                         let _ = tx.send(key);
@@ -427,6 +449,8 @@ fn spawn_input_windows(tx: Sender<Key>) {
             // 这里显式补齐，避免把其它类型的记录误读成按键。
             let mut buffer: [ConsoleInputRecord; 32] = std::mem::zeroed();
             let mut paste_mode = PasteMode::Normal;
+            // 右键按下时终端已经把菜单交给 TUI；记住它，松开时别误判成左键点击。
+            let mut right_held = false;
             loop {
                 // 先等一小段时间：单独按下的 Esc 要马上生效，而粘贴的
                 // 起始序列要等后面的字符跟上来才认得出。
@@ -439,19 +463,16 @@ fn spawn_input_windows(tx: Sender<Key>) {
                     break;
                 }
                 let mut read: u32 = 0;
-                if ReadConsoleInputW(
-                    handle,
-                    buffer.as_mut_ptr(),
-                    buffer.len() as u32,
-                    &mut read,
-                ) == 0
+                if ReadConsoleInputW(handle, buffer.as_mut_ptr(), buffer.len() as u32, &mut read)
+                    == 0
                 {
                     break;
                 }
                 for record in buffer.iter().take(read as usize) {
                     if record.event_type == MOUSE_EVENT {
                         // 与 KEY_EVENT_RECORD 同尺寸的并集读法。
-                        let mouse = &*(record as *const ConsoleInputRecord as *const MouseInputRecord);
+                        let mouse =
+                            &*(record as *const ConsoleInputRecord as *const MouseInputRecord);
                         let key = if mouse.event_flags & MOUSE_WHEELED != 0 {
                             // 高字是带符号的滚轮增量（通常 ±120）。
                             let delta = ((mouse.button_state >> 16) & 0xFFFF) as u16 as i16;
@@ -463,12 +484,28 @@ fn spawn_input_windows(tx: Sender<Key>) {
                         } else {
                             let row = mouse.mouse_y.max(0) as u16;
                             let col = mouse.mouse_x.max(0) as u16;
-                            let held = mouse.button_state & 0x0001 != 0;
-                            if held && mouse.event_flags & MOUSE_MOVED != 0 {
-                                Some(Key::MouseDrag { row, col })
-                            } else if held {
-                                Some(Key::MousePress { row, col })
-                            } else if mouse.event_flags & MOUSE_MOVED == 0 {
+                            let left = mouse.button_state & 0x0001 != 0;
+                            let right = mouse.button_state & 0x0002 != 0;
+                            let moved = mouse.event_flags & MOUSE_MOVED != 0;
+                            if right {
+                                // 右键按下即粘贴；拖动右键不重复触发。
+                                if moved {
+                                    None
+                                } else {
+                                    right_held = true;
+                                    Some(Key::PasteClipboard)
+                                }
+                            } else if left {
+                                if moved {
+                                    Some(Key::MouseDrag { row, col })
+                                } else {
+                                    Some(Key::MousePress { row, col })
+                                }
+                            } else if right_held && !moved {
+                                // 右键松开：粘贴已经发生过，这里不能再当左键点击。
+                                right_held = false;
+                                None
+                            } else if !moved {
                                 Some(Key::MouseRelease { row, col })
                             } else {
                                 None
@@ -514,7 +551,12 @@ fn spawn_input_windows(tx: Sender<Key>) {
 }
 
 /// 把控制台按键记录翻译成 TUI 使用的逻辑键；单独抽出来便于边界测试。
-pub(crate) fn key_from_console_record(ch: Option<char>, vk: u16, control: bool, alt: bool) -> Option<Key> {
+pub(crate) fn key_from_console_record(
+    ch: Option<char>,
+    vk: u16,
+    control: bool,
+    alt: bool,
+) -> Option<Key> {
     let key = match (ch, vk, control, alt) {
         // Enter 的 unicode_char 是 '\r'，归一到 Enter。
         (Some('\r'), _, _, true) => Some(Key::AltEnter),
@@ -543,6 +585,7 @@ pub(crate) fn key_from_console_record(ch: Option<char>, vk: u16, control: bool, 
         (Some('\u{0}'), 0x4E, true, _) => Some(Key::CtrlN),
         (Some('\u{0}'), 0x50, true, _) => Some(Key::CtrlP),
         (Some('\u{0}'), 0x52, true, _) => Some(Key::CtrlR),
+        (Some('\u{0}'), 0x53, true, _) => Some(Key::CtrlS),
         // 修饰键自己按下没有意义。
         _ => None,
     };
@@ -595,6 +638,7 @@ pub(crate) fn next_key(bytes: &mut VecDeque<u8>) -> Option<Key> {
         0x0e => Some(Key::CtrlN),
         0x10 => Some(Key::CtrlP),
         0x12 => Some(Key::CtrlR),
+        0x13 => Some(Key::CtrlS),
         0x09 => Some(Key::Tab),
         0x0d | 0x0a => Some(Key::Enter),
         0x08 | 0x7f => Some(Key::Backspace),
@@ -681,4 +725,3 @@ pub(crate) fn parse_escape(sequence: &[u8]) -> Key {
     // Turning them into Esc made a paste or a mouse move look like "abort".
     Key::Ignore
 }
-

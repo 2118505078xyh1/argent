@@ -183,9 +183,8 @@ impl App {
         let (automation_tx, automation_rx) = channel();
         match argent_engine::prepare_config(&cwd) {
             Ok(config) => {
-                let sessions = argent_engine::session_rows(&SessionIndex::new(
-                    config.session_dir.clone(),
-                ));
+                let sessions =
+                    argent_engine::session_rows(&SessionIndex::new(config.session_dir.clone()));
                 let palette = Palette::from_config(Some(config.theme.as_str()));
                 let session_dir = config.session_dir.clone();
                 let profiles = load_profiles(&cwd);
@@ -337,11 +336,8 @@ impl App {
                 if self.last_sweep.elapsed() >= Duration::from_secs(5) {
                     self.last_sweep = Instant::now();
                     let index = SessionIndex::new(self.session_dir.clone());
-                    let removed = argent_engine::sweep_empty_sessions(
-                        &index,
-                        &[],
-                        Duration::from_secs(60),
-                    );
+                    let removed =
+                        argent_engine::sweep_empty_sessions(&index, &[], Duration::from_secs(60));
                     if !removed.is_empty() {
                         self.sessions = argent_engine::session_rows(&index);
                         changed = true;
@@ -473,7 +469,6 @@ impl App {
         };
         let tick = iced::time::every(period).map(|_| Message::Tick);
         Subscription::batch([tick])
-
     }
 
     fn send(&mut self) -> Task<Message> {
@@ -542,7 +537,8 @@ impl App {
                 return Task::none();
             }
         }
-        let config = match argent_engine::prepare_config_with_profile(&folder, selected.as_deref()) {
+        let config = match argent_engine::prepare_config_with_profile(&folder, selected.as_deref())
+        {
             Ok(config) => config,
             Err(error) => {
                 if let Some(picker) = &mut self.folder_picker {
@@ -781,7 +777,8 @@ impl App {
             UiEvent::Error(message) => {
                 self.working = false;
                 self.error = Some(message.clone());
-                self.transcript.push_notice(argent_ui_core::NoticeKind::Error, message);
+                self.transcript
+                    .push_notice(argent_ui_core::NoticeKind::Error, message);
             }
             UiEvent::Session { path } => {
                 self.active = Some(path);
@@ -856,8 +853,7 @@ fn collect_office_files(dir: &std::path::Path, depth: usize, out: &mut Vec<Offic
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("");
-            !name.starts_with('.')
-                && !matches!(name, "target" | "node_modules" | "dist" | "build")
+            !name.starts_with('.') && !matches!(name, "target" | "node_modules" | "dist" | "build")
         })
         .collect();
     children.sort();
@@ -923,12 +919,14 @@ fn start_worker(config: &Config, cwd: &Path) -> Worker {
 
 /// A one-line description of what the operator is being asked to allow.
 fn approval_hint(name: &str, arguments: &str) -> String {
-    let command = argent_core::json::Json::parse(arguments).ok().and_then(|value| {
-        value
-            .get("command")
-            .and_then(|command| command.as_str())
-            .map(str::to_string)
-    });
+    let command = argent_core::json::Json::parse(arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("command")
+                .and_then(|command| command.as_str())
+                .map(str::to_string)
+        });
     match command {
         Some(command) => format!("{} will run:\n{}", name, command),
         None => format!("{} is waiting for approval", name),

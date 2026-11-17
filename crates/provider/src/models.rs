@@ -224,11 +224,8 @@ mod tests {
 
     /// 一个临时文件路径，每项测试用不同名字避免并发冲突。
     fn scratch_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "argent-models-{}-{}",
-            name,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("argent-models-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir.join("models.json")
@@ -342,7 +339,10 @@ mod tests {
         assert_eq!(base.len(), 3);
         assert_eq!(base.get("a").unwrap().context, 9); // 同 id 覆盖
         assert_eq!(
-            base.list().iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            base.list()
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["a", "b", "c"] // 覆盖不挪位，新 id 追加
         );
     }

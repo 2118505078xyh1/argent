@@ -1,6 +1,5 @@
 //! Configuration layering: CLI flags, settings file, built-in defaults.
 
-
 use crate::*;
 /// Apply CLI overrides on top of the loaded configuration.
 pub(crate) fn apply_cli(config: &mut Config, cli: &Cli) {
@@ -52,7 +51,10 @@ pub(crate) fn apply_cli(config: &mut Config, cli: &Cli) {
 /// 点路径构造嵌套对象，`tools.include` 等价于 `{"tools":{"include":...}}`。
 /// 这一层位于配置文件与 `ARGENT_*` 环境变量之间，`--model` 等显式 flag
 /// 仍然优先。
-pub(crate) fn apply_config_overrides(config: &mut Config, overrides: &[(String, String)]) -> Result<()> {
+pub(crate) fn apply_config_overrides(
+    config: &mut Config,
+    overrides: &[(String, String)],
+) -> Result<()> {
     if overrides.is_empty() {
         return Ok(());
     }

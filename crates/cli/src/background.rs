@@ -70,7 +70,10 @@ impl BackgroundSession {
                 .unwrap_or("")
                 .to_string(),
             started_at: value.get("startedAt").and_then(Json::as_i64).unwrap_or(0) as u64,
-            port: value.get("port").and_then(Json::as_i64).map(|port| port as u16),
+            port: value
+                .get("port")
+                .and_then(Json::as_i64)
+                .map(|port| port as u16),
             token: value
                 .get("token")
                 .and_then(Json::as_str)
@@ -100,7 +103,14 @@ fn random_token() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
         .unwrap_or(0);
-    let seed = format!("{}-{}-{}", stamp, std::process::id(), std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default());
+    let seed = format!(
+        "{}-{}-{}",
+        stamp,
+        std::process::id(),
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+    );
     argent_core::hash::hex(seed.as_bytes())[..32].to_string()
 }
 
@@ -223,8 +233,8 @@ fn session_exe_path(storage: &Path, id: &str) -> PathBuf {
 /// 创建目录并启动一个后台运行，返回会话元数据。
 ///
 /// `child_args` 是已经去掉 `--bg`/`--worktree` 的原始参数；这里补上
-/// `--json-lines`、`-C <cwd>`，并在用户没指定审批策略时强制 `never`——
-/// 后台任务没有终端可以回答审批。
+/// `--serve`、端口、令牌和 `-C <cwd>`。后台任务没有终端可以回答审批，
+/// 所以用户没指定审批策略时会自动 `never`，并在启动时明确警告。
 pub fn start(
     cwd: &Path,
     storage: &Path,
@@ -252,6 +262,16 @@ pub fn start(
     // 后台会话跑在 HTTP 模式：`attach` 连上来能看事件、能插话、能中止。
     let port = pick_port()?;
     let token = random_token();
+    let has_approval = child_args
+        .iter()
+        .any(|arg| arg == "--approval" || arg == "--yolo");
+    if !has_approval {
+        // 不要静默放开审批：自动批准破坏性操作是个足以改变风险的决定。
+        eprintln!(
+            "argent: 后台会话没有终端可以回答审批，将自动批准所有工具调用；\
+             需要限制时显式传 --approval sensible"
+        );
+    }
     let child_args = build_child_args(cwd, prompt, child_args, port, &token);
 
     let exe = session_exe(storage, &id)?;
@@ -446,11 +466,8 @@ mod tests {
 
     /// 每个测试自己的 storage 根，绝不读写用户的 `~/.argent`。
     fn workspace(name: &str) -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!(
-            "argent-background-{}-{}",
-            name,
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("argent-background-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let storage = root.join("store");
         std::fs::create_dir_all(&storage).expect("mkdir");
@@ -494,8 +511,8 @@ mod tests {
                 cwd: root.display().to_string(),
                 model: "m".to_string(),
                 started_at: started,
-            port: None,
-            token: None,
+                port: None,
+                token: None,
             };
             std::fs::write(metadata_path(&storage, id), session.to_json().dump_pretty())
                 .expect("write");
@@ -573,7 +590,10 @@ mod child_args_tests {
             7788,
             "t",
         );
-        let model = args.iter().position(|a| a == "--model").expect("model flag");
+        let model = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("model flag");
         assert_eq!(args[model + 1], "my-model");
     }
 
@@ -600,9 +620,7 @@ mod child_args_tests {
             "fresh",
         );
         assert_eq!(
-            args.iter()
-                .filter(|a| a.as_str() == "--serve-port")
-                .count(),
+            args.iter().filter(|a| a.as_str() == "--serve-port").count(),
             1
         );
         assert!(args.contains(&"fresh".to_string()));
@@ -627,14 +645,11 @@ mod child_args_tests {
 
     #[test]
     fn approval_is_forced_when_the_user_did_not_choose() {
-        let args = build_child_args(
-            Path::new("C:/work"),
-            "do it",
-            args_of(&[]),
-            7788,
-            "t",
-        );
-        let approval = args.iter().position(|a| a == "--approval").expect("approval");
+        let args = build_child_args(Path::new("C:/work"), "do it", args_of(&[]), 7788, "t");
+        let approval = args
+            .iter()
+            .position(|a| a == "--approval")
+            .expect("approval");
         assert_eq!(args[approval + 1], "never");
     }
 
@@ -651,7 +666,10 @@ mod child_args_tests {
             args.iter().filter(|a| a.as_str() == "--approval").count(),
             1
         );
-        let approval = args.iter().position(|a| a == "--approval").expect("approval");
+        let approval = args
+            .iter()
+            .position(|a| a == "--approval")
+            .expect("approval");
         assert_eq!(args[approval + 1], "ask");
     }
 

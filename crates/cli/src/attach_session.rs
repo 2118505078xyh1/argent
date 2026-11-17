@@ -63,8 +63,6 @@ pub fn attach(storage: &Path, session: &BackgroundSession, plain: bool) -> Resul
     // 事件线程：打印服务端的每一帧，并维护"是否在跑"。
     let running = Arc::new(AtomicBool::new(false));
     let running_flag = Arc::clone(&running);
-    // 事件线程结束时发一个信号，让 attach 知道会话已经收尾。
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
     let events = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         let mut event = String::new();
@@ -86,7 +84,6 @@ pub fn attach(storage: &Path, session: &BackgroundSession, plain: bool) -> Resul
                 data = rest.trim().to_string();
             }
         }
-        let _ = done_tx.send(());
     });
 
     // 主线程：读用户输入并发送。运行中插话，空闲时当成新请求。
@@ -116,24 +113,15 @@ pub fn attach(storage: &Path, session: &BackgroundSession, plain: bool) -> Resul
         }
     }
 
-    // stdin 关了：等事件流走到会话结束，再断开。
-    if done_rx.recv_timeout(std::time::Duration::from_secs(60)).is_err() {
-        println!("(timed out waiting for the session to finish)");
-    }
-
-    // 断开只关管道，不动会话本身。
+    // stdin 关了或输入 quit：立刻断开事件流。
+    // 后台会话本身不受影响，之后仍可再次 attach。
     let _ = child.kill();
     let _ = events.join();
     Ok(0)
 }
 
 /// Take over a background session with the terminal interface.
-fn attach_tui(
-    session: &BackgroundSession,
-    base: &str,
-    auth: &str,
-    cwd: &str,
-) -> Result<i32> {
+fn attach_tui(session: &BackgroundSession, base: &str, auth: &str, cwd: &str) -> Result<i32> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
     let mut child = Command::new("curl")
         .args([
@@ -210,7 +198,8 @@ fn frame_to_event(data: &str) -> Option<argent_agent::AgentEvent> {
 }
 
 fn post(base: &str, auth: &str, path: &str, body: &str) -> Result<()> {
-    let request = Request::post_json(&format!("{}{}", base, path), body).header("authorization", auth);
+    let request =
+        Request::post_json(&format!("{}{}", base, path), body).header("authorization", auth);
     let response = argent_core::http::send(&request)?;
     if !response.is_success() {
         return Err(Error::io(format!(
@@ -288,20 +277,26 @@ mod tests {
 
     #[test]
     fn a_turn_start_says_it_is_working() {
-        assert_eq!(frame_text("turn_start", "{}").as_deref(), Some("working…\n"));
+        assert_eq!(
+            frame_text("turn_start", "{}").as_deref(),
+            Some("working…\n")
+        );
         assert_eq!(running_after("turn_start"), Some(true));
     }
 
     #[test]
     fn the_answer_is_printed_as_it_comes() {
-        assert_eq!(frame_text("text", r#"{"text":"hi"}"#).as_deref(), Some("hi"));
+        assert_eq!(
+            frame_text("text", r#"{"text":"hi"}"#).as_deref(),
+            Some("hi")
+        );
         assert_eq!(running_after("text"), None);
     }
 
     #[test]
     fn a_tool_call_shows_its_name_and_arguments() {
-        let line = frame_text("tool_requested", r#"{"name":"read","arguments":"a.txt"}"#)
-            .expect("line");
+        let line =
+            frame_text("tool_requested", r#"{"name":"read","arguments":"a.txt"}"#).expect("line");
         assert!(line.starts_with("- read("), "{}", line);
         assert!(line.contains("a.txt"), "{}", line);
     }
@@ -346,8 +341,9 @@ mod tests {
             argent_agent::AgentEvent::AssistantText(text) => assert_eq!(text, "hi"),
             other => panic!("{:?}", other),
         }
-        let event = frame_to_event(r#"{"type":"tool_requested","id":"c1","name":"read","arguments":"{}"}"#)
-            .expect("event");
+        let event =
+            frame_to_event(r#"{"type":"tool_requested","id":"c1","name":"read","arguments":"{}"}"#)
+                .expect("event");
         match event {
             argent_agent::AgentEvent::ToolRequested(call) => {
                 assert_eq!(call.name, "read");

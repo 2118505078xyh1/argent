@@ -86,7 +86,9 @@ pub(crate) fn parse(args: &[String]) -> Result<AuthCommand> {
         }
         "check" => {
             if positional.len() > 2 {
-                return Err(Error::config("usage: argent auth check [<provider>] [--json]"));
+                return Err(Error::config(
+                    "usage: argent auth check [<provider>] [--json]",
+                ));
             }
             Ok(AuthCommand::Check {
                 provider: positional.get(1).cloned(),

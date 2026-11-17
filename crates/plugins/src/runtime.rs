@@ -36,13 +36,23 @@ pub fn load_script_plugins(
             continue;
         };
         let mut init_input = argent_core::json::Json::obj();
-        init_input.set("plugin", argent_core::json::Json::Str(manifest.name.clone()));
+        init_input.set(
+            "plugin",
+            argent_core::json::Json::Str(manifest.name.clone()),
+        );
         init_input.set("root", argent_core::json::Json::Str(manifest.root_string()));
-        init_input.set("cwd", argent_core::json::Json::Str(cwd.display().to_string()));
+        init_input.set(
+            "cwd",
+            argent_core::json::Json::Str(cwd.display().to_string()),
+        );
         init_input.set(
             "plugin_data",
             argent_core::json::Json::Str(
-                storage.join("plugin-data").join(&manifest.name).display().to_string(),
+                storage
+                    .join("plugin-data")
+                    .join(&manifest.name)
+                    .display()
+                    .to_string(),
             ),
         );
         match load(
@@ -76,12 +86,7 @@ pub fn load_script_plugins(
 /// 复制已启用插件的 MCP server 声明到运行时配置。
 ///
 /// 同名服务器以插件声明为准：插件启停后不需要手工改 `mcp.json`。
-pub fn add_mcp_servers(
-    mcp: &mut McpConfig,
-    plugins: &PluginManager,
-    cwd: &Path,
-    storage: &Path,
-) {
+pub fn add_mcp_servers(mcp: &mut McpConfig, plugins: &PluginManager, cwd: &Path, storage: &Path) {
     let mut additions: Vec<ServerConfig> = Vec::new();
     for manifest in plugins.enabled() {
         for server in &manifest.mcp_servers {
@@ -172,7 +177,13 @@ pub fn expand_plugin_text(
 pub fn component(value: &str) -> String {
     value
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -295,7 +306,11 @@ mod tests {
         let text = slashed(&text);
         assert!(text.contains("bin/docs"), "{}", text);
         assert!(text.contains(&slashed(&manifest.root_string())), "{}", text);
-        assert!(text.contains(&slashed(&root.display().to_string())), "{}", text);
+        assert!(
+            text.contains(&slashed(&root.display().to_string())),
+            "{}",
+            text
+        );
         assert!(text.contains("C:/store/plugin-data/demo"), "{}", text);
         assert!(text.contains("abc"), "{}", text);
     }
@@ -313,7 +328,11 @@ mod tests {
         assert_eq!(server.kind, TransportKind::Stdio);
         let endpoint = slashed(&server.endpoint);
         assert!(endpoint.ends_with("bin/docs"), "{}", endpoint);
-        assert!(slashed(&server.args[1]).contains("plugin-data/demo"), "{:?}", server.args);
+        assert!(
+            slashed(&server.args[1]).contains("plugin-data/demo"),
+            "{:?}",
+            server.args
+        );
         assert_eq!(server.env.get("TOKEN").map(String::as_str), Some("abc"));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -362,7 +381,9 @@ mod tests {
         let hook_file = {
             let files = workspace_hook_files(&manager, &root, &storage);
             assert!(
-                files.iter().any(|path| *path == root.join("demo").join("hooks").join("hooks.json")),
+                files
+                    .iter()
+                    .any(|path| *path == root.join("demo").join("hooks").join("hooks.json")),
                 "the plugin contributes its document: {:?}",
                 files
             );
@@ -370,18 +391,12 @@ mod tests {
         };
 
         let mut notices: Vec<String> = Vec::new();
-        let config = load_trusted_hooks(
-            &manager,
-            &root,
-            &storage,
-            &trust_path,
-            &mut |line| notices.push(line.to_string()),
-        );
+        let config = load_trusted_hooks(&manager, &root, &storage, &trust_path, &mut |line| {
+            notices.push(line.to_string())
+        });
         assert!(config.is_empty(), "nothing is trusted yet");
         assert!(
-            notices
-                .iter()
-                .any(|line| line.contains("is not trusted")),
+            notices.iter().any(|line| line.contains("is not trusted")),
             "the operator must be told why the hook did not load: {:?}",
             notices
         );
@@ -389,13 +404,9 @@ mod tests {
         // 授权后同一份文档即可加载。
         grant_all(&trust_path, std::slice::from_ref(&hook_file));
         let mut notices: Vec<String> = Vec::new();
-        let config = load_trusted_hooks(
-            &manager,
-            &root,
-            &storage,
-            &trust_path,
-            &mut |line| notices.push(line.to_string()),
-        );
+        let config = load_trusted_hooks(&manager, &root, &storage, &trust_path, &mut |line| {
+            notices.push(line.to_string())
+        });
         assert!(
             notices.is_empty(),
             "a granted document loads silently: {:?}",

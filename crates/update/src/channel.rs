@@ -169,7 +169,11 @@ impl UpdateCheck {
 /// [`crate::parse_public_key`]）。签名校验失败或被篡改都返回 `Err`。
 ///
 /// ``current_version`` 与 manifest 里的版本都必须是合法版本串，否则返回 `Err`。
-pub fn check(current_version: &str, manifest_bytes: &[u8], public_key_hex: &str) -> Result<UpdateCheck> {
+pub fn check(
+    current_version: &str,
+    manifest_bytes: &[u8],
+    public_key_hex: &str,
+) -> Result<UpdateCheck> {
     let text = String::from_utf8_lossy(manifest_bytes);
     let value = Json::parse(&text)
         .map_err(|error| Error::config(format!("invalid update manifest: {}", error)))?;
@@ -179,8 +183,8 @@ pub fn check(current_version: &str, manifest_bytes: &[u8], public_key_hex: &str)
     manifest.verify(&key)?;
 
     let available = compare_versions(&manifest.version, current_version)? == Ordering::Greater;
-    let published_at = opt_str(value.get("publishedAt"))
-        .or_else(|| opt_str(value.get("published_at")));
+    let published_at =
+        opt_str(value.get("publishedAt")).or_else(|| opt_str(value.get("published_at")));
     Ok(UpdateCheck {
         available,
         current: current_version.to_string(),
@@ -339,7 +343,10 @@ fn parse_semver(input: &str) -> Result<Version> {
             )));
         }
         main[index] = part.parse::<u64>().map_err(|_| {
-            Error::config(format!("version '{}' component '{}' is out of range", input, part))
+            Error::config(format!(
+                "version '{}' component '{}' is out of range",
+                input, part
+            ))
         })?;
     }
 
@@ -405,8 +412,8 @@ fn non_empty(value: String) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
-    use std::path::PathBuf;
     use std::net::TcpListener;
+    use std::path::PathBuf;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -443,14 +450,20 @@ mod tests {
     fn version_comparison_orders_numerically() {
         assert_eq!(compare_versions("1.2.3", "1.2.10").unwrap(), Ordering::Less);
         assert_eq!(compare_versions("1.0.0", "1.0.1").unwrap(), Ordering::Less);
-        assert_eq!(compare_versions("2.0.0", "1.9.9").unwrap(), Ordering::Greater);
+        assert_eq!(
+            compare_versions("2.0.0", "1.9.9").unwrap(),
+            Ordering::Greater
+        );
         // 缺段按 0 补齐：1.2 等于 1.2.0。
         assert_eq!(compare_versions("1.2", "1.2.0").unwrap(), Ordering::Equal);
     }
 
     #[test]
     fn version_comparison_treats_prerelease_as_smaller() {
-        assert_eq!(compare_versions("1.2.3-rc1", "1.2.3").unwrap(), Ordering::Less);
+        assert_eq!(
+            compare_versions("1.2.3-rc1", "1.2.3").unwrap(),
+            Ordering::Less
+        );
         assert_eq!(
             compare_versions("1.2.3", "1.2.3-rc1").unwrap(),
             Ordering::Greater
@@ -479,7 +492,16 @@ mod tests {
 
     #[test]
     fn version_comparison_rejects_invalid_strings() {
-        for bad in ["", "abc", "1.a.3", "1.2.3.4", "1..3", "1.2.-1", "1.2.3-", "1.2.3-rc."] {
+        for bad in [
+            "",
+            "abc",
+            "1.a.3",
+            "1.2.3.4",
+            "1..3",
+            "1.2.-1",
+            "1.2.3-",
+            "1.2.3-rc.",
+        ] {
             assert!(
                 compare_versions(bad, "1.0.0").is_err(),
                 "'{}' should be rejected",
@@ -639,7 +661,11 @@ mod tests {
         std::env::set_var(argent_config::STORAGE_ENV, &storage);
 
         // 嵌套 update.autoUpdate。
-        std::fs::write(cwd.join("argent.json"), r#"{"update":{"autoUpdate":"apply"}}"#).unwrap();
+        std::fs::write(
+            cwd.join("argent.json"),
+            r#"{"update":{"autoUpdate":"apply"}}"#,
+        )
+        .unwrap();
         assert_eq!(
             AutoUpdate::from_settings(&Settings::load(&cwd).unwrap()),
             AutoUpdate::Apply
@@ -653,7 +679,11 @@ mod tests {
         );
 
         // 无法识别的值回落到 Notify。
-        std::fs::write(cwd.join("argent.json"), r#"{"update":{"autoUpdate":"nonsense"}}"#).unwrap();
+        std::fs::write(
+            cwd.join("argent.json"),
+            r#"{"update":{"autoUpdate":"nonsense"}}"#,
+        )
+        .unwrap();
         assert_eq!(
             AutoUpdate::from_settings(&Settings::load(&cwd).unwrap()),
             AutoUpdate::Notify

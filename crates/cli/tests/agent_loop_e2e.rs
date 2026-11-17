@@ -88,10 +88,7 @@ fn one_prompt_runs_a_tool_and_replays_from_the_session_file() {
         return;
     }
 
-    let root = std::env::temp_dir().join(format!(
-        "argent-agent-loop-e2e-{}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("argent-agent-loop-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let workspace = root.join("workspace");
     let storage = root.join("storage");

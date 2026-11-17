@@ -3,7 +3,6 @@
 
 use super::*;
 
-
 /// Result of one tool execution.
 pub struct ToolOutcome {
     pub content: String,
@@ -25,7 +24,6 @@ pub fn tool_result_message(call: &ToolCall, outcome: &ToolOutcome, content: Stri
     }
 }
 
-
 /// Score an operator request by its length, planning language,
 /// file references and code blocks.
 pub fn score_effort(prompt: &str) -> &'static str {
@@ -38,10 +36,32 @@ pub fn score_effort(prompt: &str) -> &'static str {
         score += 1;
     }
     const PLANNING: &[&str] = &[
-        "plan", "design", "architect", "refactor", "migrate", "why", "root cause",
-        "debug", "investigate", "analy", "performance", "security", "optim",
-        "重构", "设计", "架构", "方案", "为什么", "排查", "调查", "调试", "性能", "安全",
-        "优化", "迁移", "分析",
+        "plan",
+        "design",
+        "architect",
+        "refactor",
+        "migrate",
+        "why",
+        "root cause",
+        "debug",
+        "investigate",
+        "analy",
+        "performance",
+        "security",
+        "optim",
+        "重构",
+        "设计",
+        "架构",
+        "方案",
+        "为什么",
+        "排查",
+        "调查",
+        "调试",
+        "性能",
+        "安全",
+        "优化",
+        "迁移",
+        "分析",
     ];
     let planning_hits = PLANNING.iter().filter(|word| lower.contains(*word)).count();
     score += planning_hits.min(3) as u32;
@@ -104,8 +124,7 @@ pub fn build_system_prompt(
     prompt.push_str("- Read before writing; match exact text when editing. Grep to locate symbols, read to list directories — never guess paths.\n");
     prompt.push_str("- Verify with a build or test, then report what changed, what you checked, what's left — briefly and plainly.\n");
     prompt.push_str("- Core tools: read, write, edit, bash. Others are plugins — load one with tool_search when you need it.\n");
-    prompt
-        .push_str("- Reply and think in Chinese unless asked otherwise.\n");
+    prompt.push_str("- Reply and think in Chinese unless asked otherwise.\n");
     prompt.push_str("- If the user sends a bare number or refers to something with no context here, ask once and wait — don't dig through the repo to guess.\n\n");
 
     // The schemas already carry every description, so a second copy here would
@@ -301,8 +320,9 @@ pub fn bound_with_budgets(
                  full output is at {}]",
                 path.display()
             ),
-            None => "[tool output omitted: this turn's tool-output budget is exhausted]"
-                .to_string(),
+            None => {
+                "[tool output omitted: this turn's tool-output budget is exhausted]".to_string()
+            }
         };
     }
 
@@ -506,4 +526,3 @@ pub fn parse_args(raw: &str) -> Json {
 pub fn describe_error(error: &Error) -> String {
     error.to_string()
 }
-

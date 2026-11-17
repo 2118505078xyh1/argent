@@ -148,9 +148,10 @@ impl Telemetry {
         let Some(endpoint) = self.endpoint.clone() else {
             return;
         };
-        let request = argent_core::http::Request::post_json(&endpoint, &self.remote_body(kind, data).dump())
-            .header("X-Argent-Telemetry", "1")
-            .timeout(REMOTE_TIMEOUT);
+        let request =
+            argent_core::http::Request::post_json(&endpoint, &self.remote_body(kind, data).dump())
+                .header("X-Argent-Telemetry", "1")
+                .timeout(REMOTE_TIMEOUT);
         // 放在后台线程里发，绝不让网络拖慢任务。
         std::thread::spawn(move || {
             let _ = argent_core::http::send(&request);
@@ -214,7 +215,8 @@ mod tests {
 
     #[test]
     fn remote_needs_both_an_endpoint_and_consent() {
-        let dir = std::env::temp_dir().join(format!("argent-telemetry-remote-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-telemetry-remote-{}", std::process::id()));
         let mut telemetry = Telemetry::at(dir.join("events.jsonl"), dir.join("crash.log"), true);
         telemetry = telemetry.with_remote(Some("http://127.0.0.1:9/collect".to_string()), false);
         assert!(!telemetry.remote(), "no consent means no upload");
@@ -230,7 +232,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         listener.set_nonblocking(true).expect("nonblocking");
-        let dir = std::env::temp_dir().join(format!("argent-telemetry-post-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-telemetry-post-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let telemetry = Telemetry::at(dir.join("events.jsonl"), dir.join("crash.log"), true)
             .with_remote(Some(format!("http://127.0.0.1:{}/collect", port)), true);
@@ -242,9 +245,7 @@ mod tests {
         while std::time::Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .ok();
+                    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
                     let mut buffer = Vec::new();
                     let mut chunk = [0u8; 1024];
                     // 读到头加上 body；请求里带 Content-Length。

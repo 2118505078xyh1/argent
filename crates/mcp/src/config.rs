@@ -527,7 +527,10 @@ mod tests {
             oauth.authorization_url.as_deref(),
             Some("https://auth.example/authorize")
         );
-        assert_eq!(oauth.token_url.as_deref(), Some("https://auth.example/token"));
+        assert_eq!(
+            oauth.token_url.as_deref(),
+            Some("https://auth.example/token")
+        );
         assert_eq!(
             oauth.auth_server_metadata_url.as_deref(),
             Some("https://auth.example/.well-known/oauth-authorization-server")
@@ -591,7 +594,10 @@ mod tests {
         std::fs::create_dir_all(&cwd).expect("scratch");
         let config = McpConfig::load(&cwd).expect("load");
         let path = config.auth_store_path().expect("auth store");
-        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("mcp-auth.json"));
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("mcp-auth.json")
+        );
         let _ = std::fs::remove_dir_all(&cwd);
     }
 
@@ -608,7 +614,13 @@ mod tests {
             )
             .expect("merge");
         let spec = config.servers[0].to_spec(config.auth_store.as_deref());
-        assert_eq!(spec.oauth.as_ref().and_then(|o| o.client_id.clone()), Some("c".to_string()));
-        assert_eq!(spec.auth_store.as_deref(), Some(Path::new("C:/store/mcp-auth.json")));
+        assert_eq!(
+            spec.oauth.as_ref().and_then(|o| o.client_id.clone()),
+            Some("c".to_string())
+        );
+        assert_eq!(
+            spec.auth_store.as_deref(),
+            Some(Path::new("C:/store/mcp-auth.json"))
+        );
     }
 }

@@ -165,8 +165,6 @@ mod tests {
         .expect("schema")
     }
 
-
-
     /// Run one turn so the agent has an answer to be judged.
     fn answered(replies: &[&str]) -> Agent {
         let mut agent = agent_with(replies);
@@ -177,10 +175,13 @@ mod tests {
                 renderer: &mut renderer,
             },
         );
-        assert!(matches!(outcome, Ok(FinishReason::Complete)), "{:?}", outcome);
+        assert!(
+            matches!(outcome, Ok(FinishReason::Complete)),
+            "{:?}",
+            outcome
+        );
         agent
     }
-
 
     #[test]
     fn a_conforming_answer_passes() {

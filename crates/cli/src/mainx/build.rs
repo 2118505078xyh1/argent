@@ -1,6 +1,5 @@
 //! Provider construction and the resolved-model summary.
 
-
 use crate::*;
 /// Build the provider selected by the resolved protocol.
 pub(crate) fn build_provider(config: &Config) -> Box<dyn Provider> {
@@ -87,11 +86,7 @@ pub(crate) fn build_ctx(config: &Config, cwd: &Path) -> ToolCtx {
     if mode == "workspace-write" {
         let mut roots = vec![cwd.to_path_buf()];
         if let Some(Json::Arr(dirs)) = config.extra.get("addDirs") {
-            roots.extend(
-                dirs.iter()
-                    .filter_map(Json::as_str)
-                    .map(PathBuf::from),
-            );
+            roots.extend(dirs.iter().filter_map(Json::as_str).map(PathBuf::from));
         }
         ctx.write_roots = roots;
     }

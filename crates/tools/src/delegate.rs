@@ -112,11 +112,7 @@ impl SubagentEvent {
                 role,
                 argent_core::text::truncate(task, 80)
             ),
-            SubagentEvent::ToolStarted {
-                role,
-                name,
-                detail,
-            } => {
+            SubagentEvent::ToolStarted { role, name, detail } => {
                 if detail.is_empty() {
                     format!("[{}] {}", role, name)
                 } else {
@@ -200,9 +196,7 @@ pub struct DelegateTool {
 impl DelegateTool {
     /// A tool with no factory, used when delegation is disabled.
     pub fn disabled() -> DelegateTool {
-        DelegateTool {
-            handle: None,
-        }
+        DelegateTool { handle: None }
     }
 
     /// A tool bound to a factory.

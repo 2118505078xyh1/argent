@@ -79,7 +79,10 @@ impl MemoryBackend {
 
     /// 已存的条目数。
     pub fn len(&self) -> usize {
-        self.entries.lock().map(|entries| entries.len()).unwrap_or(0)
+        self.entries
+            .lock()
+            .map(|entries| entries.len())
+            .unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -247,10 +250,7 @@ mod platform {
             if code == ERROR_NOT_FOUND {
                 return Ok(None);
             }
-            return Err(Error::io(format!(
-                "凭据管理器读取失败（错误码 {}）",
-                code
-            )));
+            return Err(Error::io(format!("凭据管理器读取失败（错误码 {}）", code)));
         }
         let bytes = unsafe {
             let credential_ref = &*credential;
@@ -274,10 +274,7 @@ mod platform {
         if code == ERROR_NOT_FOUND {
             return Ok(false);
         }
-        Err(Error::io(format!(
-            "凭据管理器删除失败（错误码 {}）",
-            code
-        )))
+        Err(Error::io(format!("凭据管理器删除失败（错误码 {}）", code)))
     }
 }
 
@@ -418,7 +415,10 @@ mod tests {
         assert!(backend.available());
         assert_eq!(backend.load("argent:zai").unwrap(), None);
         backend.store("argent:zai", "secret").unwrap();
-        assert_eq!(backend.load("argent:zai").unwrap().as_deref(), Some("secret"));
+        assert_eq!(
+            backend.load("argent:zai").unwrap().as_deref(),
+            Some("secret")
+        );
         assert_eq!(backend.len(), 1);
         assert!(backend.delete("argent:zai").unwrap());
         assert!(!backend.delete("argent:zai").unwrap());

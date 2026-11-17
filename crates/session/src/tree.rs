@@ -235,10 +235,9 @@ impl SessionTree {
         for node in target_path.into_iter().skip(common) {
             match &node.payload {
                 Entry::Message(message) => out.push(message.clone()),
-                Entry::Summary(text) => out.push(Message::system(format!(
-                    "Earlier branch summary: {}",
-                    text
-                ))),
+                Entry::Summary(text) => {
+                    out.push(Message::system(format!("Earlier branch summary: {}", text)))
+                }
                 _ => {}
             }
         }
@@ -443,11 +442,16 @@ mod tests {
         let root = tree.append(user("one")).expect("append");
         let original_leaf = tree.append(user("original")).expect("append");
         let branch_leaf = tree.append_to(&root, user("alternative")).expect("branch");
-        tree.append_to(&branch_leaf, user("follow-up")).expect("append");
+        tree.append_to(&branch_leaf, user("follow-up"))
+            .expect("append");
 
         let summary = tree.branch_summary_messages(&branch_leaf, &original_leaf);
         let texts: Vec<String> = summary.iter().map(|m| m.text()).collect();
-        assert_eq!(texts, ["alternative".to_string()], "shared root is not repeated");
+        assert_eq!(
+            texts,
+            ["alternative".to_string()],
+            "shared root is not repeated"
+        );
 
         // Switching the other way reports the messages unique to that side.
         let reverse = tree.branch_summary_messages(&original_leaf, &branch_leaf);

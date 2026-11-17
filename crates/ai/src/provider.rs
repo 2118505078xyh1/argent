@@ -45,10 +45,7 @@ impl ChatRequest {
     }
 
     /// Let the provider stop the underlying request on abort.
-    pub fn with_cancel(
-        mut self,
-        cancel: Arc<std::sync::atomic::AtomicBool>,
-    ) -> ChatRequest {
+    pub fn with_cancel(mut self, cancel: Arc<std::sync::atomic::AtomicBool>) -> ChatRequest {
         self.cancel = Some(cancel);
         self
     }

@@ -13,11 +13,10 @@ pub use agent_loop::{
     prune_tool_spills, AbortHandle, Agent, AgentConfig, ApprovalScope, Budget, CacheWarming,
     FollowUpMode, StreamFailure, DEFAULT_MAX_TURNS,
 };
-pub use guards::{canonical_args, canonical_json, repeat_key, BlockedCall, RecentCall};
 pub use child::ChildFactory;
 pub use context::{project_instructions, session_context};
 pub use events::{
-    event_from_json, event_to_json, AgentEvent, CollectingSink, EventSink, FinishReason,
-    NullSink,
+    event_from_json, event_to_json, AgentEvent, CollectingSink, EventSink, FinishReason, NullSink,
 };
+pub use guards::{canonical_args, canonical_json, repeat_key, BlockedCall, RecentCall};
 pub use roles::{builtin_roles, Role, RoleRegistry};

@@ -528,7 +528,10 @@ mod tests {
         assert!(config.model_in_scope("anything"), "empty scope admits all");
         config.enabled_models = vec!["gpt-*".into(), "anthropic/claude-sonnet-4".into()];
         assert!(config.model_in_scope("gpt-5"));
-        assert!(config.model_in_scope("openai/GPT-4o"), "bare id matches, case-insensitive");
+        assert!(
+            config.model_in_scope("openai/GPT-4o"),
+            "bare id matches, case-insensitive"
+        );
         assert!(config.model_in_scope("anthropic/claude-sonnet-4"));
         assert!(!config.model_in_scope("deepseek-v4"));
     }

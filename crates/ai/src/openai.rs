@@ -3,9 +3,9 @@
 //! Talks to any endpoint that speaks the OpenAI `/v1/chat/completions` wire
 //! format, including local gateways.
 
+use std::io::{BufReader, Read};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::io::{BufReader, Read};
 use std::time::Duration;
 
 use argent_core::error::{Error, Result};
@@ -75,7 +75,12 @@ impl OpenAiConfig {
             .and_then(|value| TransportMode::from_name(&value))
             .unwrap_or(TransportMode::Auto);
         let stream_usage = std::env::var("ARGENT_OPENAI_STREAM_USAGE")
-            .map(|value| !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+            .map(|value| {
+                !matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "0" | "false" | "off"
+                )
+            })
             .unwrap_or(true);
         let disabled = |value: &str| {
             matches!(
@@ -143,19 +148,23 @@ impl OpenAiConfig {
         self
     }
 
-    fn current_cache_key(&self) -> Option<String> {
+    fn cache_key_from(&self, env_value: Option<&str>) -> Option<String> {
         if !self.cache_key_dynamic {
             return self.cache_key.clone();
         }
-        std::env::var("ARGENT_CACHE_KEY")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| {
-                !matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "" | "0" | "off" | "false" | "none"
-                )
-            })
+        env_value.and_then(|value| {
+            let value = value.trim();
+            (!matches!(
+                value.to_ascii_lowercase().as_str(),
+                "" | "0" | "off" | "false" | "none"
+            ))
+            .then(|| value.to_string())
+        })
+    }
+
+    fn current_cache_key(&self) -> Option<String> {
+        let env_value = std::env::var("ARGENT_CACHE_KEY").ok();
+        self.cache_key_from(env_value.as_deref())
     }
 
     fn chat_url(&self) -> String {
@@ -204,11 +213,7 @@ impl OpenAiProvider {
     ///
     /// `models` 为空时按“全部支持”处理；provider 的 chat 路径传入配置里的
     /// 目录，测试与宿主可以直接用上面的兼容入口。
-    pub fn build_body_for(
-        request: &ChatRequest,
-        stream_usage: bool,
-        models: &[ModelInfo],
-    ) -> Json {
+    pub fn build_body_for(request: &ChatRequest, stream_usage: bool, models: &[ModelInfo]) -> Json {
         let caps = Capabilities::for_model(models, &request.model);
         // 模型目录声明的输出上限是硬边界。
         let max_output = models
@@ -252,7 +257,11 @@ impl OpenAiProvider {
             body.set("temperature", Json::num(temp));
         }
         if let Some(max) = request.max_tokens {
-            let capped = if max_output > 0 { max.min(max_output) } else { max };
+            let capped = if max_output > 0 {
+                max.min(max_output)
+            } else {
+                max
+            };
             body.set("max_tokens", Json::num(capped as f64));
         }
         // 不支持 reasoning 的模型不发 reasoning_effort。Chat Completions 只
@@ -323,10 +332,7 @@ impl OpenAiProvider {
                 if !caps.vision && part.str_or("type", "") == "image_url" {
                     let mut text = Json::obj();
                     text.set("type", Json::string("text"));
-                    text.set(
-                        "text",
-                        Json::string(Capabilities::image_placeholder(model)),
-                    );
+                    text.set("text", Json::string(Capabilities::image_placeholder(model)));
                     text
                 } else {
                     part
@@ -556,9 +562,7 @@ impl Read for CurlStream {
                 match self.child.try_read(buf) {
                     Ok(Some(n)) => return Ok(n),
                     Ok(None) => crate::cooperative::yield_now(),
-                    Err(e) => {
-                        return Err(std::io::Error::new(e.kind(), format!("curl: {}", e)))
-                    }
+                    Err(e) => return Err(std::io::Error::new(e.kind(), format!("curl: {}", e))),
                 }
             }
         }
@@ -682,7 +686,8 @@ impl Provider for OpenAiProvider {
         &self,
         request: &ChatRequest,
     ) -> Result<Box<dyn Iterator<Item = Result<StreamEvent>> + Send>> {
-        let mut body = OpenAiProvider::build_body_for(request, self.config.stream_usage, &self.config.models);
+        let mut body =
+            OpenAiProvider::build_body_for(request, self.config.stream_usage, &self.config.models);
         let cache_key = self.config.current_cache_key();
         if let Some(key) = &cache_key {
             // vLLM / routing gateways use this to shard the prefix cache by
@@ -1010,18 +1015,19 @@ mod tests {
 
     #[test]
     fn session_key_follows_the_current_session() {
-        let previous = std::env::var("ARGENT_CACHE_KEY").ok();
-        std::env::set_var("ARGENT_CACHE_KEY", "sess-a");
-        let provider = OpenAiProvider::new(OpenAiConfig::new("http://127.0.0.1:1/v1"));
-        assert_eq!(provider.config.current_cache_key().as_deref(), Some("sess-a"));
-        std::env::set_var("ARGENT_CACHE_KEY", "sess-b");
-        assert_eq!(provider.config.current_cache_key().as_deref(), Some("sess-b"));
-        std::env::set_var("ARGENT_CACHE_KEY", "off");
-        assert_eq!(provider.config.current_cache_key(), None);
-        match previous {
-            Some(value) => std::env::set_var("ARGENT_CACHE_KEY", value),
-            None => std::env::remove_var("ARGENT_CACHE_KEY"),
-        }
+        let mut config = OpenAiConfig::new("http://127.0.0.1:1/v1");
+        config.cache_key = None;
+        config.cache_key_dynamic = true;
+        assert_eq!(
+            config.cache_key_from(Some("sess-a")).as_deref(),
+            Some("sess-a")
+        );
+        assert_eq!(
+            config.cache_key_from(Some("sess-b")).as_deref(),
+            Some("sess-b")
+        );
+        assert_eq!(config.cache_key_from(Some("off")), None);
+        assert_eq!(config.cache_key_from(None), None);
     }
 
     #[test]
@@ -1043,9 +1049,13 @@ mod tests {
         assert_eq!(headers.len(), 3);
         assert!(headers.iter().all(|(_, value)| value == "sess-42"));
         assert!(headers.iter().any(|(name, _)| *name == "x-session-id"));
-        assert!(headers.iter().any(|(name, _)| *name == "x-session-affinity"));
+        assert!(headers
+            .iter()
+            .any(|(name, _)| *name == "x-session-affinity"));
 
-        let plain = OpenAiConfig::new("http://127.0.0.1:1/v1");
+        let mut plain = OpenAiConfig::new("http://127.0.0.1:1/v1");
+        plain.cache_key = None;
+        plain.cache_key_dynamic = false;
         assert!(plain.affinity_headers().is_empty());
         assert!(plain.cache_key.is_none());
     }
@@ -1072,8 +1082,12 @@ mod tests {
         let body2 = OpenAiProvider::build_body(&request);
         let messages1 = body1.get("messages").unwrap().dump();
         let messages2 = body2.get("messages").unwrap().dump();
-        assert!(messages2.starts_with(&messages1[..messages1.len() - 1]),
-            "prefix drift between turns:\n{}\n{}", messages1, messages2);
+        assert!(
+            messages2.starts_with(&messages1[..messages1.len() - 1]),
+            "prefix drift between turns:\n{}\n{}",
+            messages1,
+            messages2
+        );
     }
 
     #[test]
@@ -1362,7 +1376,9 @@ mod tests {
         };
         let mut text = String::new();
         for item in stream {
-            if let StreamEvent::Text(chunk) = item.expect("event") { text.push_str(&chunk) }
+            if let StreamEvent::Text(chunk) = item.expect("event") {
+                text.push_str(&chunk)
+            }
         }
         assert!(!text.trim().is_empty(), "curl transport produced no text");
     }

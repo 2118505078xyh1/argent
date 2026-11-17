@@ -14,7 +14,9 @@ extern "system" {
 }
 
 fn main() {
-    let wanted = std::env::args().nth(1).unwrap_or_else(|| "argent".to_string());
+    let wanted = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "argent".to_string());
     let out = std::env::args()
         .nth(2)
         .unwrap_or_else(|| "window.bmp".to_string());

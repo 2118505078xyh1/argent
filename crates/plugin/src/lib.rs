@@ -4,6 +4,6 @@ pub mod abi;
 pub mod loader;
 
 pub use abi::{
-    LoadedPlugin, ArgentPluginV1, PluginToolDescV1, PluginToolInfo, ABI_VERSION, ENTRY_SYMBOL,
+    ArgentPluginV1, LoadedPlugin, PluginToolDescV1, PluginToolInfo, ABI_VERSION, ENTRY_SYMBOL,
 };
 pub use loader::{is_plugin_file, load_all, plugin_directories, PluginToolAdapter};

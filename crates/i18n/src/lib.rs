@@ -49,9 +49,7 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::En, "tui.hint") => {
             "Enter send · Esc abort · Ctrl+E expand · /help for keys and commands"
         }
-        (Locale::Zh, "tui.hint") => {
-            "Enter 发送 · Esc 中止 · Ctrl+E 展开 · /help 查看键位与命令"
-        }
+        (Locale::Zh, "tui.hint") => "Enter 发送 · Esc 中止 · Ctrl+E 展开 · /help 查看键位与命令",
         (Locale::En, "tui.error_hint") => "failed — press Enter to retry",
         (Locale::Zh, "tui.error_hint") => "出错 · 按 Enter 一键重试",
         (Locale::En, "tui.retry") => "retrying the failed prompt",
@@ -96,6 +94,30 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::Zh, "tui.sessions.title") => "会话",
         (Locale::En, "tui.sessions.rename") => "rename session",
         (Locale::Zh, "tui.sessions.rename") => "重命名会话",
+        (Locale::En, "tui.sessions.filter_hint") => "type to filter",
+        (Locale::Zh, "tui.sessions.filter_hint") => "输入以过滤",
+        (Locale::En, "tui.sessions.filter") => "filter",
+        (Locale::Zh, "tui.sessions.filter") => "过滤",
+        (Locale::En, "tui.sessions.no_match") => "no sessions match",
+        (Locale::Zh, "tui.sessions.no_match") => "没有匹配的会话",
+        (Locale::En, "tui.sessions.scope") => "scope",
+        (Locale::Zh, "tui.sessions.scope") => "范围",
+        (Locale::En, "tui.sessions.scope_current") => "cwd",
+        (Locale::Zh, "tui.sessions.scope_current") => "当前目录",
+        (Locale::En, "tui.sessions.scope_all") => "all",
+        (Locale::Zh, "tui.sessions.scope_all") => "全部",
+        (Locale::En, "tui.sessions.sort") => "sort",
+        (Locale::Zh, "tui.sessions.sort") => "排序",
+        (Locale::En, "tui.sessions.sort_recent") => "recent",
+        (Locale::Zh, "tui.sessions.sort_recent") => "最近",
+        (Locale::En, "tui.sessions.sort_name") => "name",
+        (Locale::Zh, "tui.sessions.sort_name") => "名称",
+        (Locale::En, "tui.sessions.help_move") => {
+            "↑↓ move · enter actions · tab scope · ctrl+s sort"
+        }
+        (Locale::Zh, "tui.sessions.help_move") => "↑↓ 移动 · 回车操作 · Tab 范围 · Ctrl+S 排序",
+        (Locale::En, "tui.sessions.help_actions") => "ctrl+r rename · ctrl+d delete · esc close",
+        (Locale::Zh, "tui.sessions.help_actions") => "Ctrl+R 改名 · Ctrl+D 删除 · Esc 关闭",
         (Locale::En, "tui.tree.title") => "session tree (enter switch · f fork)",
         (Locale::Zh, "tui.tree.title") => "会话树（回车切换 · f 分叉）",
         (Locale::En, "tui.help.tree") => "browse the branch tree; f forks from a node",
@@ -104,7 +126,9 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::Zh, "tui.help.all_commands") => "输入 / 可过滤所有命令",
         (Locale::En, "tui.help.queue") => "Alt+Enter queues a follow-up; Alt+Up takes it back",
         (Locale::Zh, "tui.help.queue") => "Alt+Enter 排队后续消息；Alt+Up 取回编辑",
-        (Locale::En, "tui.fork_usage") => "usage: /fork <message number> (a plain /fork clones the session)",
+        (Locale::En, "tui.fork_usage") => {
+            "usage: /fork <message number> (a plain /fork clones the session)"
+        }
         (Locale::Zh, "tui.fork_usage") => "用法：/fork <消息序号>（不带参数的 /fork 复制整个会话）",
         (Locale::En, "tui.import_usage") => "usage: /import <path to a .jsonl session>",
         (Locale::Zh, "tui.import_usage") => "用法：/import <会话 JSONL 路径>",
@@ -116,7 +140,9 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::Zh, "tui.tools.title") => "工具",
         (Locale::En, "tui.permission.title") => "permission",
         (Locale::Zh, "tui.permission.title") => "权限",
-        (Locale::En, "tui.permission.choice") => "[y] approve   [p] this command   [n] reject   [a] approve all",
+        (Locale::En, "tui.permission.choice") => {
+            "[y] approve   [p] this command   [n] reject   [a] approve all"
+        }
         (Locale::Zh, "tui.permission.choice") => "[y] 允许   [p] 此命令   [n] 拒绝   [a] 全部允许",
         (Locale::En, "tui.approve_prefix") => "command allowed for this session",
         (Locale::Zh, "tui.approve_prefix") => "本会话内允许该命令",
@@ -177,7 +203,9 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::En, "ui.folder_hint") => {
             "The task runs its tools in this folder, and appears in that folder's task list."
         }
-        (Locale::Zh, "ui.folder_hint") => "任务将在这个文件夹里运行工具，并出现在该文件夹的任务列表里。",
+        (Locale::Zh, "ui.folder_hint") => {
+            "任务将在这个文件夹里运行工具，并出现在该文件夹的任务列表里。"
+        }
         (Locale::En, "ui.recent_folders") => "Recent folders",
         (Locale::Zh, "ui.recent_folders") => "最近文件夹",
         (Locale::En, "ui.folder_path") => "Folder path",
@@ -200,12 +228,8 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::Zh, "ui.automation_name") => "名称",
         (Locale::En, "ui.automation_schedule") => "Schedule",
         (Locale::Zh, "ui.automation_schedule") => "计划",
-        (Locale::En, "ui.automation_schedule_hint") => {
-            "every 30m · daily 09:00 · weekly mon 09:00"
-        }
-        (Locale::Zh, "ui.automation_schedule_hint") => {
-            "every 30m · daily 09:00 · weekly mon 09:00"
-        },
+        (Locale::En, "ui.automation_schedule_hint") => "every 30m · daily 09:00 · weekly mon 09:00",
+        (Locale::Zh, "ui.automation_schedule_hint") => "every 30m · daily 09:00 · weekly mon 09:00",
         (Locale::En, "ui.automation_prompt") => "Prompt",
         (Locale::Zh, "ui.automation_prompt") => "提示词",
         (Locale::En, "ui.automation_add") => "Add",

@@ -474,10 +474,7 @@ pub fn kill_pid_tree(pid: u32) {
 }
 
 /// Attach a child to the sandbox, or reap it and report the failure.
-fn attach_job(
-    spec: &CommandSpec,
-    child: &mut Child,
-) -> Result<Option<crate::sandbox::JobGuard>> {
+fn attach_job(spec: &CommandSpec, child: &mut Child) -> Result<Option<crate::sandbox::JobGuard>> {
     if !spec.sandbox {
         return Ok(None);
     }
@@ -510,7 +507,12 @@ fn set_nonblocking(fd: i32) -> std::io::Result<()> {
             fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
         }
         let flags = fcntl(fd, 3 /* F_GETFL */, 0);
-        if fcntl(fd, 4 /* F_SETFL */, flags | 0o4000 /* O_NONBLOCK */) < 0 {
+        if fcntl(
+            fd,
+            4,              /* F_SETFL */
+            flags | 0o4000, /* O_NONBLOCK */
+        ) < 0
+        {
             return Err(std::io::Error::last_os_error());
         }
     }
@@ -622,7 +624,11 @@ impl StreamingChild {
     ///
     /// Used to stop waiting on a child that died before it could answer.
     pub fn try_status(&mut self) -> Option<i32> {
-        self.child.try_wait().ok().flatten().and_then(|status| status.code())
+        self.child
+            .try_wait()
+            .ok()
+            .flatten()
+            .and_then(|status| status.code())
     }
 
     /// 等子进程退出，返回 (退出码, stderr)。
@@ -840,7 +846,10 @@ mod tests {
         };
         let output = run(&spec.cancel(cancel)).expect("run");
         trigger.join().unwrap();
-        assert!(output.interrupted, "the cancel signal must interrupt the wait");
+        assert!(
+            output.interrupted,
+            "the cancel signal must interrupt the wait"
+        );
         assert!(!output.timed_out, "cancellation is not a timeout");
         assert!(!output.success());
         assert!(
@@ -900,7 +909,12 @@ mod tests {
             .sandbox(true)
             .timeout(Duration::from_secs(10));
         let output = run(&spec).expect("sandboxed child");
-        assert!(output.success(), "status {}: {}", output.status, output.stderr);
+        assert!(
+            output.success(),
+            "status {}: {}",
+            output.status,
+            output.stderr
+        );
         assert!(output.stdout.contains("sandboxed"));
     }
 }

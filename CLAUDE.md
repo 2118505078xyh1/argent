@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `argent` is a clean-room Rust reimplementation whose goal is to provide the functionality of Codex CLI, Claude Code, and pi, with a much smaller runtime. Its interface compatibility targets are Codex CLI and Claude Code (provider templates, plugin manifests, skills, commands, hooks, MCP). The primary entry point is the CLI/full-screen TUI (`argent`); an optional native iced frontend ships as `argent-native`.
 
-Rust 2021 workspace (see `Cargo.toml` for members), `rust-version = "1.85"`. Project docs, README and code comments are in Chinese; identifiers are English.
+Rust 2021 workspace (see `Cargo.toml` for members), `rust-version = "1.85"` for the CLI and core crates. The optional `argent-native` GUI requires Rust 1.88 because `iced 0.14` does. Project docs, README and code comments are in Chinese; identifiers are English.
 
 ## Build
 

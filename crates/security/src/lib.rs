@@ -145,9 +145,7 @@ impl Policy {
             let expanded = argent_core::path::expand_home(Path::new(pattern))
                 .to_string_lossy()
                 .to_ascii_lowercase();
-            if lowered.contains(&needle)
-                || (expanded != needle && lowered.contains(&expanded))
-            {
+            if lowered.contains(&needle) || (expanded != needle && lowered.contains(&expanded)) {
                 return Some(format!(
                     "the command touches a denied path (rule '{}')",
                     pattern

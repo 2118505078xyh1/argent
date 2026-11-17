@@ -603,7 +603,8 @@ mod tests {
     fn a_repeating_script_ends_at_the_turn_limit() {
         // A scenario that must be stopped by a limit needs a model that will
         // not stop on its own; `repeat` is how it gets one.
-        let scratch = std::env::temp_dir().join(format!("argent-eval-repeat-{}", std::process::id()));
+        let scratch =
+            std::env::temp_dir().join(format!("argent-eval-repeat-{}", std::process::id()));
         let mut scenario = scenario("");
         scenario.script = vec![Turn::call("current_time", "{}")];
         scenario.repeat = true;

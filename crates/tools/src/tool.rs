@@ -373,10 +373,7 @@ fn normalized_form(path: &Path) -> PathBuf {
 ///
 /// Windows 路径大小写不敏感、分隔符混用，所以比较前统一小写并换成 `/`。
 fn path_under(target: &Path, root: &Path) -> bool {
-    let target = target
-        .to_string_lossy()
-        .to_lowercase()
-        .replace('\\', "/");
+    let target = target.to_string_lossy().to_lowercase().replace('\\', "/");
     let root = root.to_string_lossy().to_lowercase().replace('\\', "/");
     let root = root.trim_end_matches('/');
     target == root || target.starts_with(&format!("{}/", root))
@@ -456,10 +453,8 @@ mod tests {
 
     #[test]
     fn an_edit_preview_counts_changed_lines() {
-        let args = Json::parse(
-            r#"{"path":"a.rs","oldText":"one\ntwo","newText":"one\nthree"}"#,
-        )
-        .unwrap();
+        let args =
+            Json::parse(r#"{"path":"a.rs","oldText":"one\ntwo","newText":"one\nthree"}"#).unwrap();
         let preview = approval_preview("edit", &args);
         assert!(preview.starts_with("edit a.rs (+1 -1)"), "{}", preview);
         assert!(preview.contains("+ three"), "{}", preview);
@@ -468,8 +463,7 @@ mod tests {
 
     #[test]
     fn a_write_preview_shows_the_content() {
-        let args =
-            Json::parse(r#"{"path":"a.txt","content":"first\nsecond"}"#).unwrap();
+        let args = Json::parse(r#"{"path":"a.txt","content":"first\nsecond"}"#).unwrap();
         let preview = approval_preview("write", &args);
         assert!(preview.contains("2 lines"), "{}", preview);
         assert!(preview.contains("| first"), "{}", preview);
@@ -484,8 +478,7 @@ mod tests {
 
     #[test]
     fn a_code_preview_shows_the_script_head() {
-        let args =
-            Json::parse(r#"{"language":"python","source":"import os\nprint(1)"}"#).unwrap();
+        let args = Json::parse(r#"{"language":"python","source":"import os\nprint(1)"}"#).unwrap();
         let preview = approval_preview("code", &args);
         assert!(preview.contains("python script (2 lines)"), "{}", preview);
         assert!(preview.contains("| import os"), "{}", preview);
@@ -503,8 +496,12 @@ mod tests {
         ctx.write_roots = vec![root.clone()];
         assert!(ctx.check_write(&root.join("inside").join("a.txt")).is_ok());
         // 尚不存在的文件按父目录判定。
-        assert!(ctx.check_write(&root.join("inside").join("new/deep.txt")).is_ok());
-        assert!(ctx.check_write(&root.join("..").join("outside.txt")).is_err());
+        assert!(ctx
+            .check_write(&root.join("inside").join("new/deep.txt"))
+            .is_ok());
+        assert!(ctx
+            .check_write(&root.join("..").join("outside.txt"))
+            .is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -601,20 +601,12 @@ fn export_html_to(destination: &std::path::Path, session_path: &std::path::Path)
     if let Some(parent) = destination.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                argent_core::error::Error::io(format!(
-                    "create {} failed: {}",
-                    parent.display(),
-                    e
-                ))
+                argent_core::error::Error::io(format!("create {} failed: {}", parent.display(), e))
             })?;
         }
     }
     std::fs::write(destination, &html).map_err(|e| {
-        argent_core::error::Error::io(format!(
-            "write {} failed: {}",
-            destination.display(),
-            e
-        ))
+        argent_core::error::Error::io(format!("write {} failed: {}", destination.display(), e))
     })?;
     Ok(html.len())
 }
@@ -866,10 +858,14 @@ mod tests {
             .append(&argent_session::Entry::Header(Json::obj()))
             .expect("append header");
         store
-            .append(&argent_session::Entry::Message(argent_ai::Message::user("hello")))
+            .append(&argent_session::Entry::Message(argent_ai::Message::user(
+                "hello",
+            )))
             .expect("append user");
         store
-            .append(&argent_session::Entry::Message(argent_ai::Message::assistant("world")))
+            .append(&argent_session::Entry::Message(
+                argent_ai::Message::assistant("world"),
+            ))
             .expect("append assistant");
         store
             .append(&argent_session::Entry::Summary("all done".to_string()))
@@ -1033,10 +1029,7 @@ mod tests {
         let path = write_session(&dir);
         let destination = dir.join("nested").join("transcript.html");
         let mut params = Json::obj();
-        params.set(
-            "path",
-            Json::string(destination.display().to_string()),
-        );
+        params.set("path", Json::string(destination.display().to_string()));
         let mut request = request(13, "export_html");
         request.params = params;
         let mut agent = test_agent();
@@ -1051,10 +1044,7 @@ mod tests {
         let parsed = Json::parse(&line).expect("json");
         assert_eq!(parsed.str_or("type", ""), "result");
         let data = parsed.get("data").expect("data");
-        assert_eq!(
-            data.str_or("path", ""),
-            destination.display().to_string()
-        );
+        assert_eq!(data.str_or("path", ""), destination.display().to_string());
         let html = std::fs::read_to_string(&destination).expect("read export");
         assert!(html.starts_with("<!DOCTYPE html>"));
         assert!(html.contains("hello"));
@@ -1186,8 +1176,12 @@ mod tests {
         let path = write_session(&dir);
         let mut agent = test_agent();
         let mut session = ctx(&path);
-        let parsed =
-            handle_line(&mut agent, "set_session_name", r#"{"name":"my run"}"#, &mut session);
+        let parsed = handle_line(
+            &mut agent,
+            "set_session_name",
+            r#"{"name":"my run"}"#,
+            &mut session,
+        );
         assert_eq!(parsed.str_or("type", ""), "result");
         // 标题进 header：再读一次确认。
         let entries = argent_session::SessionStore::read_all(&path).expect("read");
@@ -1204,18 +1198,26 @@ mod tests {
         let dir = temp_case("new");
         let path = write_session(&dir);
         let mut agent = test_agent();
-        argent_session::controller::open(
-            &mut agent,
-            vec![argent_ai::Message::user("old")],
-        );
+        argent_session::controller::open(&mut agent, vec![argent_ai::Message::user("old")]);
         let mut session = ctx(&path);
-        let parsed = handle_line(&mut agent, "new_session", r#"{"title":"fresh"}"#, &mut session);
+        let parsed = handle_line(
+            &mut agent,
+            "new_session",
+            r#"{"title":"fresh"}"#,
+            &mut session,
+        );
         let data = parsed.get("data").expect("data");
         let new_path = data.str_or("session", "");
         assert!(!new_path.is_empty());
         assert_ne!(new_path, path.display().to_string());
-        assert!(std::path::Path::new(&new_path).is_file(), "new session file exists");
-        assert!(agent.history().is_empty(), "a new session starts with no history");
+        assert!(
+            std::path::Path::new(&new_path).is_file(),
+            "new session file exists"
+        );
+        assert!(
+            agent.history().is_empty(),
+            "a new session starts with no history"
+        );
         // 上下文已指向新文件。
         assert_eq!(session.path.display().to_string(), new_path);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1227,7 +1229,8 @@ mod tests {
         let path = write_session(&dir);
         let mut agent = test_agent();
         let mut session = ctx(&path);
-        let escaped = path.display()
+        let escaped = path
+            .display()
             .to_string()
             .replace(std::path::MAIN_SEPARATOR, r"\\");
         let params = format!(r#"{{"session":"{}"}}"#, escaped);
@@ -1270,9 +1273,8 @@ mod tests {
         assert!(!fork_path.is_empty());
         assert_ne!(fork_path, path.display().to_string());
         // 新文件里有 fork 时的完整历史。
-        let entries =
-            argent_session::SessionStore::read_all(std::path::Path::new(&fork_path))
-                .expect("read fork");
+        let entries = argent_session::SessionStore::read_all(std::path::Path::new(&fork_path))
+            .expect("read fork");
         let messages = argent_session::entries_to_messages(&entries);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].text(), "answer");

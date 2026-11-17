@@ -6,8 +6,8 @@
 //! credentials are never read.
 
 use argent_core::config::Config;
-use argent_core::json::Json;
 use argent_core::error::Error;
+use argent_core::json::Json;
 use argent_core::path::expand_home;
 use std::path::{Path, PathBuf};
 
@@ -41,7 +41,12 @@ fn collect(config: &Config, cwd: &Path) -> Json {
     provider.set("baseUrl", Json::string(sanitize_url(&config.base_url)));
     provider.set(
         "apiKeySet",
-        Json::bool(config.api_key.as_deref().is_some_and(|k| !k.trim().is_empty())),
+        Json::bool(
+            config
+                .api_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty()),
+        ),
     );
     report.set("provider", provider);
 
@@ -50,10 +55,7 @@ fn collect(config: &Config, cwd: &Path) -> Json {
         "approvalMode",
         Json::string(config.approval_mode.name().to_string()),
     );
-    settings.set(
-        "autoCompaction",
-        Json::bool(config.auto_compaction),
-    );
+    settings.set("autoCompaction", Json::bool(config.auto_compaction));
     settings.set(
         "backgroundIntelligence",
         Json::bool(config.background_intelligence),
@@ -121,12 +123,15 @@ mod tests {
             sanitize_url("https://api.example.com/v1/chat?key=secret"),
             "https://api.example.com"
         );
-        assert_eq!(sanitize_url("http://127.0.0.1:3425/v1"), "http://127.0.0.1:3425");
+        assert_eq!(
+            sanitize_url("http://127.0.0.1:3425/v1"),
+            "http://127.0.0.1:3425"
+        );
     }
 
     #[test]
     fn collect_never_carries_a_key() {
-                let report = collect(
+        let report = collect(
             &Config {
                 api_key: Some("sk-real-secret".to_string()),
                 ..Config::default()

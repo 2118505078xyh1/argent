@@ -397,9 +397,15 @@ impl Tool for SkillScriptTool {
         } else if output.interrupted {
             Ok(ToolResult::error("interrupted"))
         } else if output.timed_out {
-            Ok(ToolResult::error(format!("timed out; partial output:\n{}", text)))
+            Ok(ToolResult::error(format!(
+                "timed out; partial output:\n{}",
+                text
+            )))
         } else {
-            Ok(ToolResult::error(format!("exit {}: {}", output.status, text)))
+            Ok(ToolResult::error(format!(
+                "exit {}: {}",
+                output.status, text
+            )))
         }
     }
 }

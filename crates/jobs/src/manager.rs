@@ -181,7 +181,10 @@ fn shell_for_platform() -> (String, Vec<String>) {
         if let Some(shell) = argent_tools::locate_posix_shell() {
             (shell, vec!["-lc".to_string()])
         } else {
-            ("powershell".to_string(), vec!["-NoProfile".to_string(), "-Command".to_string()])
+            (
+                "powershell".to_string(),
+                vec!["-NoProfile".to_string(), "-Command".to_string()],
+            )
         }
     } else {
         ("sh".to_string(), vec!["-lc".to_string()])

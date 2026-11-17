@@ -21,7 +21,10 @@ fn main() {
 
     // 键位提示现在只在首帧出现，启动探针改等首屏标题而不是状态栏文案。
     if !session.wait_for("argent", Duration::from_secs(10)) {
-        eprintln!("TUI did not draw its first frame:\n{}", session.output.all());
+        eprintln!(
+            "TUI did not draw its first frame:\n{}",
+            session.output.all()
+        );
         std::process::exit(1);
     }
 
@@ -34,6 +37,14 @@ fn main() {
             eprintln!("missing {:?} in the rendered UI:\n{}", needle, rendered);
             std::process::exit(1);
         }
+    }
+    // 开场键位提示必须出现在启动画面上（默认中文或英文 locale 都认）。
+    if !rendered.contains("Enter 发送") && !rendered.contains("Enter send") {
+        eprintln!(
+            "the opening hint never reached the first screen:\n{}",
+            rendered
+        );
+        std::process::exit(1);
     }
 
     session.write("/exit\r").expect("send /exit");

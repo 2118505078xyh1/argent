@@ -36,7 +36,10 @@ pub fn command_prefix(command: &str) -> String {
 
 /// Programs whose meaning changes with their subcommand.
 fn is_multi_word_program(word: &str) -> bool {
-    let stripped: String = word.chars().filter(|ch| *ch != '"' && *ch != 39 as char).collect();
+    let stripped: String = word
+        .chars()
+        .filter(|ch| *ch != '"' && *ch != 39 as char)
+        .collect();
     matches!(
         stripped.as_str(),
         "git" | "cargo" | "npm" | "pnpm" | "yarn" | "pip" | "docker" | "kubectl" | "make"

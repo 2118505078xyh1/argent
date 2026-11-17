@@ -7,9 +7,9 @@
 //! streamed function arguments.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{BufReader, Read};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::io::{BufReader, Read};
 use std::time::Duration;
 
 use argent_core::error::{Error, Result};
@@ -885,8 +885,7 @@ mod tests {
 
     #[test]
     fn a_non_reasoning_model_gets_no_reasoning_field() {
-        let request = ChatRequest::new("plain", vec![Message::user("hi")])
-            .with_reasoning("high");
+        let request = ChatRequest::new("plain", vec![Message::user("hi")]).with_reasoning("high");
         let config = config().with_models(vec![model("plain", true, false, 0)]);
         let body = ResponsesProvider::build_body(&request, &config);
         assert!(body.get("reasoning").is_none());

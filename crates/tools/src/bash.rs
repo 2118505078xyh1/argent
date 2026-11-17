@@ -294,16 +294,14 @@ impl Tool for BashTool {
             ShellFlavor::Posix => {
                 let program = locate_posix_shell().unwrap_or_else(|| "sh".to_string());
                 if track_cwd {
-                    CommandSpec::new(program)
-                        .arg("-c")
-                        .arg(
-                            // The command's own `cd` changes $PWD inside this
-                            // shell, so the sentinel reads the real result.
-                            "cd \"$ARGENT_CWD\" 2>/dev/null || true; \
+                    CommandSpec::new(program).arg("-c").arg(
+                        // The command's own `cd` changes $PWD inside this
+                        // shell, so the sentinel reads the real result.
+                        "cd \"$ARGENT_CWD\" 2>/dev/null || true; \
                              eval \"$ARGENT_CMD\"; __argent=$?; \
                              printf '\\036__ARGENT_PWD__%s\\036' \"$PWD\"; \
                              exit $__argent",
-                        )
+                    )
                 } else {
                     CommandSpec::new(program).arg("-lc").arg(&command)
                 }

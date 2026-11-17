@@ -138,8 +138,8 @@ mod tests {
                 "items":{"type":"object","required":["id"],
                          "properties":{"id":{"type":"integer"}}}}}}"#,
         );
-        let error = validate(&s, &value(r#"{"items":[{"id":1},{"id":"x"}]}"#))
-            .expect_err("must reject");
+        let error =
+            validate(&s, &value(r#"{"items":[{"id":1},{"id":"x"}]}"#)).expect_err("must reject");
         assert!(error.contains("$.items[1].id"), "{}", error);
     }
 
@@ -156,8 +156,10 @@ mod tests {
 
     #[test]
     fn enforces_enums_and_integer_types() {
-        let s = schema(r#"{"type":"object","properties":{"state":{"enum":["ok","bad"]},
-                            "count":{"type":"integer"}}}"#);
+        let s = schema(
+            r#"{"type":"object","properties":{"state":{"enum":["ok","bad"]},
+                            "count":{"type":"integer"}}}"#,
+        );
         assert!(validate(&s, &value(r#"{"state":"ok","count":2}"#)).is_ok());
         assert!(validate(&s, &value(r#"{"state":"maybe"}"#)).is_err());
         assert!(validate(&s, &value(r#"{"count":2.5}"#)).is_err());

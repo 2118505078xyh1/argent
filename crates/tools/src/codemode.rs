@@ -181,7 +181,11 @@ impl Tool for CodeTool {
     fn parameters(&self) -> Json {
         schema_object(
             vec![
-                ("language", "string", "Script language: rhai (built in), python or javascript"),
+                (
+                    "language",
+                    "string",
+                    "Script language: rhai (built in), python or javascript",
+                ),
                 ("source", "string", "The script body"),
             ],
             vec!["language", "source"],
@@ -514,7 +518,9 @@ fn run_rhai(
             .lock()
             .ok()
             .and_then(|map| map.get(&key).cloned());
-        found.map(|value| json_to_dynamic(&value)).unwrap_or(Dynamic::UNIT)
+        found
+            .map(|value| json_to_dynamic(&value))
+            .unwrap_or(Dynamic::UNIT)
     });
 
     let mut scope = Scope::new();
@@ -586,12 +592,9 @@ fn json_to_dynamic(value: &Json) -> Dynamic {
         Json::Bool(flag) => Dynamic::from(*flag),
         Json::Num(number) => Dynamic::from(*number),
         Json::Str(text) => Dynamic::from(text.clone()),
-        Json::Arr(items) => Dynamic::from(
-            items
-                .iter()
-                .map(json_to_dynamic)
-                .collect::<rhai::Array>(),
-        ),
+        Json::Arr(items) => {
+            Dynamic::from(items.iter().map(json_to_dynamic).collect::<rhai::Array>())
+        }
         Json::Obj(entries) => {
             let mut map = Map::new();
             for (key, child) in entries {
@@ -781,7 +784,9 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = Arc::clone(&calls);
         let runner: ToolRunner = Arc::new(move |name, args| {
-            sink.lock().unwrap().push(format!("{name}:{}", args.str_or("text", "")));
+            sink.lock()
+                .unwrap()
+                .push(format!("{name}:{}", args.str_or("text", "")));
             Ok(ToolResult::ok(format!("called {name}")))
         });
         let result = run_rhai(
@@ -978,8 +983,10 @@ mod tests {
         (registry, executed)
     }
 
-    fn audit_sink() -> (Arc<Mutex<Vec<String>>>, impl Fn(&str, &Json, &str, Option<String>) + Send + Sync + 'static)
-    {
+    fn audit_sink() -> (
+        Arc<Mutex<Vec<String>>>,
+        impl Fn(&str, &Json, &str, Option<String>) + Send + Sync + 'static,
+    ) {
         let decisions = Arc::new(Mutex::new(Vec::<String>::new()));
         let log = Arc::clone(&decisions);
         let sink = move |_name: &str, _args: &Json, decision: &str, _reason: Option<String>| {
@@ -1016,11 +1023,13 @@ mod tests {
         let log = Arc::clone(&posts);
         let gate = ToolGate {
             approve: Some(Arc::new(|_: &str, _: &Json| false)),
-            post_tool: Some(Arc::new(move |_name: &str, _args: &Json, is_error: bool| {
-                if let Ok(mut list) = log.lock() {
-                    list.push(is_error);
-                }
-            })),
+            post_tool: Some(Arc::new(
+                move |_name: &str, _args: &Json, is_error: bool| {
+                    if let Ok(mut list) = log.lock() {
+                        list.push(is_error);
+                    }
+                },
+            )),
             audit: Some(Arc::new(sink)),
             ..ToolGate::default()
         };
@@ -1040,11 +1049,13 @@ mod tests {
         let log = Arc::clone(&posts);
         let gate = ToolGate {
             approve: Some(Arc::new(|_: &str, _: &Json| true)),
-            post_tool: Some(Arc::new(move |_name: &str, _args: &Json, is_error: bool| {
-                if let Ok(mut list) = log.lock() {
-                    list.push(is_error);
-                }
-            })),
+            post_tool: Some(Arc::new(
+                move |_name: &str, _args: &Json, is_error: bool| {
+                    if let Ok(mut list) = log.lock() {
+                        list.push(is_error);
+                    }
+                },
+            )),
             audit: Some(Arc::new(sink)),
             ..ToolGate::default()
         };

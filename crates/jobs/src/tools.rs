@@ -25,7 +25,9 @@ fn with_manager<T>(action: impl FnOnce(&mut JobManager) -> Result<T>) -> Result<
     }
     match guard.as_mut() {
         Some(manager) => action(manager),
-        None => Err(argent_core::Error::internal("job manager failed to initialise")),
+        None => Err(argent_core::Error::internal(
+            "job manager failed to initialise",
+        )),
     }
 }
 

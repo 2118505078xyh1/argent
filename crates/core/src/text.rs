@@ -87,8 +87,16 @@ pub fn diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
     let cells = (n as u64 + 1) * (m as u64 + 1);
     if cells > DIFF_TABLE_LIMIT {
         let mut out = Vec::with_capacity(n + m);
-        out.extend(old_lines.into_iter().map(|line| DiffLine::Removed(line.to_string())));
-        out.extend(new_lines.into_iter().map(|line| DiffLine::Added(line.to_string())));
+        out.extend(
+            old_lines
+                .into_iter()
+                .map(|line| DiffLine::Removed(line.to_string())),
+        );
+        out.extend(
+            new_lines
+                .into_iter()
+                .map(|line| DiffLine::Added(line.to_string())),
+        );
         return out;
     }
 

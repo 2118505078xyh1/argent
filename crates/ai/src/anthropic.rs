@@ -13,9 +13,9 @@
 //! the agent.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{BufReader, Read};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::io::{BufReader, Read};
 use std::time::Duration;
 
 use argent_core::error::{Error, Result};
@@ -754,7 +754,8 @@ impl AnthropicStream {
                     "thinking" => {
                         let text = block.str_or("thinking", "");
                         if !text.is_empty() {
-                            self.pending.push_back(Ok(StreamEvent::Reasoning(text.clone())));
+                            self.pending
+                                .push_back(Ok(StreamEvent::Reasoning(text.clone())));
                         }
                         // 有些网关在 start 里就给出完整文本或签名。
                         self.thinking.insert(
@@ -768,7 +769,8 @@ impl AnthropicStream {
                     "redacted_thinking" => {
                         let data = block.str_or("data", "");
                         if !data.is_empty() {
-                            self.pending.push_back(Ok(StreamEvent::RedactedThinking(data)));
+                            self.pending
+                                .push_back(Ok(StreamEvent::RedactedThinking(data)));
                         }
                     }
                     "tool_use" => {
@@ -824,12 +826,10 @@ impl AnthropicStream {
             "content_block_stop" => {
                 let index = payload.get("index").and_then(Json::as_i64).unwrap_or(0) as usize;
                 if let Some(thinking) = self.thinking.remove(&index) {
-                    self.pending
-                        .push_back(Ok(StreamEvent::ReasoningBlock {
-                            text: thinking.text,
-                            signature: (!thinking.signature.is_empty())
-                                .then_some(thinking.signature),
-                        }));
+                    self.pending.push_back(Ok(StreamEvent::ReasoningBlock {
+                        text: thinking.text,
+                        signature: (!thinking.signature.is_empty()).then_some(thinking.signature),
+                    }));
                 }
                 if let Some(call) = self.calls.remove(&index) {
                     self.push_tool(index, call);
@@ -1267,8 +1267,7 @@ mod tests {
             signature: "sig".to_string(),
         });
         assistant.tool_calls = vec![ToolCall::new("toolu_1", "read", "{}")];
-        let request = ChatRequest::new("plain", vec![assistant])
-            .with_reasoning("high");
+        let request = ChatRequest::new("plain", vec![assistant]).with_reasoning("high");
         let config = config()
             .with_thinking(true)
             .with_models(vec![model("plain", true, false, 0)]);
@@ -1277,7 +1276,9 @@ mod tests {
         let messages = body.get("messages").and_then(Json::as_array).unwrap();
         let blocks = messages[0].get("content").and_then(Json::as_array).unwrap();
         assert!(
-            blocks.iter().all(|block| block.str_or("type", "") != "thinking"),
+            blocks
+                .iter()
+                .all(|block| block.str_or("type", "") != "thinking"),
             "history thinking blocks are stripped: {:?}",
             blocks
         );

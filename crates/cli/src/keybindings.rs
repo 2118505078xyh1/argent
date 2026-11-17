@@ -107,15 +107,14 @@ impl Bindings {
             if !root.is_file() {
                 continue;
             }
-            let text = std::fs::read_to_string(&root).map_err(|error| {
-                Error::io(format!("read {} failed: {}", root.display(), error))
-            })?;
+            let text = std::fs::read_to_string(&root)
+                .map_err(|error| Error::io(format!("read {} failed: {}", root.display(), error)))?;
             let value = Json::parse(&text).map_err(|error| {
                 Error::config(format!("{}: invalid JSON: {}", root.display(), error))
             })?;
-            bindings.overlay(&value).map_err(|error| {
-                Error::config(format!("{}: {}", root.display(), error))
-            })?;
+            bindings
+                .overlay(&value)
+                .map_err(|error| Error::config(format!("{}: {}", root.display(), error)))?;
         }
         Ok(bindings)
     }
@@ -175,16 +174,12 @@ pub fn parse_key(name: &str) -> Result<Key> {
         "ctrl+p" => Key::CtrlP,
         "ctrl+n" => Key::CtrlN,
         "ctrl+r" => Key::CtrlR,
+        "ctrl+s" => Key::CtrlS,
         other => {
             let mut chars = other.chars();
             match (chars.next(), chars.next()) {
                 (Some(ch), None) => Key::Char(ch),
-                _ => {
-                    return Err(Error::config(format!(
-                        "unknown key '{}'",
-                        name
-                    )))
-                }
+                _ => return Err(Error::config(format!("unknown key '{}'", name))),
             }
         }
     };
@@ -218,6 +213,7 @@ pub fn key_name(key: &Key) -> String {
         Key::CtrlP => "ctrl+p".to_string(),
         Key::CtrlN => "ctrl+n".to_string(),
         Key::CtrlR => "ctrl+r".to_string(),
+        Key::CtrlS => "ctrl+s".to_string(),
         Key::AltEnter => "alt+enter".to_string(),
         Key::AltUp => "alt+up".to_string(),
         #[cfg(any(not(windows), test))]
@@ -229,6 +225,7 @@ pub fn key_name(key: &Key) -> String {
         Key::MousePress { .. } => "mouse-press".to_string(),
         Key::MouseDrag { .. } => "mouse-drag".to_string(),
         Key::MouseRelease { .. } => "mouse-release".to_string(),
+        Key::PasteClipboard => "paste-clipboard".to_string(),
         #[cfg(any(not(windows), test))]
         Key::Ignore => "ignore".to_string(),
     }

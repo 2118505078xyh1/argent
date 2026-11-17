@@ -164,7 +164,12 @@ pub fn configured_db_path() -> Option<PathBuf> {
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        return Some(home.join(".argent").join("cli").join("db").join("db.sqlite"));
+        return Some(
+            home.join(".argent")
+                .join("cli")
+                .join("db")
+                .join("db.sqlite"),
+        );
     }
     Some(PathBuf::from(value))
 }

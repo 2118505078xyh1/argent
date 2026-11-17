@@ -21,8 +21,6 @@ pub enum FlushPolicy {
     Manual,
 }
 
-
-
 /// One recorded entry in a session transcript.
 #[derive(Debug, Clone)]
 pub enum Entry {
@@ -144,7 +142,8 @@ impl SessionStore {
         let mut line = entry.to_json().dump();
         line.push('\n');
         let bytes = line.as_bytes();
-        writer.write_all(bytes)
+        writer
+            .write_all(bytes)
             .map_err(|e| Error::io(format!("write session failed: {}", e)))?;
         self.bytes_since_flush += bytes.len();
         self.maybe_flush()?;
@@ -158,10 +157,14 @@ impl SessionStore {
 
     /// Flush if policy demands it.
     fn maybe_flush(&mut self) -> Result<()> {
-        let writer = self.writer.as_mut().ok_or_else(|| Error::internal("session store is closed"))?;
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| Error::internal("session store is closed"))?;
         match self.flush_policy {
             FlushPolicy::EveryAppend => {
-                writer.flush()
+                writer
+                    .flush()
                     .map_err(|e| Error::io(format!("flush session failed: {}", e)))?;
             }
             FlushPolicy::Interval(_) => {
@@ -171,7 +174,8 @@ impl SessionStore {
                 // call `sync()` explicitly at logical boundaries.
                 const INTERVAL_THRESHOLD: usize = 64 * 1024;
                 if self.bytes_since_flush >= INTERVAL_THRESHOLD {
-                    writer.flush()
+                    writer
+                        .flush()
                         .map_err(|e| Error::io(format!("flush session failed: {}", e)))?;
                     self.bytes_since_flush = 0;
                 }
@@ -185,8 +189,12 @@ impl SessionStore {
 
     /// Force any buffered data to disk.
     pub fn sync(&mut self) -> Result<()> {
-        let writer = self.writer.as_mut().ok_or_else(|| Error::internal("session store is closed"))?;
-        writer.flush()
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| Error::internal("session store is closed"))?;
+        writer
+            .flush()
             .map_err(|e| Error::io(format!("flush session failed: {}", e)))?;
         self.bytes_since_flush = 0;
         Ok(())
@@ -246,20 +254,14 @@ impl SessionStore {
         let reader = BufReader::new(file);
         let mut lines = Vec::new();
         for line in reader.lines() {
-            let line = line
-                .map_err(|e| Error::io(format!("read session failed: {}", e)))?;
+            let line = line.map_err(|e| Error::io(format!("read session failed: {}", e)))?;
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
             }
             match Json::parse(trimmed) {
                 Ok(value) => lines.push(value),
-                Err(e) => {
-                    return Err(Error::io(format!(
-                        "session line is not JSON: {}",
-                        e
-                    )))
-                }
+                Err(e) => return Err(Error::io(format!("session line is not JSON: {}", e))),
             }
         }
         Ok(lines)
@@ -285,7 +287,8 @@ impl SessionStore {
             .writer
             .as_mut()
             .ok_or_else(|| Error::internal("session store is closed"))?;
-        writer.write_all(bytes)
+        writer
+            .write_all(bytes)
             .map_err(|e| Error::io(format!("write session failed: {}", e)))?;
         self.bytes_since_flush += bytes.len();
         self.maybe_flush()?;
@@ -661,10 +664,7 @@ pub fn summarize(messages: &[Message]) -> String {
             }
             argent_ai::Role::Assistant => {
                 for call in &message.tool_calls {
-                    calls.insert(
-                        call.id.clone(),
-                        (call.name.clone(), call.arguments.clone()),
-                    );
+                    calls.insert(call.id.clone(), (call.name.clone(), call.arguments.clone()));
                     if let Some((path, diff)) = edit_change(&call.name, &call.arguments) {
                         let entry = changed.entry(path).or_default();
                         entry.count += 1;
@@ -811,7 +811,10 @@ fn failure_bullet(name: &str, arguments: &str, reason: &str) -> String {
         })
         .unwrap_or_default();
     let label = if name == "bash" && !command.is_empty() {
-        format!("bash `{}`", argent_core::text::truncate(&command.replace('\n', " "), 120))
+        format!(
+            "bash `{}`",
+            argent_core::text::truncate(&command.replace('\n', " "), 120)
+        )
     } else {
         name.to_string()
     };
@@ -1234,19 +1237,18 @@ mod tests {
         assert!(is_empty_transcript(&empty));
         assert!(!is_empty_transcript(&busy));
 
-        let removed =
-            sweep_empty_sessions(&index, std::slice::from_ref(&kept), std::time::Duration::ZERO);
+        let removed = sweep_empty_sessions(
+            &index,
+            std::slice::from_ref(&kept),
+            std::time::Duration::ZERO,
+        );
         assert!(removed.iter().any(|path| same_file(path, &empty)));
         assert!(!empty.exists());
         assert!(kept.exists(), "a kept empty session was deleted");
         assert!(busy.exists(), "a session with messages was deleted");
 
         // Nothing else is old enough when the age gate is an hour.
-        let removed = sweep_empty_sessions(
-            &index,
-            &[],
-            std::time::Duration::from_secs(3600),
-        );
+        let removed = sweep_empty_sessions(&index, &[], std::time::Duration::from_secs(3600));
         assert!(removed.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1454,16 +1456,16 @@ mod tests {
             edit,
             Message::tool_result("call_edit", "edit", "edited src/a.rs"),
             bash,
-            Message::tool_result(
-                "call_bash",
-                "bash",
-                "test failed\n[exit 1 in 0.3s, bash]",
-            ),
+            Message::tool_result("call_bash", "bash", "test failed\n[exit 1 in 0.3s, bash]"),
         ];
         let summary = summarize(&messages);
         assert!(summary.contains("## Files changed"), "{}", summary);
         assert!(summary.contains("src/a.rs"), "{}", summary);
-        assert!(summary.contains("## Failed commands / errors"), "{}", summary);
+        assert!(
+            summary.contains("## Failed commands / errors"),
+            "{}",
+            summary
+        );
         assert!(summary.contains("cargo test"), "{}", summary);
         assert!(summary.contains("exit 1"), "{}", summary);
         assert!(summary.contains("## Key diffs"), "{}", summary);

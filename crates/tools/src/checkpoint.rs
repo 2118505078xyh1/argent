@@ -232,7 +232,11 @@ impl CheckpointStore {
         let mut errors = Vec::new();
         for (path, entry) in &earliest {
             let outcome = if entry.existed {
-                match entry.blob.as_ref().map(|blob| std::fs::read(dir.join("blobs").join(blob))) {
+                match entry
+                    .blob
+                    .as_ref()
+                    .map(|blob| std::fs::read(dir.join("blobs").join(blob)))
+                {
                     Some(Ok(bytes)) => {
                         if let Some(parent) = path.parent() {
                             let _ = std::fs::create_dir_all(parent);
@@ -264,10 +268,11 @@ impl CheckpointStore {
         }
         if errors.is_empty() {
             let marker = Json::from_pairs(vec![
-                    ("kind", Json::string("rewind")),
-                    ("through", Json::num(target as f64)),
-                ])
-                .dump().to_string();
+                ("kind", Json::string("rewind")),
+                ("through", Json::num(target as f64)),
+            ])
+            .dump()
+            .to_string();
             let _ = append_line(&manifest, &marker);
         }
         (restored, errors)
@@ -294,10 +299,7 @@ impl Entry {
             seq: value.get("seq").and_then(Json::as_i64).unwrap_or(0).max(0) as u64,
             path: PathBuf::from(path),
             existed: value.get("existed").and_then(Json::as_bool).unwrap_or(true),
-            blob: value
-                .get("blob")
-                .and_then(Json::as_str)
-                .map(str::to_string),
+            blob: value.get("blob").and_then(Json::as_str).map(str::to_string),
         })
     }
 }
@@ -412,7 +414,10 @@ impl GarbageReport {
 /// 会话文件被删掉之后，它的检查点目录会一直留在磁盘上；目录里那些没有被
 /// 任何 manifest 引用的 blob 同样如此。这个函数找出这些东西并删除。
 /// `dry_run` 为真时只报告不删。
-pub fn collect_garbage(sessions_dir: &Path, dry_run: bool) -> argent_core::error::Result<GarbageReport> {
+pub fn collect_garbage(
+    sessions_dir: &Path,
+    dry_run: bool,
+) -> argent_core::error::Result<GarbageReport> {
     use argent_core::error::Error;
 
     let mut report = GarbageReport::default();
@@ -459,7 +464,10 @@ pub fn collect_garbage(sessions_dir: &Path, dry_run: bool) -> argent_core::error
             .collect();
         blobs.sort();
         for blob in blobs {
-            let name = blob.file_name().and_then(|name| name.to_str()).unwrap_or("");
+            let name = blob
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
             if referenced.contains(name) {
                 continue;
             }
@@ -541,11 +549,7 @@ fn manifest_cursor(dir: &Path) -> (u64, u64) {
             .unwrap_or(0)
             .max(0) as u64;
         run = run.max(line_run);
-        let line_seq = value
-            .get("seq")
-            .and_then(Json::as_i64)
-            .unwrap_or(0)
-            .max(0) as u64;
+        let line_seq = value.get("seq").and_then(Json::as_i64).unwrap_or(0).max(0) as u64;
         seq = seq.max(line_seq);
     }
     (run, seq)
@@ -629,10 +633,7 @@ mod tests {
 
     #[test]
     fn command_targets_covers_deletes_and_moves() {
-        assert_eq!(
-            command_targets("rm -rf build dist"),
-            vec!["build", "dist"]
-        );
+        assert_eq!(command_targets("rm -rf build dist"), vec!["build", "dist"]);
         assert_eq!(
             command_targets("mv a.txt backup/a.txt"),
             vec!["a.txt", "backup/a.txt"]
@@ -642,7 +643,10 @@ mod tests {
             command_targets("del \"my file.txt\""),
             vec!["my", "file.txt"]
         );
-        assert_eq!(command_targets("cp src.txt dst.txt"), vec!["src.txt", "dst.txt"]);
+        assert_eq!(
+            command_targets("cp src.txt dst.txt"),
+            vec!["src.txt", "dst.txt"]
+        );
     }
 
     #[test]

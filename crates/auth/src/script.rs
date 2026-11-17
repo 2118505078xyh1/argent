@@ -191,7 +191,10 @@ impl AuthStore {
             found: resolved.is_some(),
             kind: resolved.as_ref().map(|resolved| resolved.kind),
             source: resolved.as_ref().map(|resolved| resolved.source),
-            expired: resolved.as_ref().map(|resolved| resolved.expired).unwrap_or(false),
+            expired: resolved
+                .as_ref()
+                .map(|resolved| resolved.expired)
+                .unwrap_or(false),
             store: self.location(),
             scopes: spec
                 .and_then(|spec| spec.oauth.as_ref())
@@ -226,7 +229,11 @@ impl AuthStore {
             } else {
                 CredentialSource::File
             };
-            if let Some(key) = credential.api_key.as_deref().filter(|value| !value.is_empty()) {
+            if let Some(key) = credential
+                .api_key
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            {
                 return Some(Resolved {
                     value: key.to_string(),
                     kind: CredentialKind::ApiKey,
@@ -354,7 +361,11 @@ mod tests {
 
     /// 一个指向临时目录的凭据文件路径。
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("argent-auth-script-{}-{}", name, std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "argent-auth-script-{}-{}",
+            name,
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir.join("auth.json")
@@ -402,8 +413,7 @@ mod tests {
     fn print_api_key_reads_from_the_keyring_backend() {
         let path = scratch("keyring");
         let backend = crate::keyring::MemoryBackend::new();
-        let mut store =
-            AuthStore::at_with_backend(&path, Box::new(backend)).expect("open");
+        let mut store = AuthStore::at_with_backend(&path, Box::new(backend)).expect("open");
         store.set("zai", api_key("keyring-secret")).expect("set");
 
         assert_eq!(store.print_api_key("zai").expect("print"), "keyring-secret");
@@ -450,7 +460,10 @@ mod tests {
             .expect("print");
         assert_eq!(printed, "from-store");
         // 与 resolve_key 完全一致：存储优先于环境变量。
-        assert_eq!(store.resolve_key(&spec, None).as_deref(), Some("from-store"));
+        assert_eq!(
+            store.resolve_key(&spec, None).as_deref(),
+            Some("from-store")
+        );
         let report = store.check_with_spec("demo", Some(&spec), None);
         assert_eq!(report.source, Some(CredentialSource::File));
 

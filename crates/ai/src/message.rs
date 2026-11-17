@@ -695,6 +695,10 @@ mod tests {
         // 头部是新的摘要，尾部与压缩前逐字节相同。
         assert_eq!(after.len(), compacted.len());
         assert!(after[0].contains("Summary of the earlier conversation"));
-        assert_eq!(&after[1..], &before[1..], "the kept tail must be byte-identical");
+        assert_eq!(
+            &after[1..],
+            &before[1..],
+            "the kept tail must be byte-identical"
+        );
     }
 }

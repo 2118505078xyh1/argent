@@ -153,9 +153,7 @@ impl AuthStore {
                 if id.is_empty() {
                     continue;
                 }
-                store
-                    .providers
-                    .push((id, credential_from_json(entry)));
+                store.providers.push((id, credential_from_json(entry)));
             }
         }
         Ok(store)
@@ -580,8 +578,7 @@ mod tests {
     fn the_keyring_backend_stores_and_reloads_a_key() {
         let path = scratch("keyring");
         let backend = keyring::MemoryBackend::new();
-        let mut store =
-            AuthStore::at_with_backend(&path, Box::new(backend.clone())).expect("open");
+        let mut store = AuthStore::at_with_backend(&path, Box::new(backend.clone())).expect("open");
         assert!(store.uses_keyring());
         assert_eq!(store.backend_name(), "keyring");
         store
@@ -597,8 +594,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(!text.contains("secret"), "{}", text);
 
-        let reloaded =
-            AuthStore::at_with_backend(&path, Box::new(backend)).expect("reload");
+        let reloaded = AuthStore::at_with_backend(&path, Box::new(backend)).expect("reload");
         assert_eq!(
             reloaded.get("zai").and_then(Credential::bearer),
             Some("secret")
@@ -610,8 +606,7 @@ mod tests {
     fn the_keyring_backend_removes_a_key() {
         let path = scratch("keyring-remove");
         let backend = keyring::MemoryBackend::new();
-        let mut store =
-            AuthStore::at_with_backend(&path, Box::new(backend.clone())).expect("open");
+        let mut store = AuthStore::at_with_backend(&path, Box::new(backend.clone())).expect("open");
         store
             .set(
                 "zai",
@@ -622,8 +617,7 @@ mod tests {
             )
             .expect("set");
         assert!(store.remove("zai").expect("remove"));
-        let reloaded =
-            AuthStore::at_with_backend(&path, Box::new(backend)).expect("reload");
+        let reloaded = AuthStore::at_with_backend(&path, Box::new(backend)).expect("reload");
         assert!(reloaded.get("zai").is_none());
         let _ = std::fs::remove_file(&path);
     }
@@ -646,7 +640,10 @@ mod tests {
         let backend = keyring::MemoryBackend::new();
         let store = AuthStore::at_with_backend(&path, Box::new(backend.clone())).expect("open");
         assert!(store.uses_keyring());
-        assert_eq!(store.get("zai").and_then(Credential::bearer), Some("legacy"));
+        assert_eq!(
+            store.get("zai").and_then(Credential::bearer),
+            Some("legacy")
+        );
         // 迁移之后文件里不应再有明文。
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(!text.contains("legacy"), "{}", text);
@@ -682,14 +679,20 @@ mod tests {
         // 打开时读到旧名条目，并迁移到新名。
         let store = AuthStore::at_with_backend(&path, Box::new(backend.clone())).expect("open");
         assert!(store.uses_keyring());
-        assert_eq!(store.get("zai").and_then(Credential::bearer), Some("legacy"));
+        assert_eq!(
+            store.get("zai").and_then(Credential::bearer),
+            Some("legacy")
+        );
 
         // 迁移后只剩新名条目，旧名（含旧索引）已删除。
         assert!(backend
             .load(&keyring::legacy_target_for("zai"))
             .unwrap()
             .is_none());
-        assert!(backend.load(keyring::LEGACY_INDEX_TARGET).unwrap().is_none());
+        assert!(backend
+            .load(keyring::LEGACY_INDEX_TARGET)
+            .unwrap()
+            .is_none());
         let secret = backend
             .load(&keyring::target_for("zai"))
             .expect("load new")
@@ -720,7 +723,10 @@ mod tests {
         let store = AuthStore::at_with_backend(&path, Box::new(BrokenBackend)).expect("open");
         assert!(!store.uses_keyring());
         assert_eq!(store.backend_name(), "file");
-        assert_eq!(store.get("zai").and_then(Credential::bearer), Some("secret"));
+        assert_eq!(
+            store.get("zai").and_then(Credential::bearer),
+            Some("secret")
+        );
         let _ = std::fs::remove_file(&path);
     }
 

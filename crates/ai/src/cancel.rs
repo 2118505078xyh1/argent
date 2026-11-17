@@ -28,10 +28,7 @@ impl Drop for CancelGuard {
 ///
 /// Returns `None` when the request carries no abort flag, so a plain
 /// one-shot call pays nothing.
-pub fn watch(
-    cancel: Option<Arc<AtomicBool>>,
-    pid: u32,
-) -> Option<CancelGuard> {
+pub fn watch(cancel: Option<Arc<AtomicBool>>, pid: u32) -> Option<CancelGuard> {
     let cancel = cancel?;
     let done = Arc::new(AtomicBool::new(false));
     let thread_done = Arc::clone(&done);

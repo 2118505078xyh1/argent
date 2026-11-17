@@ -6,4 +6,5 @@
 /dist
 *.log
 *.zip
+/llama-server.out
 /.tmp*

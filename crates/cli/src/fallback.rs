@@ -51,11 +51,7 @@ pub fn should_retry_with_fallback(
 }
 
 /// The same question, for a caller that already unwrapped the result.
-pub fn should_retry_reason(
-    reason: &FinishReason,
-    history_len: usize,
-    before: usize,
-) -> bool {
+pub fn should_retry_reason(reason: &FinishReason, history_len: usize, before: usize) -> bool {
     match reason {
         FinishReason::Error(message) => {
             is_transient_model_error(message) && history_len == before + 1

@@ -110,7 +110,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("argent-context-{}-{}", name, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-context-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create scratch");
         dir
@@ -156,7 +157,10 @@ mod tests {
         std::fs::write(cwd.join("AGENTS.md"), "be brief").unwrap();
         let text = project_instructions(&cwd);
         assert!(text.contains("be brief"), "short rule should be inlined");
-        assert!(!text.contains("read them when"), "no index when everything fits");
+        assert!(
+            !text.contains("read them when"),
+            "no index when everything fits"
+        );
         let _ = std::fs::remove_dir_all(&cwd);
     }
 
@@ -167,7 +171,10 @@ mod tests {
         std::fs::write(cwd.join("CLAUDE.md"), &big).unwrap();
         let text = project_instructions(&cwd);
         assert!(text.contains("CLAUDE.md"), "path should be listed");
-        assert!(text.contains("read them when"), "model should be told to read it");
+        assert!(
+            text.contains("read them when"),
+            "model should be told to read it"
+        );
         assert!(!text.contains(&big), "full text must not be in the prompt");
         let _ = std::fs::remove_dir_all(&cwd);
     }

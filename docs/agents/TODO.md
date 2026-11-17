@@ -107,7 +107,8 @@
 ## 执行顺序建议
 
 1. 本轮：cache missed 统计。
-2. 下一轮：会话选择器搜索/过滤（P0 手感）+ TTFT 记账。
-3. 再下一轮：cache warmer（默认关）+ 缓存归因。
-4. 之后：SDK / hooks 诊断 / skills 可视。
-5. 战略项等前四项稳定后再评估。
+2. 已完成：会话选择器搜索/过滤（P0 手感）+ TUI TTFT 记账。
+3. 下一轮：无头/RPC/ACP TTFT + TUI 回归清单。
+4. 再下一轮：cache warmer（默认关）+ 缓存归因。
+5. 之后：SDK / hooks 诊断 / skills 可视。
+6. 战略项等前五项稳定后再评估。

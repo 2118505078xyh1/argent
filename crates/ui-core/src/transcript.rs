@@ -39,7 +39,11 @@ impl ToolState {
         match self {
             ToolState::Running => "running".to_string(),
             ToolState::Ok { ms } => {
-                if *ms > 0 { format!("{}ms", ms) } else { "ok".to_string() }
+                if *ms > 0 {
+                    format!("{}ms", ms)
+                } else {
+                    "ok".to_string()
+                }
             }
             ToolState::Failed { ms } => {
                 if *ms > 0 {
@@ -221,7 +225,8 @@ impl Transcript {
 
     /// Fold one agent event into the list.
     pub fn apply(&mut self, event: &AgentEvent) {
-        match event {            AgentEvent::TurnStart { .. } => {}
+        match event {
+            AgentEvent::TurnStart { .. } => {}
             AgentEvent::AssistantText(chunk) => self.append_text(chunk, false),
             AgentEvent::Thinking(chunk) => self.append_text(chunk, true),
             AgentEvent::ToolRequested(call) => {

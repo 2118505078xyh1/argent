@@ -4,15 +4,21 @@
 use std::sync::Arc;
 
 use argent_core::json::Json;
+use argent_script_plugin::{load, ScriptTool};
 use argent_tools::registry::ToolRegistry;
 use argent_tools::tool::{Tool, ToolCtx, ToolResult};
-use argent_script_plugin::{load, ScriptTool};
 
 struct EchoTool;
 impl Tool for EchoTool {
-    fn name(&self) -> &str { "echo" }
-    fn description(&self) -> &str { "Echo" }
-    fn parameters(&self) -> Json { Json::parse(r#"{"type":"object","properties":{"text":{"type":"string"}}}"#).unwrap() }
+    fn name(&self) -> &str {
+        "echo"
+    }
+    fn description(&self) -> &str {
+        "Echo"
+    }
+    fn parameters(&self) -> Json {
+        Json::parse(r#"{"type":"object","properties":{"text":{"type":"string"}}}"#).unwrap()
+    }
     fn execute(&self, _ctx: &ToolCtx, args: &Json) -> argent_core::error::Result<ToolResult> {
         Ok(ToolResult::ok(args.str_or("text", "")))
     }
@@ -55,8 +61,15 @@ fn loads_a_script_plugin_and_executes_its_tool() {
     let registry = Arc::new(registry);
     let ctx = ToolCtx::new(std::env::temp_dir());
 
-    let loaded = load("fixture", &path, &Json::obj(), Some(1_000_000), registry, ctx.clone())
-        .expect("load plugin");
+    let loaded = load(
+        "fixture",
+        &path,
+        &Json::obj(),
+        Some(1_000_000),
+        registry,
+        ctx.clone(),
+    )
+    .expect("load plugin");
     let decl = loaded.declarations().tools[0].clone();
     assert_eq!(decl.name, "greet");
     assert_eq!(loaded.declarations().commands[0].name, "hi");

@@ -46,7 +46,8 @@ impl MemoryTool {
         MemoryTool { store: None }
     }
 
-    fn resolve_store(&self, ctx: &ToolCtx) -> SharedStore {        if let Some(path) = ctx.var("memory_store") {
+    fn resolve_store(&self, ctx: &ToolCtx) -> SharedStore {
+        if let Some(path) = ctx.var("memory_store") {
             let root = PathBuf::from(path);
             let slug = argent_session_slug(&ctx.cwd);
             return std::sync::Arc::new(Mutex::new(argent_memory::MemoryStore::new(root, slug)));
@@ -183,8 +184,10 @@ impl Tool for MemoryTool {
 /// round trip for what is already known. Only the project scope is injected:
 /// user and global facts are not about this repository.
 pub fn memory_digest(cwd: &Path, limit_chars: usize) -> String {
-    let store =
-        argent_memory::MemoryStore::new(argent_memory::MemoryStore::default_root(), argent_session_slug(cwd));
+    let store = argent_memory::MemoryStore::new(
+        argent_memory::MemoryStore::default_root(),
+        argent_session_slug(cwd),
+    );
     digest_from(&store, limit_chars)
 }
 

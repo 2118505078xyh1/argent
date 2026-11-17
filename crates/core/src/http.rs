@@ -820,8 +820,8 @@ fn send_via_curl(req: &Request) -> Result<Response> {
     const MARKER: &str = "\u{0}argent-status:";
     // 执行 `which` 找到的那个 curl，而不是把程序名交给操作系统解析：Windows 上
     // System32 里可能还有一个同名 curl，两者的 TLS 后端未必相同。
-    let program = crate::process::which("curl")
-        .ok_or_else(|| Error::io("https requires curl on PATH"))?;
+    let program =
+        crate::process::which("curl").ok_or_else(|| Error::io("https requires curl on PATH"))?;
     let mut command = Command::new(program);
     command
         .arg("--silent")
