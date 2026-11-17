@@ -2653,11 +2653,12 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_pins_language_and_missing_context() {
+    fn the_prompt_pins_language_missing_context_and_no_guessing() {
         let prompt = build_system_prompt(std::path::Path::new("/tmp"), &[], "");
         assert!(prompt.contains("think in Chinese"));
         assert!(prompt.contains("bare number"));
         assert!(prompt.contains("ask once and wait"));
+        assert!(prompt.contains("Don't make things up"));
     }
 
     #[test]
