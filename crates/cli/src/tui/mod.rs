@@ -20,9 +20,9 @@ pub(crate) use keys::next_key;
 pub(crate) const ASSISTANT_MARK: &str = "◆ ";
 pub(crate) const TOOL_MARK: &str = "● ";
 pub(crate) const USER_MARK: &str = "› ";
-/// 用户消息块：浅蓝底（Fixed(110)）配白字，一整条铺满行宽。
+/// 用户消息块：深蓝底（Fixed(24)，#005f87）配白字，一整条铺满行宽。
 pub(crate) const USER_FG: argent_core::screen::Color = argent_core::screen::Color::Fixed(255);
-pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(110);
+pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(24);
 fn user_style() -> Style {
     Style::fg(USER_FG).with_bg(USER_BG)
 }
@@ -1579,9 +1579,10 @@ struct App {
     frame_body_height: usize,
     /// 屏幕上的折叠提示行号（body 行号减去滚动偏移）。
     visible_fold_rows: Vec<usize>,
-    /// 每轮结束追加一行 dim 摘要（model · 时长 · tok/s · ttft）；
-    /// 重开会话（SessionOpened 重建正文）时清空。
-    turn_summaries: Vec<String>,
+    /// 每轮结束追加一行 dim 摘要（model · 时长 · tok/s · ttft），
+    /// 值为 (该轮结束时的 entries 数, 文本)：渲染到锚点立即打印，
+    /// 而不是全部堆在正文尾巴。重开会话（SessionOpened 重建正文）时清空。
+    turn_summaries: Vec<(usize, String)>,
     transcript: Transcript,
     metrics: Metrics,
     ready: Option<ReadyInfo>,
@@ -1748,11 +1749,14 @@ impl App {
                 // 摘要行：模型 · 时长 · tok/s · ttft。没有真调用模型（hook 中止等）不打印。
                 if usage.total_tokens > 0 || ttft.is_some() {
                     if let Some(ready) = &self.ready {
-                        self.turn_summaries.push(Self::turn_summary_text(
-                            &ready.model,
-                            elapsed,
-                            usage.completion_tokens,
-                            ttft,
+                        self.turn_summaries.push((
+                            self.transcript.entries().len(),
+                            Self::turn_summary_text(
+                                &ready.model,
+                                elapsed,
+                                usage.completion_tokens,
+                                ttft,
+                            ),
                         ));
                     }
                 }
@@ -3056,7 +3060,7 @@ impl App {
         let inner = width.saturating_sub(4).max(1);
         let start = self.cursor.saturating_sub(inner);
         let visible: Vec<char> = self.input.iter().skip(start).take(inner).copied().collect();
-        let line = Line::new().push(Span::new(USER_MARK, Style::bold(crate::theme::current().accent)));
+        let line = Line::new().push(Span::new(USER_MARK, Style::fg(crate::theme::current().accent)));
         // 光标交给终端原生光标（位置见 `cursor_screen_position`）：不再画
         // 反显块，深浅色主题下都不会看起来像渲染残留。行尾留一个空格
         // 占位，光标停在它上面。
@@ -3064,7 +3068,7 @@ impl App {
         // allocation for every keystroke is wasteful, and `text_width` already
         // measures the full string (including CJK width) correctly.
         let text: String = visible.iter().collect();
-        line.push(Span::new(text, Style::plain()))
+        line.push(Span::new(text, Style::dim(crate::theme::current().dim)))
     }
 
     /// 终端光标应该停在的位置（ANSI 1 基 row/col）。
@@ -3135,6 +3139,8 @@ impl App {
         let mut fold_rows: Vec<usize> = Vec::new();
         let mut user_row: Option<usize> = None;
         let mut seen_any = false;
+        let mut consumed = 0usize;
+        let mut summary_index = 0usize;
         let mut groups: Vec<Group> = Vec::new();
         for entry in self.transcript.entries() {
             match entry {
@@ -3158,6 +3164,10 @@ impl App {
                 lines.push(Line::plain(""));
             }
             seen_any = true;
+            consumed += match &group {
+                Group::Assistant(parts) | Group::Thinking(parts) => parts.len(),
+                _ => 1,
+            };
             match group {
                 Group::User(text) => {
                     user_row = Some(lines.len());
@@ -3267,17 +3277,28 @@ impl App {
                 _ => {}
                 }
             }
-            lines.push(Line::plain(""));
+            // 轮末立刻释放该锚点的摘要。
+            while summary_index < self.turn_summaries.len()
+                && self.turn_summaries[summary_index].0 <= consumed
+            {
+                lines.push(Line::new().push(Span::new(
+                    clip_to_width(&self.turn_summaries[summary_index].1, width),
+                    Style::dim(crate::theme::current().dim),
+                )));
+                summary_index += 1;
+            }
         }
         if lines.is_empty() {
             // 空会话不写引导文字：输入框就是入口，占一行空白即可。
         }
-        // 会话结束摘要：dim 一行，creator 每轮一条。
-        for summary in &self.turn_summaries {
+        // 锚点溢出（如压缩后 entries 变少）的摘要兜底打在尾部。
+        let mut tail_index = summary_index;
+        while tail_index < self.turn_summaries.len() {
             lines.push(Line::new().push(Span::new(
-                clip_to_width(summary, width),
+                clip_to_width(&self.turn_summaries[tail_index].1, width),
                 Style::dim(crate::theme::current().dim),
             )));
+            tail_index += 1;
         }
         (lines, fold_rows, user_row)
     }
@@ -5138,7 +5159,61 @@ mod cursor_tests {
         assert!(stripped.contains("ttft"), "ttft in summary: {stripped}");
         assert!(!stripped.contains("live "), "no live segment: {stripped}");
         assert_eq!(app.turn_summaries.len(), 1);
-        assert!(app.turn_summaries[0].starts_with("test/flash · "));
+        assert!(app.turn_summaries[0].1.starts_with("test/flash · "));
+    }
+
+    #[test]
+    fn summaries_print_right_after_their_own_turn() {
+        let mut app = app();
+        app.handle_ui(UiEvent::Ready {
+            model: "test/flash".to_string(),
+            thinking: "auto".to_string(),
+            provider: "local".to_string(),
+            protocol: "chat".to_string(),
+            cwd: "/tmp".to_string(),
+            session: "s".to_string(),
+            session_path: "/tmp/s.jsonl".to_string(),
+        });
+        let turn = |app: &mut App, q: &str, a: &str| {
+            app.transcript.push_entry(Entry::User(q.into()));
+            app.transcript.push_entry(Entry::Assistant(a.into()));
+        };
+        turn(&mut app, "问题一", "回答一");
+        app.handle_ui(UiEvent::TurnDone {
+            reason: FinishReason::Complete,
+            usage: argent_ai::Usage {
+                prompt_tokens: 100,
+                completion_tokens: 10,
+                total_tokens: 110,
+                cached_tokens: 0,
+            },
+            requests: 1,
+            context_used: 110,
+            cost: None,
+        });
+        turn(&mut app, "问题二", "回答二");
+        app.handle_ui(UiEvent::TurnDone {
+            reason: FinishReason::Complete,
+            usage: argent_ai::Usage {
+                prompt_tokens: 110,
+                completion_tokens: 20,
+                total_tokens: 130,
+                cached_tokens: 50,
+            },
+            requests: 1,
+            context_used: 130,
+            cost: None,
+        });
+        let plain = app.frame(80, 40).join("\n");
+        let stripped: String = strip_ansi(&plain);
+        let idx_first = stripped.find("回答一").expect("first answer present");
+        let idx_s1 = stripped.find("test/flash ·").expect("first summary present");
+        let idx_second = stripped.find("问题二").expect("second question present");
+        let idx2 = stripped.rfind("test/flash ·").expect("second summary present");
+        assert!(idx_first < idx_s1, "summary of turn 1 after answer 1: {idx_first} vs {idx_s1}");
+        assert!(idx_s1 < idx_second, "summary of turn 1 before turn 2: {idx_s1} vs {idx_second}");
+        assert!(idx_second < idx2, "summary of turn 2 after turn 2 content: {idx_second} vs {idx2}");
+        assert_eq!(app.turn_summaries.len(), 2);
     }
 
     #[test]
