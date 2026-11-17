@@ -1301,7 +1301,10 @@ mod tests {
 
     /// 读完一个请求（含 body），返回原始报文。
     fn read_request(stream: &mut TcpStream) -> String {
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        // 与 fake server 的 accept deadline 对齐：慢机器上 5 秒会在客户端
+        // 请求读完前触发，Err 直接 break 返回截断的请求，handler 的断言
+        // 于是随机 panic——这是测试偶发失败的来源。
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));
         let mut buffer = Vec::new();
         let mut chunk = [0u8; 4096];
         let mut expected: Option<usize> = None;
