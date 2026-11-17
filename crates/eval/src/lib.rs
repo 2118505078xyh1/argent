@@ -628,21 +628,27 @@ mod tests {
 
     #[test]
     fn a_scripted_run_reports_the_text() {
-        let scratch = std::env::temp_dir().join(format!("argent-eval-{}", std::process::id()));
+        // 每个测试独占目录：run 会往 scratch 写场景文件，两个测试
+        // 并行共用同名目录会互相覆盖。
+        let scratch = std::env::temp_dir().join(format!("argent-eval-run-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
         let outcome = run(&scenario("the answer"), &scratch);
         assert!(outcome.passed, "{:?}", outcome.failure);
         assert!(outcome.text.contains("the answer"));
         assert_eq!(outcome.reason, "complete");
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]
     fn an_expectation_that_does_not_hold_fails_the_run() {
-        let scratch = std::env::temp_dir().join(format!("argent-eval-{}", std::process::id()));
+        let scratch = std::env::temp_dir().join(format!("argent-eval-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
         let mut scenario = scenario("the answer");
         scenario.expect.text_contains = vec!["something else".to_string()];
         let outcome = run(&scenario, &scratch);
         assert!(!outcome.passed);
         assert!(outcome.failure.unwrap().contains("does not contain"));
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]
