@@ -32,7 +32,7 @@
   - ←/→/Home/End/Delete；Ctrl+A/K/U/W；Ctrl+←/→ 按词移动；Ctrl+Z/Ctrl+Y 撤销/重做（100 步）。
   - 多行软折行（最多 4 行，窗口跟随光标，帧高不变）。
   - 仍待补：鼠标定位光标。
-- [ ] **`/session` 面板继续补齐**
+- [x] **`/session` 面板继续补齐**
   - 显示 model/thinking/cwd/session id、最后错误、缓存命中、上下文占用。
   - 操作项：rename/copy path/tree/compact/resume；显示 last error 与上下文占用。
 
