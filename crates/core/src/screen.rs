@@ -28,6 +28,10 @@ pub enum Color {
     /// softer tones a dark or light terminal actually needs, where `Gray` and
     /// `White` are too heavy on one background and invisible on the other.
     Fixed(u8),
+    /// A 24-bit colour. pi derives its message panels from the terminal
+    /// background in OKHSL, which lands between palette entries; matching it
+    /// needs real RGB.
+    Rgb(u8, u8, u8),
 }
 
 impl Color {
@@ -44,6 +48,7 @@ impl Color {
             Color::Gray => "90".to_string(),
             Color::White => "97".to_string(),
             Color::Fixed(index) => format!("38;5;{}", index),
+            Color::Rgb(r, g, b) => format!("38;2;{};{};{}", r, g, b),
         }
     }
 
@@ -60,6 +65,7 @@ impl Color {
             Color::Gray => "100".to_string(),
             Color::White => "107".to_string(),
             Color::Fixed(index) => format!("48;5;{}", index),
+            Color::Rgb(r, g, b) => format!("48;2;{};{};{}", r, g, b),
         }
     }
 }
@@ -456,6 +462,8 @@ mod tests {
     #[test]
     fn a_fixed_colour_uses_the_256_palette_form() {
         assert_eq!(Color::Fixed(252).code(), "38;5;252");
+        assert_eq!(Color::Rgb(29, 46, 55).code(), "38;2;29;46;55");
+        assert_eq!(Color::Rgb(29, 46, 55).bg_code(), "48;2;29;46;55");
         assert_eq!(Color::Cyan.code(), "36");
     }
 

@@ -24,8 +24,10 @@ pub(crate) const USER_MARK: &str = "› ";
 /// `/session` 信息面板里，操作项从第几行开始。
 const SESSION_INFO_ROWS: usize = 8;
 /// 用户消息块：中蓝底（Fixed(25)，#005faf）配白字，一整条铺满行宽。
-pub(crate) const USER_FG: argent_core::screen::Color = argent_core::screen::Color::Fixed(255);
-pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(17);
+// pi 在纯黑背景上把 userMessageBg 推导成 #1d2e37（低饱和蓝灰），
+// 文字用终端默认前景色，不再额外指定亮白。
+pub(crate) const USER_FG: argent_core::screen::Color = argent_core::screen::Color::Default;
+pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Rgb(29, 46, 55);
 fn user_style() -> Style {
     Style::fg(USER_FG).with_bg(USER_BG)
 }
