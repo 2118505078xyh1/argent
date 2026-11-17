@@ -837,6 +837,53 @@ pub fn should_compact(messages: &[Message], max_context: usize, reserved: usize)
     used + reserved >= max_context
 }
 
+/// Compaction trigger that trusts the provider's own count when it has one.
+///
+/// `estimate_tokens` reads text heuristically and can drift far from the
+/// provider's tokenizer. Every request resends the whole conversation, so
+/// the last request's prompt tokens are what the model actually saw. Take
+/// the larger of the two: the real count wins when reported, the estimate
+/// covers providers that never report usage.
+pub fn should_compact_real(
+    estimated: usize,
+    last_prompt_tokens: u64,
+    max_context: usize,
+    reserved: usize,
+) -> bool {
+    let used = estimated.max(last_prompt_tokens.min(usize::MAX as u64) as usize);
+    used + reserved >= max_context
+}
+
+#[cfg(test)]
+mod real_usage_tests {
+    use super::*;
+
+    #[test]
+    fn real_count_wins_when_larger() {
+        // The estimate says 100, the provider saw 980: the real count drives
+        // the trigger.
+        assert!(should_compact_real(100, 980, 1_000, 50));
+        assert!(!should_compact_real(100, 900, 2_000, 50));
+    }
+
+    #[test]
+    fn estimate_covers_missing_usage() {
+        // Providers that report no usage still get the heuristic.
+        assert!(should_compact_real(980, 0, 1_000, 50));
+        assert!(!should_compact_real(100, 0, 1_000, 50));
+    }
+
+    #[test]
+    fn heuristic_only_matches_should_compact() {
+        let messages = vec![argent_ai::Message::user("hello world".repeat(100))];
+        let estimated = argent_agent::estimate_tokens(&messages);
+        assert_eq!(
+            should_compact_real(estimated, 0, 1_000, 50),
+            should_compact(&messages, 1_000, 50)
+        );
+    }
+}
+
 /// Room kept free for the answer: the configured floor or 15% of the window.
 ///
 /// A fixed number means one setting for every model: on a 1M window 112k is far

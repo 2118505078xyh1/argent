@@ -1926,13 +1926,12 @@ fn compact_if_needed(
         config.max_context_tokens,
     );
     let reserved = argent_session::effective_reserved(max_context, config.reserved_context_tokens);
+    let used = argent_agent::estimate_tokens(agent.history()).max(agent.last_prompt_tokens() as usize);
     let should = match config.compact_threshold_tokens {
-        // An explicit line replaces the window arithmetic: estimate >= line
+        // An explicit line replaces the window arithmetic: used >= line
         // compacts, regardless of what the provider reports.
-        Some(threshold) => {
-            argent_agent::estimate_tokens(agent.history()) >= threshold
-        }
-        None => argent_session::should_compact(agent.history(), max_context, reserved),
+        Some(threshold) => used >= threshold,
+        None => used + reserved >= max_context,
     };
     if should {
         if let Some(before) = before {

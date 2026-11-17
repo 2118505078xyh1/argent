@@ -382,7 +382,8 @@ pub fn spawn(
                             reason: FinishReason::Aborted,
                             usage: agent.usage(),
                             requests: agent.requests(),
-                            context_used: argent_agent::estimate_tokens(agent.history()),
+                            context_used: argent_agent::estimate_tokens(agent.history())
+                                .max(agent.last_prompt_tokens() as usize),
                             cost: None,
                         });
                         continue;
@@ -464,7 +465,8 @@ pub fn spawn(
                                 reason,
                                 usage,
                                 requests,
-                                context_used: argent_agent::estimate_tokens(agent.history()),
+                                context_used: argent_agent::estimate_tokens(agent.history())
+                                .max(agent.last_prompt_tokens() as usize),
                                 cost,
                             });
                             // The main run ended: a finished compaction summary
@@ -486,8 +488,9 @@ pub fn spawn(
                                     window,
                                     config.reserved_context_tokens,
                                 );
-                                if argent_session::should_compact(
-                                    agent.history(),
+                                if argent_session::should_compact_real(
+                                    argent_agent::estimate_tokens(agent.history()),
+                                    agent.last_prompt_tokens(),
                                     window,
                                     reserved,
                                 ) {
@@ -568,7 +571,8 @@ assistant: {}", first, answer);
                                 reason: FinishReason::Error(error.to_string()),
                                 usage: agent.usage(),
                                 requests: agent.requests(),
-                                context_used: argent_agent::estimate_tokens(agent.history()),
+                                context_used: argent_agent::estimate_tokens(agent.history())
+                                .max(agent.last_prompt_tokens() as usize),
                                 cost: None,
                             });
                         }
@@ -930,7 +934,12 @@ assistant: {}", first, answer);
                         window,
                         config.reserved_context_tokens,
                     );
-                    if argent_session::should_compact(agent.history(), window, reserved) {
+                    if argent_session::should_compact_real(
+                        argent_agent::estimate_tokens(agent.history()),
+                        agent.last_prompt_tokens(),
+                        window,
+                        reserved,
+                    ) {
                         let ctx = HookContext {
                             cwd: cwd.clone(),
                             ..HookContext::default()

@@ -334,6 +334,10 @@ pub struct Agent {
     followups: Arc<Mutex<VecDeque<String>>>,
     /// Token totals the provider has reported for this session.
     usage: Usage,
+    /// Prompt tokens the last completed request reported. Every request
+    /// resends the whole conversation, so this is the provider's own measure
+    /// of the context size — the heuristic estimate can drift 40%+ from it.
+    last_prompt_tokens: u64,
     /// How many logical requests were made, including failed ones. One request
     /// may have taken several provider attempts.
     requests: u64,
@@ -377,6 +381,7 @@ impl Agent {
             steering: Arc::new(Mutex::new(VecDeque::new())),
             followups: Arc::new(Mutex::new(VecDeque::new())),
             usage: Usage::default(),
+            last_prompt_tokens: 0,
             requests: 0,
             run_started: None,
             history_tokens: 0,
@@ -517,6 +522,14 @@ impl Agent {
         self.usage
     }
 
+    /// Prompt tokens the provider counted for the last request — the real
+    /// size of the context it saw. `0` before the first response and after
+    /// the history was replaced (session load, compaction), where the old
+    /// count no longer describes the conversation.
+    pub fn last_prompt_tokens(&self) -> u64 {
+        self.last_prompt_tokens
+    }
+
     /// How many model requests this session made.
     pub fn requests(&self) -> u64 {
         self.requests
@@ -585,6 +598,7 @@ impl Agent {
     pub fn set_history(&mut self, history: Vec<Message>) {
         self.history = history;
         self.history_tokens = estimate_tokens(&self.history);
+        self.last_prompt_tokens = 0;
         self.history_revision = self.history_revision.wrapping_add(1);
         self.reset_run_state();
     }
@@ -597,6 +611,7 @@ impl Agent {
     pub fn set_history_preserving_usage(&mut self, history: Vec<Message>) {
         self.history = history;
         self.history_tokens = estimate_tokens(&self.history);
+        self.last_prompt_tokens = 0;
         self.history_revision = self.history_revision.wrapping_add(1);
         self.recent_calls.clear();
         // 压缩把旧对话替换成摘要后，read 缓存里"这个文件已在对话里"的
@@ -1527,6 +1542,12 @@ impl Agent {
         // answer is real work the provider billed for, so it counts.
         if !matches!(failure, StreamFailure::Empty(_)) {
             self.usage.add(reported_usage);
+            // The provider's own count of what it had to read. A request that
+            // produced nothing still reports prompt usage, so any non-zero
+            // number is fresher than the previous one.
+            if reported_usage.prompt_tokens > 0 {
+                self.last_prompt_tokens = reported_usage.prompt_tokens;
+            }
         }
         // Tool calls are emitted by the SSE accumulator only once their
         // arguments are complete, so the ones collected here are whole. They
