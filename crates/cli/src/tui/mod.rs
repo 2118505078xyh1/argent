@@ -2894,7 +2894,7 @@ impl App {
         if up + down > 0 {
             segments.push(format!("↑{} ↓{}", compact_count(up), compact_count(down)));
         }
-        if let Some(hit) = self.metrics.cache_hit_percent() {
+        if let Some(hit) = self.metrics.session_cache_hit_percent() {
             if hit > 0 {
                 segments.push(format!("cache {}%", hit));
             }

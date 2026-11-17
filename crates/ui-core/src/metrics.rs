@@ -45,6 +45,7 @@ pub struct Metrics {
     /// only hold the latest turn).
     pub session_prompt_tokens: u64,
     pub session_completion_tokens: u64,
+    pub session_cached_tokens: u64,
 }
 
 impl Metrics {
@@ -77,6 +78,7 @@ impl Metrics {
             context_max: 0,
             session_prompt_tokens: 0,
             session_completion_tokens: 0,
+            session_cached_tokens: 0,
         }
     }
 
@@ -128,6 +130,18 @@ impl Metrics {
         self.requests = requests;
         self.session_prompt_tokens += usage.prompt_tokens;
         self.session_completion_tokens += usage.completion_tokens;
+        self.session_cached_tokens += usage.cached_tokens.min(usage.prompt_tokens);
+    }
+
+    /// Session-wide share of prompt tokens served from cache.
+    ///
+    /// The status bar shows this: a single turn's hit rate swings from
+    /// zero (first request of a prefix) to whatever the provider caches
+    /// afterwards, which reads as noise. The cumulative ratio is the
+    /// number the operator actually cares about.
+    pub fn session_cache_hit_percent(&self) -> Option<u64> {
+        (self.session_prompt_tokens > 0)
+            .then(|| self.session_cached_tokens * 100 / self.session_prompt_tokens)
     }
 
     /// Share of the prompt that the provider served from its cache.
@@ -379,6 +393,24 @@ mod tests {
         m.finish_turn(Usage::default(), 1);
         m.begin_turn();
         assert_eq!(m.tokens_down(), 0);
+    }
+
+    #[test]
+    fn session_cache_hit_percent_accumulates_across_turns() {
+        let mut m = metrics();
+        let turn = |prompt: u64, cached: u64| Usage {
+            prompt_tokens: prompt,
+            completion_tokens: 100,
+            total_tokens: prompt + 100,
+            cached_tokens: cached,
+        };
+        m.finish_turn(turn(4312, 0), 1);
+        m.finish_turn(turn(4312, 2048), 1);
+        m.finish_turn(turn(13626, 4224), 1);
+        // (0 + 2048 + 4224) / (4312 + 4312 + 13626) = 6272 / 22250
+        assert_eq!(m.session_cache_hit_percent(), Some(6272 * 100 / 22250));
+        // last-turn 口径仍然保留给其他用途
+        assert_eq!(m.cache_hit_percent(), Some(4224 * 100 / 13626));
     }
 
     #[test]
