@@ -720,11 +720,127 @@ fn hooks(args: &[String]) -> Result<i32> {
             print_hook_trust(&trust);
             Ok(0)
         }
+        "list" => {
+            let manager = PluginManager::for_workspace(&cwd);
+            print_hook_list(&manager, &cwd, &HookTrust::at(&trust_path)?)
+        }
+        "validate" => {
+            let manager = PluginManager::for_workspace(&cwd);
+            let explicit = args
+                .iter()
+                .skip_while(|arg| arg.as_str() != "validate")
+                .skip(1)
+                .find(|arg| !arg.starts_with('-'))
+                .map(PathBuf::from);
+            let files = match explicit {
+                Some(path) => vec![path],
+                None => crate::workspace_hook_files(&manager, &cwd),
+            };
+            hooks_validate(&files)
+        }
         other => Err(Error::config(format!(
-            "unknown hooks command '{}'; expected trust",
+            "unknown hooks command '{}'; expected trust, list, validate",
             other
         ))),
     }
+}
+
+fn print_hook_list(manager: &PluginManager, cwd: &Path, trust: &HookTrust) -> Result<i32> {
+    let files = crate::workspace_hook_files(manager, cwd);
+    if files.is_empty() {
+        println!("no hook documents found");
+        return Ok(0);
+    }
+    let mut total = 0;
+    let mut documents = 0;
+    for file in files {
+        if !file.is_file() {
+            continue;
+        }
+        documents += 1;
+        let digest = digest_file(&file)?;
+        let trusted = trust.is_trusted(&file, &digest);
+        let config = HookConfig::load(&file).unwrap_or_default();
+        println!(
+            "{}  {}  {} hook(s)  {}",
+            if trusted { "trusted" } else { "untrusted" },
+            &digest[..digest.len().min(12)],
+            config.len(),
+            file.display()
+        );
+        for (event, command) in config.entries() {
+            total += 1;
+            let matcher = command.matcher.as_deref().unwrap_or("*");
+            let flags = if command.async_hook { " async" } else { "" };
+            println!(
+                "  {:<20} {:<16} {:<6} {}ms{}  {}",
+                event.name(),
+                matcher,
+                command.on_error,
+                command.timeout_ms,
+                flags,
+                clip(command.command.trim(), 80)
+            );
+        }
+        if !trusted {
+            println!("  (not trusted: review and grant before these run)");
+        }
+    }
+    if documents == 0 {
+        println!("no hook documents found");
+        return Ok(0);
+    }
+    println!("{} hook(s) across {} document(s)", total, documents);
+    Ok(0)
+}
+
+fn hooks_validate(files: &[PathBuf]) -> Result<i32> {
+    if files.is_empty() {
+        println!("no hook documents found");
+        return Ok(0);
+    }
+    let mut failed = 0;
+    for file in files {
+        let text = match std::fs::read_to_string(file) {
+            Ok(text) => text,
+            Err(error) => {
+                println!("{}: cannot read ({})", file.display(), error);
+                failed += 1;
+                continue;
+            }
+        };
+        let value = match Json::parse(&text) {
+            Ok(value) => value,
+            Err(error) => {
+                println!("{}: invalid JSON ({})", file.display(), error);
+                failed += 1;
+                continue;
+            }
+        };
+        let warnings = argent_hooks::validate_json(&value);
+        match HookConfig::from_json(&value) {
+            Ok(config) => {
+                println!("{}: ok, {} hook(s)", file.display(), config.len());
+                for warning in warnings {
+                    println!("  warning: {}", warning);
+                }
+            }
+            Err(error) => {
+                println!("{}: {}", file.display(), error);
+                for warning in warnings {
+                    println!("  warning: {}", warning);
+                }
+                failed += 1;
+            }
+        }
+    }
+    if failed > 0 {
+        return Err(Error::config(format!(
+            "{} hook document(s) failed validation",
+            failed
+        )));
+    }
+    Ok(0)
 }
 
 fn hooks_trust(action: &str, args: &[String], cwd: &Path, trust_path: &Path) -> Result<i32> {

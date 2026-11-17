@@ -108,6 +108,86 @@ impl HookCommand {
     }
 }
 
+/// Check a hook document without running it.
+///
+/// Parsing is deliberately forgiving (unknown events are skipped so a Claude
+/// Code document still loads), which means a typo would otherwise fail
+/// silently. `validate_json` returns the warnings `hooks validate` prints.
+pub fn validate_json(value: &Json) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let Some(hooks) = value.get("hooks") else {
+        return vec!["hook document has no 'hooks' object".to_string()];
+    };
+    let Json::Obj(events) = hooks else {
+        return vec!["'hooks' must be an object".to_string()];
+    };
+    for (event_name, groups) in events {
+        if HookEvent::parse(event_name).is_none() {
+            warnings.push(format!("unknown event '{}' (ignored)", event_name));
+            continue;
+        }
+        let Some(groups) = groups.as_array() else {
+            warnings.push(format!("'{}' must be an array of groups", event_name));
+            continue;
+        };
+        for (index, group) in groups.iter().enumerate() {
+            let matcher = group.str_or("matcher", "");
+            let commands = group
+                .get("hooks")
+                .and_then(Json::as_array)
+                .map(|items| items.to_vec())
+                .unwrap_or_else(|| vec![group.clone()]);
+            for command in commands {
+                let kind = command.str_or("type", "command");
+                if kind != "command" {
+                    warnings.push(format!(
+                        "{}.{}: type '{}' is not supported (ignored)",
+                        event_name,
+                        index + 1,
+                        kind
+                    ));
+                    continue;
+                }
+                if command.str_or("command", "").trim().is_empty() {
+                    warnings.push(format!(
+                        "{}.{}: empty command (ignored)",
+                        event_name,
+                        index + 1
+                    ));
+                }
+                let on_error = command.str_or("onError", "block");
+                if !matches!(on_error.as_str(), "block" | "allow" | "ignore") {
+                    warnings.push(format!(
+                        "{}.{}: onError '{}' is not block|allow|ignore",
+                        event_name,
+                        index + 1,
+                        on_error
+                    ));
+                }
+                if let Some(timeout) = command.get("timeoutMs").and_then(Json::as_i64) {
+                    if timeout < 100 {
+                        warnings.push(format!(
+                            "{}.{}: timeoutMs {} is below the 100ms floor",
+                            event_name,
+                            index + 1,
+                            timeout
+                        ));
+                    }
+                }
+                if !matcher.is_empty() && matcher.contains(' ') {
+                    warnings.push(format!(
+                        "{}.{}: matcher '{}' contains a space",
+                        event_name,
+                        index + 1,
+                        matcher
+                    ));
+                }
+            }
+        }
+    }
+    warnings
+}
+
 /// The hooks parsed from one or more documents.
 #[derive(Debug, Clone, Default)]
 pub struct HookConfig {
@@ -197,6 +277,13 @@ impl HookConfig {
             })
             .map(|(_, command)| command)
             .collect()
+    }
+
+    /// Every parsed command in document order, for `argent hooks list`.
+    pub fn entries(&self) -> impl Iterator<Item = (HookEvent, &HookCommand)> {
+        self.entries
+            .iter()
+            .map(|(event, command)| (*event, command))
     }
 
     pub fn len(&self) -> usize {
@@ -654,6 +741,34 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].command, "echo hi");
         assert!(!commands[0].blocks_on_failure());
+    }
+
+    #[test]
+    fn validation_warns_about_silent_typos() {
+        let value = Json::parse(
+            r#"{"hooks":{
+                "SesionStart":[{"hooks":[{"command":"echo typo"}]}],
+                "PreToolUse":[
+                    {"matcher":"ba sh","hooks":[
+                        {"command":"echo ok","onError":"sometimes","timeoutMs":5},
+                        {"type":"prompt","command":"ignored"},
+                        {"command":"  "}
+                    ]}
+                ]
+            }}"#,
+        )
+        .unwrap();
+        let warnings = validate_json(&value);
+        assert!(warnings.iter().any(|w| w.contains("unknown event")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("onError")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("timeoutMs")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("not supported")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("empty command")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("contains a space")), "{warnings:?}");
+        // 宽容解析仍然得到可运行的命令。
+        let config = HookConfig::from_json(&value).expect("parse");
+        assert_eq!(config.len(), 1);
+        assert_eq!(config.entries().count(), 1);
     }
 
     #[test]
