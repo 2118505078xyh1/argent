@@ -225,6 +225,7 @@ pub fn key_name(key: &Key) -> String {
         #[cfg(any(not(windows), test))]
         Key::PasteEnd => "paste-end".to_string(),
         Key::Paste(_) => "paste".to_string(),
+        Key::MouseClick { .. } => "mouse-click".to_string(),
         #[cfg(any(not(windows), test))]
         Key::Ignore => "ignore".to_string(),
     }

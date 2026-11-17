@@ -35,7 +35,7 @@ use argent_core::screen::{clip_to_width, text_width, wrap_text, Color, Line, Spa
 use argent_core::terminal::{self, RawModeGuard};
 use argent_hooks::{HookConfig, HookContext, HookEvent};
 use argent_session::SessionIndex;
-use argent_ui_core::{format_tokens, Entry, Metrics, NoticeKind, Transcript};
+use argent_ui_core::{Entry, Metrics, NoticeKind, Transcript};
 
 use crate::session_ctx::SessionContext;
 
@@ -1542,6 +1542,10 @@ struct BodyCache {
     expand: bool,
     version: u64,
     lines: Arc<Vec<Line>>,
+    /// Body 行号列表：折叠思考块的提示行（点这一行可展开）。
+    fold_rows: Vec<usize>,
+    /// 最后一条用户消息在 body 里的首行行号。
+    user_row: Option<usize>,
 }
 
 struct App {
@@ -1552,6 +1556,15 @@ struct App {
     /// version. Re-wrapping a long transcript every frame is what made the
     /// whole UI feel laggy.
     body_cache: Option<BodyCache>,
+    /// 布局后的 body 元信息，缓存命中时从缓存回填，不必重算。
+    body_fold_rows: Vec<usize>,
+    body_user_row: Option<usize>,
+    body_total: usize,
+    frame_body_height: usize,
+    /// 锚定行的屏幕行号（最新一条你的消息）；不显示则 None。
+    anchor_row: Option<usize>,
+    /// 屏幕上的折叠提示行号（body 行号减去滚动偏移）。
+    visible_fold_rows: Vec<usize>,
     transcript: Transcript,
     metrics: Metrics,
     ready: Option<ReadyInfo>,
@@ -1612,6 +1625,12 @@ impl App {
         App {
             remote: None,
             body_cache: None,
+            body_fold_rows: Vec::new(),
+            body_user_row: None,
+            body_total: 0,
+            frame_body_height: 0,
+            anchor_row: None,
+            visible_fold_rows: Vec::new(),
             locale,
             statusline,
             bindings,
@@ -1777,6 +1796,17 @@ impl App {
     }
 
     fn handle_key(&mut self, worker: &Worker, key: Key) {
+        // 鼠标点击：点锚定行跳回最新一条你的消息；点折叠思考提示行展开/收起。
+        if let Key::MouseClick { row, .. } = key {
+            let row = row as usize;
+            if Some(row) == self.anchor_row {
+                self.jump_to_last_user();
+            } else if self.visible_fold_rows.contains(&row) {
+                self.expand = !self.expand;
+            }
+            self.dirty = true;
+            return;
+        }
         if let Some(pending) = self.pending.take() {
             match key {
                 Key::Char('y') | Key::Char('Y') => {
@@ -2022,10 +2052,12 @@ impl App {
         if let Some(action) = self.bindings.action(&key) {
             match action {
                 crate::keybindings::Action::Abort => {
-                    // Esc 只做一件事：打断正在跑的回合。退出走 /quit。
+                    // Esc 打断正在跑的回合；空闲时跳回最新一条你的消息。退出走 /quit。
                     if self.working {
                         self.abort_run(worker);
                         self.set_status(argent_i18n::t(self.locale, "tui.abort_requested"));
+                    } else {
+                        self.jump_to_last_user();
                     }
                 }
                 crate::keybindings::Action::Quit => {
@@ -2072,6 +2104,8 @@ impl App {
                 if self.working {
                     self.abort_run(worker);
                     self.set_status(argent_i18n::t(self.locale, "tui.abort_requested"));
+                } else {
+                    self.jump_to_last_user();
                 }
             }
             Key::Enter => self.submit(worker),
@@ -2767,8 +2801,12 @@ impl App {
             None
         };
         let palette_height = palette.as_ref().map(|(_, shown)| *shown).unwrap_or(0);
+        // 最新一条你的消息钉在输入框上方：长回答/展开会把 body 挤出视口，
+        // 最老的一行（往往是你自己的消息）就看不见了。
+        let anchor = self.anchor_line(width);
+        let tail = 4 + usize::from(anchor.is_some());
         let body_height = height
-            .saturating_sub(5)
+            .saturating_sub(tail)
             .saturating_sub(palette_height)
             .max(1);
 
@@ -2786,6 +2824,14 @@ impl App {
         while visible.len() < body_height {
             visible.push(Line::plain(""));
         }
+        self.frame_body_height = body_height;
+        self.visible_fold_rows = self
+            .body_fold_rows
+            .iter()
+            .copied()
+            .filter(|&row| row >= start && row < end)
+            .map(|row| row - start)
+            .collect();
 
         if let Some(overlay) = self.overlay_lines(width) {
             let overlay_height = overlay.len();
@@ -2805,12 +2851,16 @@ impl App {
                 lines.push(self.palette_line(item, selected, width));
             }
         }
+        if let Some(anchor) = anchor {
+            self.anchor_row = Some(lines.len());
+            lines.push(anchor);
+        } else {
+            self.anchor_row = None;
+        }
         lines.push(input_top(width));
         lines.push(self.input_line(width));
         lines.push(separator(width));
         lines.push(self.status_line(width));
-        // 模型/cwd/用量放在最底一行：视野上方留给正文。
-        lines.push(self.header_line(width));
 
         // 整帧带底色：终端自带的背景不可控，显式填一层才不会露底。
         let base = Style::plain().with_bg(crate::theme::current().background);
@@ -2820,101 +2870,154 @@ impl App {
             .collect()
     }
 
-    fn header_line(&self, width: usize) -> Line {
-        let dot = Span::new(" · ", Style::dim(crate::theme::current().dim));
+    fn status_line(&mut self, width: usize) -> Line {
+        // 一行装全部：模型 · provider · cwd | 上下文占比/窗口 · ↑↓累计 · cache · cost · tok/s。
+        let theme = crate::theme::current();
+        let dot = Span::new(" · ", Style::dim(theme.dim));
+        let hint: Option<String> = match &self.status {
+            Some((text, at)) if at.elapsed() < Duration::from_secs(6) => Some(text.clone()),
+            _ => None,
+        };
+
+        // 右侧：上下文占比/窗口 · ↑累计输入 ↓累计输出。
+        let mut segments: Vec<String> = Vec::new();
+        if self.metrics.context_max > 0 {
+            segments.push(format!(
+                "{:.1}%/{}",
+                self.metrics.context_fraction() * 100.0,
+                compact_window(self.metrics.context_max)
+            ));
+        }
+        let up = self.metrics.session_prompt_tokens;
+        let down = self.metrics.session_completion_tokens;
+        if up + down > 0 {
+            segments.push(format!("↑{} ↓{}", compact_count(up), compact_count(down)));
+        }
+        if let Some(hit) = self.metrics.cache_hit_percent() {
+            if hit > 0 {
+                segments.push(format!("cache {}%", hit));
+            }
+        }
+        if let Some(cost) = self.metrics.cost {
+            if cost > 0.0 {
+                segments.push(format!("${:.4}", cost));
+            }
+        }
+        let rate = self.metrics.rate();
+        if rate > 0.0 {
+            segments.push(format!(
+                "{:.0} {}",
+                rate,
+                argent_i18n::t(self.locale, "tui.tok_s")
+            ));
+        }
+        // statusline 配置的附加段接在默认段之后：session / model / thinking / cwd。
+        for segment in &self.statusline {
+            match segment.as_str() {
+                "session" => segments.push(
+                    self.ready
+                        .as_ref()
+                        .map(|ready| ready.session.clone())
+                        .unwrap_or_default(),
+                ),
+                "model" => segments.push(self.metrics.model.clone()),
+                "thinking" => {
+                    if !self.metrics.thinking.is_empty() {
+                        segments.push(self.metrics.thinking.clone());
+                    }
+                }
+                "cwd" => segments.push(
+                    self.ready
+                        .as_ref()
+                        .map(|ready| ready.cwd.clone())
+                        .unwrap_or_default(),
+                ),
+                _ => {}
+            }
+        }
+        let segments: Vec<String> = segments.into_iter().filter(|s| !s.is_empty()).collect();
+        let right = if segments.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", segments.join(" · "))
+        };
+
         let mut left = Line::new();
-        if let Some(ready) = &self.ready {
+        if self.plan {
+            left = left
+                .push(Span::new("PLAN", Style::fg(theme.warning)))
+                .push(dot.clone());
+        }
+        if let Some(hint) = hint {
+            left = left.push(Span::new(hint, Style::dim(theme.dim)));
+        } else if let Some(ready) = &self.ready {
             left = left
                 .push(Span::new(ready.model.clone(), Style::plain()))
                 .push(dot.clone())
                 .push(Span::new(
-                    ready.thinking.clone(),
-                    Style::dim(crate::theme::current().dim),
-                ))
-                .push(dot.clone())
-                .push(Span::new(
                     ready.provider.clone(),
-                    Style::dim(crate::theme::current().secondary),
-                ))
+                    Style::dim(theme.secondary),
+                ));
+            // cwd 吃掉剩余宽度，过长的路径裁掉。
+            let room = width
+                .saturating_sub(left.width() + text_width(&right) + 2)
+                .max(6);
+            left = left
                 .push(dot.clone())
                 .push(Span::new(
-                    ready.cwd.clone(),
-                    Style::dim(crate::theme::current().dim),
+                    clip_to_width(&ready.cwd, room),
+                    Style::dim(theme.dim),
                 ));
+            if self.working {
+                left = left
+                    .push(Span::new("  ", Style::plain()))
+                    .push(Span::new(
+                        SPINNER[(self.tick as usize) % SPINNER.len()],
+                        Style::bold(theme.success),
+                    ));
+            } else if self.queued > 0 {
+                left = left.push(Span::new(
+                    format!("  {} queued", self.queued),
+                    Style::dim(theme.dim),
+                ));
+            }
         }
-        if self.working {
-            left = left.push(Span::new("  ", Style::plain())).push(Span::new(
-                SPINNER[(self.tick as usize) % SPINNER.len()],
-                Style::bold(crate::theme::current().success),
-            ));
-        } else if self.queued > 0 {
-            left = left.push(Span::new("  ", Style::plain())).push(Span::new(
-                format!("{} queued", self.queued),
-                Style::dim(crate::theme::current().dim),
-            ));
-        }
-
-        let percent = (self.metrics.context_fraction() * 100.0).round() as u32;
-        let right = format!(
-            "{} {}% · {:.0} {} ",
-            argent_i18n::t(self.locale, "tui.ctx"),
-            percent,
-            self.metrics.rate(),
-            argent_i18n::t(self.locale, "tui.tok_s")
-        );
-        fill_between(left, right, width, Style::dim(crate::theme::current().dim))
+        fill_between(left, right, width, Style::dim(theme.dim))
     }
 
-    fn status_line(&mut self, width: usize) -> Line {
-        // 状态行只显示临时状态；开场键位提示不再占据这一行。
-        let hint = match &self.status {
-            Some((text, at)) if at.elapsed() < Duration::from_secs(6) => text.clone(),
-            _ => String::new(),
-        };
-        let right = if let Some(ready) = &self.ready {
-            let default = ["session", "tokens", "cache", "cost"];
-            let segments: Vec<&str> = if self.statusline.is_empty() {
-                default.to_vec()
-            } else {
-                self.statusline.iter().map(String::as_str).collect()
-            };
-            let mut parts = Vec::new();
-            if self.plan {
-                parts.push("PLAN".to_string());
-            }
-            for segment in segments {
-                match segment {
-                    "session" => parts.push(ready.session.clone()),
-                    "model" => parts.push(self.metrics.model.clone()),
-                    "thinking" => {
-                        if !self.metrics.thinking.is_empty() {
-                            parts.push(self.metrics.thinking.clone());
-                        }
-                    }
-                    "cwd" => parts.push(ready.cwd.clone()),
-                    "tokens" => parts.push(format_tokens(
-                        self.metrics.prompt_tokens + self.metrics.completion_tokens,
-                    )),
-                    "cache" => {
-                        if let Some(hit) = self.metrics.cache_hit_percent() {
-                            if hit > 0 {
-                                parts.push(format!("cache {}%", hit));
-                            }
-                        }
-                    }
-                    "cost" => {
-                        if let Some(cost) = self.metrics.cost {
-                            parts.push(format!("${:.4}", cost));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            format!("{} ", parts.join(" · "))
-        } else {
-            String::new()
-        };
-        fill_between(Line::plain(hint), right, width, Style::dim(crate::theme::current().dim))
+    /// 输入框上方的锚定行：始终显示最新一条你的消息（点它/Esc 可跳回）。
+    fn anchor_line(&self, width: usize) -> Option<Line> {
+        let text = self
+            .transcript
+            .entries()
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::User(text) => Some(text.replace('\n', " ")),
+                _ => None,
+            })?;
+        let budget = width.saturating_sub(6).max(8);
+        Some(
+            Line::new()
+                .push(Span::new(
+                    USER_MARK,
+                    Style::bold(crate::theme::current().accent),
+                ))
+                .push(Span::new(" 你: ", Style::dim(crate::theme::current().dim)))
+                .push(Span::new(
+                    clip_to_width(&text, budget),
+                    Style::dim(crate::theme::current().secondary),
+                )),
+        )
+    }
+
+    /// 把最后一条用户消息顶到正文可视区顶部（点击锚定行 / 空闲时按 Esc）。
+    fn jump_to_last_user(&mut self) {
+        if let Some(row) = self.body_user_row {
+            let end = row + self.frame_body_height.max(1);
+            self.scroll = self.body_total.saturating_sub(end);
+            self.dirty = true;
+        }
     }
 
     fn input_line(&self, width: usize) -> Line {
@@ -2934,9 +3037,9 @@ impl App {
 
     /// 终端光标应该停在的位置（ANSI 1 基 row/col）。
     ///
-    /// 输入框是倒数第 4 行（下方依次是分隔线、状态行、信息行）。
+    /// 输入框是倒数第 3 行（下方依次是分隔线、状态行）。
     fn cursor_screen_position(&self, width: usize, height: usize) -> (usize, usize) {
-        let row = height.saturating_sub(3).max(1);
+        let row = height.saturating_sub(2).max(1);
         let inner = width.saturating_sub(4).max(1);
         let start = self.cursor.saturating_sub(inner);
         let text: String = self.input[start..self.cursor.min(self.input.len())].iter().collect();
@@ -2963,20 +3066,29 @@ impl App {
         let expand = self.expand;
         if let Some(cache) = &self.body_cache {
             if cache.width == width && cache.expand == expand && cache.version == version {
+                self.body_fold_rows = cache.fold_rows.clone();
+                self.body_user_row = cache.user_row;
+                self.body_total = cache.lines.len();
                 return Arc::clone(&cache.lines);
             }
         }
-        let lines = Arc::new(self.transcript_lines_uncached(width));
+        let (lines, fold_rows, user_row) = self.transcript_lines_uncached(width);
+        self.body_fold_rows = fold_rows.clone();
+        self.body_user_row = user_row;
+        self.body_total = lines.len();
+        let lines = Arc::new(lines);
         self.body_cache = Some(BodyCache {
             width,
             expand,
             version,
             lines: Arc::clone(&lines),
+            fold_rows,
+            user_row,
         });
         lines
     }
 
-    fn transcript_lines_uncached(&self, width: usize) -> Vec<Line> {
+    fn transcript_lines_uncached(&self, width: usize) -> (Vec<Line>, Vec<usize>, Option<usize>) {
         // 流式 delta 是交错到达的（思考→回答→补充思考→继续回答），不合并
         // 的话每个碎片都另起一段，读起来是碎的。相邻同类条目先合成一篇
         // 连续文本再渲染。
@@ -2987,6 +3099,8 @@ impl App {
             Thinking(Vec<String>),
             Other(Entry),
         }
+        let mut fold_rows: Vec<usize> = Vec::new();
+        let mut user_row: Option<usize> = None;
         let mut groups: Vec<Group> = Vec::new();
         for entry in self.transcript.entries() {
             match entry {
@@ -3006,6 +3120,7 @@ impl App {
         for group in groups {
             match group {
                 Group::User(text) => {
+                    user_row = Some(lines.len());
                     lines.extend(wrapped(&text, width, USER_MARK, "  ", Style::bold(crate::theme::current().accent)));
                 }
                 Group::Assistant(parts) => {
@@ -3023,12 +3138,17 @@ impl App {
                         "           ",
                         Style::dim(crate::theme::current().dim),
                     );
-                    if !self.expand && rendered.len() > 4 {
+                    let folded = !self.expand && rendered.len() > 4;
+                    if folded {
                         rendered.truncate(3);
                         rendered.push(Line::new().push(Span::new(
                             format!("  … {}", argent_i18n::t(self.locale, "tui.folded_hint")),
                             Style::dim(crate::theme::current().dim),
                         )));
+                    }
+                    if folded {
+                        // 折叠提示行的行号，交给点击展开用。
+                        fold_rows.push(lines.len() + rendered.len() - 1);
                     }
                     lines.extend(rendered);
                 }
@@ -3113,7 +3233,7 @@ impl App {
             // 空会话不写引导文字：输入框就是入口，占一行空白即可。
             lines.push(Line::plain(""));
         }
-        lines
+        (lines, fold_rows, user_row)
     }
 
     fn overlay_lines(&self, width: usize) -> Option<Vec<Line>> {
@@ -3468,6 +3588,36 @@ fn wrapped(
     out
 }
 
+/// `19M` / `1.6M` / `8.2k`：状态行的上传/下载累计。
+fn compact_count(n: u64) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    if n < 1_000_000 {
+        let k = n as f64 / 1000.0;
+        return if k >= 10.0 {
+            format!("{}k", k as u64)
+        } else {
+            format!("{:.1}k", k)
+        };
+    }
+    let m = n as f64 / 1_000_000.0;
+    if m >= 10.0 {
+        format!("{}M", m as u64)
+    } else {
+        format!("{:.1}M", m)
+    }
+}
+
+/// `960k` 或 `1.0M`：上下文窗口显示。
+fn compact_window(max: usize) -> String {
+    if max >= 1_000_000 {
+        format!("{:.1}M", max as f64 / 1_000_000.0)
+    } else {
+        format!("{}k", max / 1000)
+    }
+}
+
 fn separator(width: usize) -> Line {
     Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
 }
@@ -3566,6 +3716,9 @@ pub fn run_remote(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
+    // 鼠标：点击锚定行跳回最新消息、点折叠思考行展开。退出时关掉，
+    // 否则终端会一直把点击当转义序列发给程序（连不上东西了）。
+    terminal::enable_mouse();
 
     let locale = argent_i18n::Locale::from_env();
     let (key_tx, key_rx) = mpsc::channel();
@@ -3654,6 +3807,7 @@ pub fn run_remote(
         std::thread::sleep(Duration::from_millis(33));
     }
 
+    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     drop(guard);
@@ -3695,14 +3849,19 @@ pub fn run(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
+    // 鼠标：点击锚定行跳回最新消息、点折叠思考行展开。退出时关掉，
+    // 否则终端会一直把点击当转义序列发给程序（连不上东西了）。
+    terminal::enable_mouse();
 
     let locale = argent_i18n::Locale::from_env();
     let statusline = config.statusline.clone();
     let bindings = crate::keybindings::Bindings::load(&cwd)?;
+    let max_context_tokens = config.max_context_tokens;
     let worker = spawn(agent, session, checkpoints, config, index, cwd.clone(), hooks.clone(), locale);
     let (key_tx, key_rx) = mpsc::channel();
     spawn_input(key_tx);
     let mut app = App::new(commands, prompts, locale, statusline, bindings);
+    app.metrics.context_max = max_context_tokens;
     let initial_size = terminal::size();
     let mut last_frame: Vec<String> = Vec::new();
     draw_at(
@@ -3809,6 +3968,7 @@ pub fn run(
         ..HookContext::default()
     };
     let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
+    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
@@ -4752,9 +4912,116 @@ mod cursor_tests {
     fn an_empty_input_puts_the_cursor_after_the_prompt_mark() {
         let app = app();
         let (row, col) = app.cursor_screen_position(100, 30);
-        // The input line is the 4th row from the bottom.
-        assert_eq!(row, 27);
+        // The input line is the 3rd row from the bottom (separator + status below it).
+        assert_eq!(row, 28);
         assert_eq!(col, 3);
+    }
+
+    /// ANSI 转义序列剥掉，方便在渲染后的帧上断言文本。
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    fn test_worker() -> Worker {
+        let (command_tx, _command_rx) = std::sync::mpsc::channel();
+        let (_event_tx, event_rx) = std::sync::mpsc::channel();
+        Worker {
+            commands: command_tx,
+            events: event_rx,
+            abort: argent_agent::AbortHandle::new(),
+            steering: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::VecDeque::new(),
+            )),
+        }
+    }
+
+    #[test]
+    fn the_anchor_line_pins_the_latest_user_message() {
+        let mut app = app();
+        app.transcript.push_user("帮我重构这个函数");
+        let frame = app.frame(80, 24);
+        let plain: Vec<String> = frame.iter().map(|l| strip_ansi(l)).collect();
+        // 输入框是最底下那个以 › 开头但不是锚定行的行。
+        let input_pos = plain
+            .iter()
+            .rposition(|l| l.starts_with("› ") && !l.contains("你:"))
+            .expect("input row");
+        // 锚定行在输入框与细分隔线再上面一行：…body…, anchor, ─, input, ─, status
+        assert_eq!(app.anchor_row, Some(input_pos - 2));
+        assert!(plain[input_pos - 2].contains("你: 帮我重构这个函数"), "{}", plain[input_pos - 2]);
+    }
+
+    #[test]
+    fn the_status_line_is_one_line_with_context_ratio_and_totals() {
+        let mut app = app();
+        app.metrics.context_max = 960_000;
+        app.metrics.context_used = 189_120;
+        app.metrics.session_prompt_tokens = 19_000_000;
+        app.metrics.session_completion_tokens = 1_600_000;
+        let text: String = app
+            .status_line(200)
+            .spans
+            .iter()
+            .map(|span| span.text.clone())
+            .collect();
+        assert!(text.contains("19.7%/960k"), "{text}");
+        assert!(text.contains("↑19M ↓1.6M"), "{text}");
+        // 单行：不允许出现换行。
+        assert_eq!(text.matches('\n').count(), 0);
+    }
+
+    #[test]
+    fn idle_esc_jumps_back_to_the_last_user_message() {
+        let mut app = app();
+        app.transcript.push_user("最早的一条提问");
+        for i in 0..30 {
+            app.transcript.push_entry(Entry::Assistant(format!(
+                "回答 {i}: {}",
+                "x".repeat(30)
+            )));
+        }
+        let _ = app.frame(60, 12);
+        let body_has = |app: &mut App| -> bool {
+            // 锚定行也会带“最早的一条提问”，只看正文里以 › 开头但不含“你：”的行。
+            app.frame(60, 12).iter().any(|l| {
+                let l = strip_ansi(l);
+                l.starts_with("› ") && l.contains("最早的一条提问") && !l.contains("你:")
+            })
+        };
+        assert!(!body_has(&mut app), "滚动到底部时正文里不该再有最早的提问");
+        let worker = test_worker();
+        app.handle_key(&worker, Key::Esc);
+        assert!(body_has(&mut app), "Esc 之后正文顶部应回到最早的提问");
+    }
+
+    #[test]
+    fn clicking_the_fold_row_expands_the_thinking_block() {
+        let mut app = app();
+        app.transcript.push_entry(Entry::Thinking(
+            (0..10).map(|i| format!("思考 {i}")).collect::<Vec<_>>().join("\n"),
+        ));
+        let _ = app.frame(80, 24);
+        assert!(!app.visible_fold_rows.is_empty(), "折叠提示行应被记录");
+        assert!(!app.expand);
+        let worker = test_worker();
+        let row = app.visible_fold_rows[0] as u16;
+        app.handle_key(&worker, Key::MouseClick { row, col: 0 });
+        assert!(app.expand);
+        app.handle_key(&worker, Key::MouseClick { row: row, col: 0 });
+        assert!(!app.expand);
     }
 
     #[test]

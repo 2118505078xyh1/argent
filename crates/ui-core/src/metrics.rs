@@ -37,6 +37,10 @@ pub struct Metrics {
     pub context_used: usize,
     /// The model's window.
     pub context_max: usize,
+    /// Session totals, accumulated turn by turn (the per-turn fields above
+    /// only hold the latest turn).
+    pub session_prompt_tokens: u64,
+    pub session_completion_tokens: u64,
 }
 
 impl Metrics {
@@ -65,6 +69,8 @@ impl Metrics {
             cost: None,
             context_used: 0,
             context_max: 0,
+            session_prompt_tokens: 0,
+            session_completion_tokens: 0,
         }
     }
 
@@ -112,6 +118,8 @@ impl Metrics {
         self.completion_tokens = usage.completion_tokens;
         self.cached_tokens = usage.cached_tokens;
         self.requests = requests;
+        self.session_prompt_tokens += usage.prompt_tokens;
+        self.session_completion_tokens += usage.completion_tokens;
     }
 
     /// Share of the prompt that the provider served from its cache.
@@ -277,6 +285,18 @@ mod tests {
         assert_eq!(m.prompt_tokens, 100);
         assert_eq!(m.requests, 2);
         assert!((m.cache_fraction() - 0.9).abs() < 0.001);
+        m.begin_turn();
+        m.finish_turn(
+            Usage {
+                prompt_tokens: 50,
+                completion_tokens: 20,
+                total_tokens: 70,
+                cached_tokens: 0,
+            },
+            1,
+        );
+        assert_eq!(m.session_prompt_tokens, 150);
+        assert_eq!(m.session_completion_tokens, 60);
     }
 
     #[test]

@@ -25,6 +25,8 @@ pub enum Key {
     /// 走虚拟键码记录——两者能区分：方向键翻输入历史，滚轮滚动会话。
     ScrollUp,
     ScrollDown,
+    /// 鼠标左键点击（屏幕行/列，0 基）。用来展开折叠的思考。
+    MouseClick { row: u16, col: u16 },
     Home,
     End,
     PageUp,
@@ -241,9 +243,24 @@ pub(crate) fn handle_paste_key(
                 }
                 return Some(true);
             }
+            // SGR 鼠标报告：`ESC [ < button ; x ; y M|m`。滚轮 64/65，
+            // 左键按下 0。必须先于 8 字符上限处理——报告动辄 10+ 字符。
+            if c == 'M' || c == 'm' {
+                let full: String = collected.iter().collect();
+                if let Some((body, press)) = full.split_at(full.len() - 1).0.strip_prefix('<').map(|b| (b, c == 'M')) {
+                    if let Some(key) = parse_sgr_mouse(body, press) {
+                        *mode = PasteMode::Normal;
+                        let _ = tx.send(key);
+                        return Some(true);
+                    }
+                }
+                // 未知鼠标按钮：丢弃而不是漏进输入框。
+                *mode = PasteMode::Normal;
+                return Some(true);
+            }
             // 还在长（带修饰键的 `ESC [ 1 ; 5 A` 之类）：继续收；收不出来的
             // 序列整个丢弃——它们不该变成字符进输入框。
-            if collected.len() >= 8 {
+            if collected.len() >= 12 {
                 *mode = PasteMode::Normal;
                 return Some(true);
             }
@@ -307,6 +324,27 @@ pub(crate) fn handle_paste_key(
     }
 }
 
+/// 解析 SGR 鼠标报告的三字段（不含前缀 `<` 和结尾 M/m）。
+fn parse_sgr_mouse(body: &str, press: bool) -> Option<Key> {
+    let mut parts = body.split(';');
+    let button: u32 = parts.next()?.parse().ok()?;
+    let x: u16 = parts.next()?.parse().ok()?;
+    let y: u16 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    match button {
+        64 => Some(Key::ScrollUp),
+        65 => Some(Key::ScrollDown),
+        // 左键按下（release 是 M→m 变体，press 只认 M）。
+        0 if press => Some(Key::MouseClick {
+            row: y.saturating_sub(1),
+            col: x.saturating_sub(1),
+        }),
+        _ => None,
+    }
+}
+
 /// Windows 上的输入线程：直接读控制台输入记录。
 ///
 /// 不走 `ReadFile`+VT 转义解析，原因是控制台在 raw 模式下不会把扩展键
@@ -331,6 +369,18 @@ fn spawn_input_windows(tx: Sender<Key>) {
             control_key_state: u32,
         }
 
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct MouseInputRecord {
+            event_type: u16,
+            _pad: u16,
+            mouse_x: i16,
+            mouse_y: i16,
+            button_state: u32,
+            control_key_state: u32,
+            event_flags: u32,
+        }
+
         extern "system" {
             fn GetStdHandle(which: u32) -> *mut core::ffi::c_void;
             fn ReadConsoleInputW(
@@ -345,6 +395,8 @@ fn spawn_input_windows(tx: Sender<Key>) {
         // (DWORD)-10：标准输入句柄。作为 u32 传参时是 0xFFFF_FFF6。
         const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6;
         const KEY_EVENT: u16 = 1;
+        const MOUSE_EVENT: u16 = 2;
+        const MOUSE_WHEELED: u32 = 0x0004;
         const WAIT_OBJECT_0: u32 = 0;
         const WAIT_TIMEOUT: u32 = 258;
         // 没有新按键的等待上限：超过这个时间就把待定的 Esc 当成真的 Esc。
@@ -381,6 +433,32 @@ fn spawn_input_windows(tx: Sender<Key>) {
                     break;
                 }
                 for record in buffer.iter().take(read as usize) {
+                    if record.event_type == MOUSE_EVENT {
+                        // 与 KEY_EVENT_RECORD 同尺寸的并集读法。
+                        let mouse = &*(record as *const ConsoleInputRecord as *const MouseInputRecord);
+                        let key = if mouse.event_flags & MOUSE_WHEELED != 0 {
+                            // 高字是带符号的滚轮增量（通常 ±120）。
+                            let delta = ((mouse.button_state >> 16) & 0xFFFF) as u16 as i16;
+                            if delta > 0 {
+                                Some(Key::ScrollUp)
+                            } else {
+                                Some(Key::ScrollDown)
+                            }
+                        } else if mouse.event_flags == 0 && (mouse.button_state & 0x0001) != 0 {
+                            Some(Key::MouseClick {
+                                row: mouse.mouse_y.max(0) as u16,
+                                col: mouse.mouse_x.max(0) as u16,
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(key) = key {
+                            if tx.send(key).is_err() {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
                     if record.event_type != KEY_EVENT {
                         continue;
                     }
