@@ -1702,6 +1702,9 @@ struct App {
     pending_text: std::collections::VecDeque<char>,
     /// 自管的鼠标拖选：起点、当前终点（屏幕行列，0 基）。
     selection: Option<((u16, u16), (u16, u16))>,
+    /// 输入框撤销 / 重做快照：(文本, 光标)。
+    undo_stack: Vec<(Vec<char>, usize)>,
+    redo_stack: Vec<(Vec<char>, usize)>,
     /// 最近一帧的纯文本，松开鼠标时据此取选中文字。
     frame_text: Vec<String>,
     /// 每轮结束追加一行 dim 摘要（model · 时长 · tok/s · ttft），
@@ -1787,6 +1790,8 @@ impl App {
             animate_stream: false,
             pending_text: std::collections::VecDeque::new(),
             selection: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             frame_text: Vec::new(),
             turn_summaries: Vec::new(),
             locale,
@@ -2762,6 +2767,7 @@ impl App {
             Key::Backspace => self.backspace(),
             Key::Delete => {
                 if self.cursor < self.input.len() {
+                    self.push_undo();
                     self.input.remove(self.cursor);
                     self.dirty = true;
                 }
@@ -2770,6 +2776,10 @@ impl App {
             Key::CtrlK => self.kill_to_end(),
             Key::CtrlU => self.kill_to_start(),
             Key::CtrlW => self.delete_word_before(),
+            Key::CtrlZ => self.undo_edit(),
+            Key::CtrlY => self.redo_edit(),
+            Key::CtrlLeft => self.move_word_left(),
+            Key::CtrlRight => self.move_word_right(),
             Key::Left => self.cursor = self.cursor.saturating_sub(1),
             Key::Right => self.cursor = (self.cursor + 1).min(self.input.len()),
             Key::Home => self.cursor = 0,
@@ -2884,6 +2894,7 @@ impl App {
         if text.is_empty() {
             return;
         }
+        self.push_undo();
         for ch in text.chars() {
             self.input.insert(self.cursor, ch);
             self.cursor += 1;
@@ -2904,14 +2915,65 @@ impl App {
 
     fn backspace(&mut self) {
         if self.cursor > 0 {
+            self.push_undo();
             self.cursor -= 1;
             self.input.remove(self.cursor);
             self.dirty = true;
         }
     }
 
+    fn push_undo(&mut self) {
+        const LIMIT: usize = 100;
+        self.undo_stack.push((self.input.clone(), self.cursor));
+        if self.undo_stack.len() > LIMIT {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    fn undo_edit(&mut self) {
+        if let Some((input, cursor)) = self.undo_stack.pop() {
+            self.redo_stack.push((self.input.clone(), self.cursor));
+            self.input = input;
+            self.cursor = cursor.min(self.input.len());
+            self.dirty = true;
+        }
+    }
+
+    fn redo_edit(&mut self) {
+        if let Some((input, cursor)) = self.redo_stack.pop() {
+            self.undo_stack.push((self.input.clone(), self.cursor));
+            self.input = input;
+            self.cursor = cursor.min(self.input.len());
+            self.dirty = true;
+        }
+    }
+
+    fn move_word_left(&mut self) {
+        let mut cursor = self.cursor;
+        while cursor > 0 && self.input[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+        while cursor > 0 && !self.input[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+        self.cursor = cursor;
+    }
+
+    fn move_word_right(&mut self) {
+        let mut cursor = self.cursor;
+        while cursor < self.input.len() && self.input[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        while cursor < self.input.len() && !self.input[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        self.cursor = cursor;
+    }
+
     fn kill_to_end(&mut self) {
         if self.cursor < self.input.len() {
+            self.push_undo();
             self.input.truncate(self.cursor);
             self.dirty = true;
         }
@@ -2919,6 +2981,7 @@ impl App {
 
     fn kill_to_start(&mut self) {
         if self.cursor > 0 {
+            self.push_undo();
             self.input.drain(..self.cursor);
             self.cursor = 0;
             self.dirty = true;
@@ -2929,6 +2992,7 @@ impl App {
         if self.cursor == 0 {
             return;
         }
+        self.push_undo();
         let mut start = self.cursor;
         while start > 0 && self.input[start - 1].is_whitespace() {
             start -= 1;
@@ -5174,7 +5238,15 @@ mod tests {
             (0x4B, Key::CtrlK),
             (0x55, Key::CtrlU),
             (0x57, Key::CtrlW),
+            (0x59, Key::CtrlY),
+            (0x5A, Key::CtrlZ),
         ] {
+            assert_eq!(
+                key_from_console_record(Some('\u{0}'), vk, true, false),
+                Some(key)
+            );
+        }
+        for (vk, key) in [(0x25, Key::CtrlLeft), (0x27, Key::CtrlRight)] {
             assert_eq!(
                 key_from_console_record(Some('\u{0}'), vk, true, false),
                 Some(key)
@@ -5206,12 +5278,19 @@ mod tests {
         assert_eq!(next_key(&mut focus), Some(Key::Ignore));
         let mut bytes = VecDeque::from(vec![0x0d]);
         assert_eq!(next_key(&mut bytes), Some(Key::Enter));
+        // 带修饰键的方向键：Ctrl/Alt + 左右按词移动。
+        let mut bytes = VecDeque::from(b"[1;5D".to_vec());
+        assert_eq!(next_key(&mut bytes), Some(Key::CtrlLeft));
+        let mut bytes = VecDeque::from(b"[1;5C".to_vec());
+        assert_eq!(next_key(&mut bytes), Some(Key::CtrlRight));
         // 行编辑控制键不再落成不可见字符。
         for (byte, key) in [
             (0x01, Key::CtrlA),
             (0x0b, Key::CtrlK),
             (0x15, Key::CtrlU),
             (0x17, Key::CtrlW),
+            (0x19, Key::CtrlY),
+            (0x1a, Key::CtrlZ),
         ] {
             let mut bytes = VecDeque::from(vec![byte]);
             assert_eq!(next_key(&mut bytes), Some(key));
@@ -5769,6 +5848,37 @@ mod tests {
         app.handle_key(&worker, Key::CtrlU);
         assert_eq!(app.input.iter().collect::<String>(), " def");
         assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn word_movement_and_undo_work_on_the_input_line() {
+        let worker = super::cursor_tests::test_worker();
+        let mut app = App::new(
+            Vec::new(),
+            crate::prompts::PromptLibrary::new(),
+            argent_i18n::Locale::En,
+            Vec::new(),
+            crate::keybindings::Bindings::default(),
+        );
+        app.input = "alpha beta gamma".chars().collect();
+        app.cursor = app.input.len();
+        app.handle_key(&worker, Key::CtrlLeft);
+        assert_eq!(app.cursor, 11);
+        app.handle_key(&worker, Key::CtrlLeft);
+        assert_eq!(app.cursor, 6);
+        app.handle_key(&worker, Key::CtrlRight);
+        assert_eq!(app.cursor, 10);
+        app.handle_key(&worker, Key::CtrlRight);
+        assert_eq!(app.cursor, 16);
+
+        app.input = "abc".chars().collect();
+        app.cursor = 3;
+        app.insert_text("d");
+        assert_eq!(app.input.iter().collect::<String>(), "abcd");
+        app.handle_key(&worker, Key::CtrlZ);
+        assert_eq!(app.input.iter().collect::<String>(), "abc");
+        app.handle_key(&worker, Key::CtrlY);
+        assert_eq!(app.input.iter().collect::<String>(), "abcd");
     }
 
     #[test]

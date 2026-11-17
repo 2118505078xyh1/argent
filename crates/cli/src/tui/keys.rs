@@ -21,6 +21,9 @@ pub enum Key {
     Down,
     Left,
     Right,
+    /// Ctrl/Alt + 方向键：按词移动。
+    CtrlLeft,
+    CtrlRight,
     /// 鼠标滚轮。Windows 上滚轮以 VT 序列（`ESC [ A`）到达，而真方向键
     /// 走虚拟键码记录——两者能区分：方向键翻输入历史，滚轮滚动会话。
     ScrollUp,
@@ -62,6 +65,9 @@ pub enum Key {
     CtrlK,
     CtrlU,
     CtrlW,
+    /// 输入框撤销 / 重做。
+    CtrlZ,
+    CtrlY,
     CtrlP,
     CtrlN,
     CtrlR,
@@ -298,6 +304,18 @@ pub(crate) fn handle_paste_key(
             }
             let first = collected[0];
             if first.is_ascii_digit() || first == ';' || first == '<' {
+                // 带修饰键的方向键：`ESC [ 1 ; 5 C/D`（Ctrl/Alt + 左右）。
+                let code: String = collected[..collected.len() - 1].iter().collect();
+                let key = match (code.as_str(), c) {
+                    ("1;5", 'C') | ("1;3", 'C') => Some(Key::CtrlRight),
+                    ("1;5", 'D') | ("1;3", 'D') => Some(Key::CtrlLeft),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    *mode = PasteMode::Normal;
+                    let _ = tx.send(key);
+                    return Some(true);
+                }
                 *seq = collected;
             } else {
                 *mode = PasteMode::Normal;
@@ -570,6 +588,8 @@ pub(crate) fn key_from_console_record(
         // 扩展键区：方向键/Home/End/PgUp/PgDn 只有虚拟键码。
         (Some('\u{0}'), 0x26, _, _) => Some(Key::Up),
         (Some('\u{0}'), 0x28, _, _) => Some(Key::Down),
+        (Some('\u{0}'), 0x25, true, _) => Some(Key::CtrlLeft),
+        (Some('\u{0}'), 0x27, true, _) => Some(Key::CtrlRight),
         (Some('\u{0}'), 0x25, _, _) => Some(Key::Left),
         (Some('\u{0}'), 0x27, _, _) => Some(Key::Right),
         (Some('\u{0}'), 0x24, _, _) => Some(Key::Home),
@@ -590,6 +610,8 @@ pub(crate) fn key_from_console_record(
         (Some('\u{0}'), 0x4B, true, _) => Some(Key::CtrlK),
         (Some('\u{0}'), 0x55, true, _) => Some(Key::CtrlU),
         (Some('\u{0}'), 0x57, true, _) => Some(Key::CtrlW),
+        (Some('\u{0}'), 0x59, true, _) => Some(Key::CtrlY),
+        (Some('\u{0}'), 0x5A, true, _) => Some(Key::CtrlZ),
         (Some('\u{0}'), 0x4C, true, _) => Some(Key::CtrlL),
         (Some('\u{0}'), 0x4E, true, _) => Some(Key::CtrlN),
         (Some('\u{0}'), 0x50, true, _) => Some(Key::CtrlP),
@@ -648,6 +670,8 @@ pub(crate) fn next_key(bytes: &mut VecDeque<u8>) -> Option<Key> {
         0x0c => Some(Key::CtrlL),
         0x15 => Some(Key::CtrlU),
         0x17 => Some(Key::CtrlW),
+        0x19 => Some(Key::CtrlY),
+        0x1a => Some(Key::CtrlZ),
         0x0e => Some(Key::CtrlN),
         0x10 => Some(Key::CtrlP),
         0x12 => Some(Key::CtrlR),
@@ -655,7 +679,6 @@ pub(crate) fn next_key(bytes: &mut VecDeque<u8>) -> Option<Key> {
         0x09 => Some(Key::Tab),
         0x0d | 0x0a => Some(Key::Enter),
         0x08 | 0x7f => Some(Key::Backspace),
-        0x1a => Some(Key::BackTab),
         0x00..=0x1f => Some(Key::Char(first as char)),
         _ => {
             let length = utf8_length(first);
@@ -703,6 +726,12 @@ pub(crate) fn parse_escape(sequence: &[u8]) -> Key {
     }
     if body == b"D" {
         return Key::Left;
+    }
+    if body == b"1;5C" || body == b"1;3C" {
+        return Key::CtrlRight;
+    }
+    if body == b"1;5D" || body == b"1;3D" {
+        return Key::CtrlLeft;
     }
     if body == b"H" {
         return Key::Home;

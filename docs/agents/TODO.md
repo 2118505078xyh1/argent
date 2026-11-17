@@ -28,9 +28,9 @@
 - [ ] **TUI 回归清单自动化**
   - 加一组 snapshot 测试：用户块颜色、思考块展开/收起、流式逐字、摘要行、复制提示。
   - 每次改 TUI 先跑这组，避免“修一个坏一个”。
-- [x] **输入区编辑能力（第一批）**
-  - 已有 ←/→/Home/End/Delete；本次补 Ctrl+A（行首）、Ctrl+K（删到行尾）、Ctrl+U（删到行首）、Ctrl+W（删前一个词）。
-  - 仍待补：按词移动（Ctrl+←/→）、撤销/重做（Ctrl+Z）、多行折行编辑。
+- [x] **输入区编辑能力**
+  - ←/→/Home/End/Delete；Ctrl+A/K/U/W；Ctrl+←/→ 按词移动；Ctrl+Z/Ctrl+Y 撤销/重做（100 步）。
+  - 仍待补：多行折行编辑、鼠标定位光标。
 - [ ] **`/session` 面板继续补齐**
   - 显示 model/thinking/cwd/session id、最后错误、缓存命中、上下文占用。
   - 操作项与 CLI 能力对齐：rename/tree/compact/export/copy path。
