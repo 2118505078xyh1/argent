@@ -20,6 +20,12 @@ pub(crate) use keys::next_key;
 pub(crate) const ASSISTANT_MARK: &str = "◆ ";
 pub(crate) const TOOL_MARK: &str = "● ";
 pub(crate) const USER_MARK: &str = "› ";
+/// 用户消息块：浅蓝底（Fixed(110)）配白字，一整条铺满行宽。
+pub(crate) const USER_FG: argent_core::screen::Color = argent_core::screen::Color::Fixed(255);
+pub(crate) const USER_BG: argent_core::screen::Color = argent_core::screen::Color::Fixed(110);
+fn user_style() -> Style {
+    Style::fg(USER_FG).with_bg(USER_BG)
+}
 
 
 use std::collections::VecDeque;
@@ -3101,7 +3107,7 @@ impl App {
             match group {
                 Group::User(text) => {
                     user_row = Some(lines.len());
-                    lines.extend(wrapped(&text, width, USER_MARK, "  ", Style::bold(crate::theme::current().accent)));
+                    lines.extend(wrapped_block(&text, width, USER_MARK, "  ", user_style()));
                 }
                 Group::Assistant(parts) => {
                     let text = parts.join("");
@@ -3535,6 +3541,25 @@ fn tool_primary_arg(arguments: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 用户消息块的排版：prefix 与正文同一底色，行尾补齐底色，
+/// 整条浅蓝铺满终端宽度。
+fn wrapped_block(
+    text: &str,
+    width: usize,
+    first_prefix: &str,
+    rest_prefix: &str,
+    style: Style,
+) -> Vec<Line> {
+    let mut out = wrapped(text, width, first_prefix, rest_prefix, style);
+    for line in &mut out {
+        let used = line.width();
+        if used < width {
+            line.spans.push(Span::new(" ".repeat(width - used), style));
+        }
+    }
+    out
 }
 
 fn wrapped(
@@ -5018,6 +5043,20 @@ mod cursor_tests {
             session_path: "/tmp/s.jsonl".to_string(),
         });
         assert_eq!(app.metrics.context_max, 960_000);
+    }
+
+    #[test]
+    fn the_user_message_block_fills_the_row_with_bg() {
+        let style = user_style();
+        let lines = wrapped_block("你好，argent", 40, USER_MARK, "  ", style);
+        for line in &lines {
+            // 每个 span 都带浅蓝底。
+            assert!(
+                line.spans.iter().all(|span| span.style.bg == Some(USER_BG)),
+                "every span carries the background"
+            );
+            assert_eq!(line.width(), 40, "the row is padded to full width");
+        }
     }
 
     #[test]
