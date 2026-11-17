@@ -1052,6 +1052,15 @@ impl App {
         }
 
         // 动作键先查绑定表：默认值与历史行为一致，用户可以在
+        // 多行输入里 ↑/↓ 在行间移动；已在首行(↑)或末行(↓)时才翻输入历史。
+        if let Key::Up | Key::Down = key {
+            if self.input.contains(&'\n') && self.move_cursor_line(matches!(key, Key::Down)) {
+                self.dirty = true;
+                return;
+            }
+        }
+
+        // 常用动作允许 keybindings.json 重绑，默认值写死在这里，改起来去
         // keybindings.json 里改。
         if let Some(action) = self.bindings.action(&key) {
             match action {
@@ -1389,6 +1398,69 @@ impl App {
         self.input.drain(start..self.cursor);
         self.cursor = start;
         self.dirty = true;
+    }
+
+    /// 光标所在行（0 基）与行内字符列。换行符算上一行的行尾。
+    fn cursor_line_position(&self) -> (usize, usize) {
+        let mut row = 0usize;
+        let mut col = 0usize;
+        for (index, ch) in self.input.iter().enumerate() {
+            if index >= self.cursor {
+                break;
+            }
+            if *ch == '\n' {
+                row += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (row, col)
+    }
+
+    /// 第 `row` 行的字符区间 `[start, end)`，不含换行符。
+    fn line_bounds(&self, row: usize) -> (usize, usize) {
+        let mut current = 0usize;
+        let mut start = 0usize;
+        for (index, ch) in self.input.iter().enumerate() {
+            if current == row {
+                break;
+            }
+            if *ch == '\n' {
+                current += 1;
+                start = index + 1;
+            }
+        }
+        let mut end = self.input.len();
+        for (index, ch) in self.input.iter().enumerate().skip(start) {
+            if *ch == '\n' {
+                end = index;
+                break;
+            }
+        }
+        (start, end)
+    }
+
+    /// ↑/↓ 在多行输入里移动光标，尽量保持列。
+    ///
+    /// 已经在首行（↑）或末行（↓）时返回 `false`，让调用方继续走输入历史。
+    fn move_cursor_line(&mut self, down: bool) -> bool {
+        let (row, col) = self.cursor_line_position();
+        let total = self.input.iter().filter(|ch| **ch == '\n').count() + 1;
+        let target = if down {
+            if row + 1 >= total {
+                return false;
+            }
+            row + 1
+        } else {
+            if row == 0 {
+                return false;
+            }
+            row - 1
+        };
+        let (start, end) = self.line_bounds(target);
+        self.cursor = (start + col).min(end);
+        true
     }
 
     pub(super) fn history_previous(&mut self) {

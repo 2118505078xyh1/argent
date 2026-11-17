@@ -313,6 +313,50 @@ pub(super) fn slice_cells(text: &str, from: usize, to: usize) -> String {
     out
 }
 
+/// 把 `[from, to)` 列区间内的单元格反显。
+///
+/// 选区边界常落在 span 中间，跨界的 span 要切开，才能逐字高亮
+/// 而不是把整行染成反色。宽字符只要和选区相交就整体反显。
+pub(super) fn highlight_cells(line: &mut Line, from: usize, to: usize) {
+    if to <= from {
+        return;
+    }
+    let mut rebuilt: Vec<Span> = Vec::with_capacity(line.spans.len() + 2);
+    let mut offset = 0usize;
+    for span in line.spans.drain(..) {
+        let span_end = offset + text_width(&span.text);
+        if span_end <= from || offset >= to {
+            rebuilt.push(span);
+            offset = span_end;
+            continue;
+        }
+        let mut piece = String::new();
+        let mut piece_width = 0usize;
+        for ch in span.text.chars() {
+            let cell = text_width(&ch.to_string()).max(1);
+            let ch_start = offset + piece_width;
+            let highlighted = ch_start + cell > from && ch_start < to;
+            if highlighted && piece_width > 0 {
+                rebuilt.push(Span::new(std::mem::take(&mut piece), span.style));
+                piece_width = 0;
+            }
+            piece.push(ch);
+            piece_width += cell;
+            if highlighted {
+                let mut style = span.style;
+                style.reverse = true;
+                rebuilt.push(Span::new(std::mem::take(&mut piece), style));
+                piece_width = 0;
+            }
+        }
+        if !piece.is_empty() {
+            rebuilt.push(Span::new(piece, span.style));
+        }
+        offset = span_end;
+    }
+    line.spans = rebuilt;
+}
+
 pub(super) fn compact_count(n: u64) -> String {
     if n < 1000 {
         return n.to_string();

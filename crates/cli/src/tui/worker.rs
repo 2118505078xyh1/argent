@@ -81,6 +81,11 @@ pub fn spawn(
         cwd: cwd.display().to_string(),
         session: title.clone(),
         session_path: path.clone(),
+        approval: match config.approval_mode {
+            ApprovalMode::Never => "never".to_string(),
+            ApprovalMode::Always => "always".to_string(),
+            ApprovalMode::Sensible => "sensible".to_string(),
+        },
     };
     let initial = Transcript::from_messages(agent.history())
         .entries()

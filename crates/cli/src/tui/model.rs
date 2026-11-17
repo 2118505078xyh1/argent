@@ -98,6 +98,8 @@ pub(super) struct ReadyInfo {
     pub(super) cwd: String,
     pub(super) session: String,
     pub(super) session_path: String,
+    /// never / sensible / always；驱动状态栏的 YOLO 徽标。
+    pub(super) approval: String,
 }
 
 pub(super) enum Overlay {

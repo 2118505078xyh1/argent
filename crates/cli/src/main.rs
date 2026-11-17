@@ -541,10 +541,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
     // `--fallback-model` 参数优先于 settings 的 `fallbackModel`；agent
     // 内部在主模型空流重试耗尽且错误可临时（429/5xx/超时）时自动切换，
     // 全路径（one-shot/REPL/TUI/engine）一个机制兜底。
-    agent_config.fallback_model = cli
-        .fallback_model
-        .clone()
-        .or(config.fallback_model.clone());
+    agent_config.fallback_model = cli.fallback_model.clone().or(config.fallback_model.clone());
     let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
     if let Some(turns) = cli
         .max_turns
@@ -1088,7 +1085,9 @@ pub fn run(raw: &[String]) -> Result<i32> {
                 config.keep_recent_tokens,
             ),
             serve::resolve_token(cli.serve_token.as_deref()),
-        );
+        )
+        // attach 靠这帧 ready 显示 YOLO 徽标。
+        .with_approval(config.approval_mode);
         // 后台会话带一条初始请求：监听器起来就开跑，attach 事后连上也能
         // 从事件缓冲里看到开头。
         let server = match &cli.serve_prompt {
@@ -1468,11 +1467,7 @@ assistant: {}",
 }
 
 /// Append this turn's usage to the ledger, if the session has a path.
-fn record_usage(
-    session: &SessionContext,
-    agent: &argent_agent::Agent,
-    ttft_ms: Option<u64>,
-) {
+fn record_usage(session: &SessionContext, agent: &argent_agent::Agent, ttft_ms: Option<u64>) {
     let usage = agent.usage();
     let requests = agent.requests();
     let cost = agent.usage_cost();

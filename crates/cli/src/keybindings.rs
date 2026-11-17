@@ -183,6 +183,9 @@ pub fn parse_key(name: &str) -> Result<Key> {
         "ctrl+n" => Key::CtrlN,
         "ctrl+r" => Key::CtrlR,
         "ctrl+s" => Key::CtrlS,
+        "ctrl+j" => Key::CtrlJ,
+        "alt+enter" => Key::AltEnter,
+        "alt+up" => Key::AltUp,
         other => {
             let mut chars = other.chars();
             match (chars.next(), chars.next()) {

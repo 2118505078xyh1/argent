@@ -325,9 +325,8 @@ mod tests {
                 ((v + 0.055) / 1.055).powf(2.4)
             }
         };
-        let luminance = |r: u8, g: u8, b: u8| {
-            0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
-        };
+        let luminance =
+            |r: u8, g: u8, b: u8| 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
         let (high, low) = {
             let fg_l = luminance(fr, fg_, fb);
             let bg_l = luminance(br, bg_, bb);

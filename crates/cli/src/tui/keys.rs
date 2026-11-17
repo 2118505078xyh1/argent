@@ -13,6 +13,8 @@ use std::sync::mpsc::Sender;
 pub enum Key {
     Char(char),
     Enter,
+    /// Ctrl+J：在输入框里插入换行；Enter 仍然发送。
+    CtrlJ,
     Backspace,
     Delete,
     Tab,
@@ -76,6 +78,8 @@ pub enum Key {
     AltEnter,
     /// Alt+Up: take the last queued follow-up back into the editor.
     AltUp,
+    /// Alt+1..9：展开/收起对应序号的思考块。
+    AltDigit(u8),
     /// Bracketed-paste start/end (ESC[200~ / ESC[201~); byte-stream path.
     #[cfg(any(not(windows), test))]
     PasteStart,
@@ -123,7 +127,8 @@ pub(crate) fn spawn_input(tx: Sender<Key>) {
                         }
                     }
                     Some(Key::Char(ch)) if pasting => paste_text.push(ch),
-                    Some(Key::Enter) if pasting => paste_text.push('\n'),
+                    // 粘贴内容里的换行是 LF（CtrlJ）；Enter 是 CR。
+                    Some(Key::Enter | Key::CtrlJ) if pasting => paste_text.push('\n'),
                     Some(Key::Tab) if pasting => paste_text.push_str("  "),
                     // 粘贴块里的其它控制键没有意义，丢掉而不是执行。
                     Some(_) if pasting => {}
@@ -203,6 +208,13 @@ pub(crate) fn handle_paste_key(
         PasteMode::Esc => match ch {
             Some('[') => {
                 *mode = PasteMode::Seq(Vec::new());
+                Some(true)
+            }
+            // 多数终端把 Alt+数字送成 `ESC` + 数字；不要在
+            // “单独的 Esc” 分支里把它拆成 Esc 和数字键。
+            Some(digit @ '1'..='9') => {
+                *mode = PasteMode::Normal;
+                let _ = tx.send(Key::AltDigit(digit as u8 - b'0'));
                 Some(true)
             }
             _ => {
@@ -584,7 +596,13 @@ pub(crate) fn key_from_console_record(
         // Enter 的 unicode_char 是 '\r'，归一到 Enter。
         (Some('\r'), _, _, true) => Some(Key::AltEnter),
         (Some('\r'), _, _, _) => Some(Key::Enter),
+        // Ctrl+J：换行不发送。有的终端给 '\n'，有的只给虚拟键码。
+        (Some('\n'), _, _, _) | (Some('\u{0}'), 0x0A, _, _) => Some(Key::CtrlJ),
         (Some('\u{0}'), 0x26, _, true) => Some(Key::AltUp),
+        // Alt+1..9。
+        (Some(digit), _, _, true) if digit.is_ascii_digit() && digit != '0' => {
+            Some(Key::AltDigit(digit as u8 - b'0'))
+        }
         // 扩展键区：方向键/Home/End/PgUp/PgDn 只有虚拟键码。
         (Some('\u{0}'), 0x26, _, _) => Some(Key::Up),
         (Some('\u{0}'), 0x28, _, _) => Some(Key::Down),
@@ -657,6 +675,12 @@ pub(crate) fn next_key(bytes: &mut VecDeque<u8>) -> Option<Key> {
             // Incomplete: wait for the rest.
             return None;
         }
+        // Alt+数字：ESC 后紧跟 1..9，不是“Esc + 数字”。
+        if (b'1'..=b'9').contains(&second) {
+            bytes.pop_front();
+            bytes.pop_front();
+            return Some(Key::AltDigit(second - b'0'));
+        }
         bytes.pop_front();
         return Some(Key::Esc);
     }
@@ -677,7 +701,9 @@ pub(crate) fn next_key(bytes: &mut VecDeque<u8>) -> Option<Key> {
         0x12 => Some(Key::CtrlR),
         0x13 => Some(Key::CtrlS),
         0x09 => Some(Key::Tab),
-        0x0d | 0x0a => Some(Key::Enter),
+        0x0d => Some(Key::Enter),
+        // Ctrl+J 在终端里就是 LF；Enter 是 CR。
+        0x0a => Some(Key::CtrlJ),
         0x08 | 0x7f => Some(Key::Backspace),
         0x00..=0x1f => Some(Key::Char(first as char)),
         _ => {

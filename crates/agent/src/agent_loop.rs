@@ -3059,10 +3059,7 @@ mod tests {
             &self,
             request: &ChatRequest,
         ) -> Result<Box<dyn Iterator<Item = Result<StreamEvent>> + Send>> {
-            self.calls
-                .lock()
-                .expect("lock")
-                .push(request.model.clone());
+            self.calls.lock().expect("lock").push(request.model.clone());
             if request.model == self.primary {
                 return Ok(Box::new(
                     vec![Err(Error::provider("gateway 504 timed out"))].into_iter(),

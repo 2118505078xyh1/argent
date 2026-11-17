@@ -38,6 +38,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use argent_agent::{Agent, AgentEvent, EventSink, FinishReason};
+use argent_core::config::ApprovalMode;
 use argent_core::error::{Error, Result};
 use argent_core::json::Json;
 
@@ -58,6 +59,8 @@ pub struct Server {
     bus: Arc<EventBus>,
     /// A prompt to run as soon as the listener is up (background sessions).
     initial_prompt: Option<String>,
+    /// 审批策略：attach 客户端靠它显示 YOLO 徽标，自动批准不能是隐形状态。
+    approval: String,
 }
 
 impl Server {
@@ -74,7 +77,18 @@ impl Server {
             shutdown: Arc::new(AtomicBool::new(false)),
             bus: Arc::new(EventBus::new()),
             initial_prompt: None,
+            approval: "sensible".to_string(),
         }
+    }
+
+    /// Report the approval policy to attach clients via the ready frame.
+    pub fn with_approval(mut self, mode: ApprovalMode) -> Server {
+        self.approval = match mode {
+            ApprovalMode::Never => "never".to_string(),
+            ApprovalMode::Always => "always".to_string(),
+            ApprovalMode::Sensible => "sensible".to_string(),
+        };
+        self
     }
 
     /// Run this prompt once the listener is up; `attach` replays its events.
@@ -134,6 +148,7 @@ impl Server {
                 abort: self.abort.clone(),
                 steering: Arc::clone(&self.steering),
                 bus: Arc::clone(&self.bus),
+                approval: self.approval.clone(),
             };
             std::thread::spawn(move || {
                 if let Err(error) = server.handle(stream) {
@@ -152,6 +167,7 @@ struct ServerRef {
     abort: argent_agent::AbortHandle,
     steering: Arc<Mutex<VecDeque<String>>>,
     bus: Arc<EventBus>,
+    approval: String,
 }
 
 impl ServerRef {
@@ -299,6 +315,14 @@ impl ServerRef {
         stream
             .write_all(head.as_bytes())
             .map_err(|e| Error::io(format!("write failed: {}", e)))?;
+        // 先发一帧 ready：审批策略是 attach 端画 YOLO 徽标的依据。
+        let ready = format!(
+            "event: ready\ndata: {{\"approval\":\"{}\"}}\n\n",
+            self.approval
+        );
+        if stream.write_all(ready.as_bytes()).is_err() {
+            return Ok(());
+        }
         for frame in self.bus.snapshot() {
             if stream.write_all(frame.as_bytes()).is_err() {
                 return Ok(());
@@ -806,6 +830,7 @@ mod tests {
             abort: server.abort.clone(),
             steering: Arc::clone(&server.steering),
             bus: Arc::clone(&server.bus),
+            approval: server.approval.clone(),
         }
     }
 
@@ -845,6 +870,7 @@ mod tests {
             abort: server.abort.clone(),
             steering: Arc::clone(&server.steering),
             bus: Arc::clone(&server.bus),
+            approval: server.approval.clone(),
         };
         assert!(open.check_token(&request_with(None)).is_ok());
     }

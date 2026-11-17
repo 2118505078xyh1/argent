@@ -26,9 +26,9 @@ pub fn run_remote(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 不请求鼠标上报（`?1000h`）：终端自己的拖选、右键复制/粘贴、滚轮
-    // 比 TUI 自绘的选择更可靠，也是用户熟悉的操作。键盘输入仍走控制台
-    // 按键记录，和鼠标模式无关。
+    // 鼠标上报交给 TUI：逐字拖选复制、右键粘贴、点击思考块、滚轮滚动
+    // 都在应用内实现，行为在不同终端上一致。
+    terminal::enable_mouse();
 
     let locale = argent_i18n::Locale::from_env();
     let (key_tx, key_rx) = mpsc::channel();
@@ -111,6 +111,7 @@ pub fn run_remote(
     }
 
     app.flush_stream_text();
+    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     drop(guard);
@@ -152,7 +153,8 @@ pub fn run(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 同 run()：鼠标交给终端，TUI 不抢拖选和右键菜单。
+    // 同 run_remote()：鼠标由 TUI 接管。
+    terminal::enable_mouse();
 
     let locale = argent_i18n::Locale::from_env();
     let statusline = config.statusline.clone();
@@ -278,6 +280,7 @@ pub fn run(
     };
     let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
     app.flush_stream_text();
+    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。

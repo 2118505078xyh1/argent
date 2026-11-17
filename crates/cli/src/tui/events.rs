@@ -66,6 +66,8 @@ pub enum UiEvent {
         cwd: String,
         session: String,
         session_path: String,
+        /// never / sensible / always：远端会话从 ready 帧带来，本地由 config 填。
+        approval: String,
     },
     Loaded(Vec<Entry>),
     Agent(AgentEvent),
