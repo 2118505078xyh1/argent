@@ -3121,9 +3121,8 @@ impl App {
             segments.push(format!("↑{} ↓{}", compact_count(up), compact_count(down)));
         }
         if let Some(hit) = self.metrics.session_cache_hit_percent() {
-            if hit > 0 {
-                segments.push(format!("cache {}%", hit));
-            }
+            // 首轮冷启动是 0%，也要显示出来，才能看出后面有没有涨。
+            segments.push(format!("cache {}%", hit));
         }
         if let Some(cost) = self.metrics.cost {
             if cost > 0.0 {
@@ -5511,6 +5510,23 @@ mod cursor_tests {
         assert_eq!(app.selected_text((0, 1), (0, 5)), "bc 中");
         assert_eq!(app.selected_text((0, 4), (1, 2)), "中文\nsec");
         assert_eq!(app.selected_text((1, 2), (1, 2)), "c");
+    }
+
+    #[test]
+    fn the_first_turn_shows_cache_zero_percent() {
+        let mut app = app();
+        app.metrics.finish_turn(
+            argent_ai::Usage {
+                prompt_tokens: 4312,
+                completion_tokens: 100,
+                total_tokens: 4412,
+                cached_tokens: 0,
+            },
+            1,
+        );
+        let frame = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("
+");
+        assert!(frame.contains("cache 0%"), "冷启动也要显示 0%：{}", frame);
     }
 
     #[test]
