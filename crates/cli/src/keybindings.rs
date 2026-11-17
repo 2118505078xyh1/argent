@@ -230,8 +230,10 @@ pub fn key_name(key: &Key) -> String {
         Key::CtrlN => "ctrl+n".to_string(),
         Key::CtrlR => "ctrl+r".to_string(),
         Key::CtrlS => "ctrl+s".to_string(),
+        Key::CtrlJ => "ctrl+j".to_string(),
         Key::AltEnter => "alt+enter".to_string(),
         Key::AltUp => "alt+up".to_string(),
+        Key::AltDigit(digit) => format!("alt+{digit}"),
         #[cfg(any(not(windows), test))]
         Key::PasteStart => "paste-start".to_string(),
         #[cfg(any(not(windows), test))]
