@@ -99,6 +99,7 @@ pub(super) struct ReadyInfo {
     pub(super) session: String,
     pub(super) session_path: String,
     /// never / sensible / always；驱动状态栏的 YOLO 徽标。
+    #[allow(dead_code)] // Ready 帧已把策略应用到 App::approval_mode
     pub(super) approval: String,
 }
 

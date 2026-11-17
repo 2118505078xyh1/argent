@@ -322,7 +322,14 @@ impl App {
                 cwd,
                 session,
                 session_path,
+                approval,
             } => {
+                // 远端会话从 ready 帧带来审批策略，驱动 YOLO 徽标。
+                self.approval_mode = match approval.as_str() {
+                    "never" => ApprovalMode::Never,
+                    "always" => ApprovalMode::Always,
+                    _ => ApprovalMode::Sensible,
+                };
                 let mut fresh = Metrics::new(model.clone(), thinking.clone(), cwd.clone());
                 fresh.context_max = self.context_max;
                 self.metrics = fresh;
@@ -334,6 +341,7 @@ impl App {
                     cwd,
                     session,
                     session_path,
+                    approval,
                 });
             }
             UiEvent::Loaded(entries) => {
@@ -3214,6 +3222,7 @@ mod tests {
             cwd: dir.display().to_string(),
             session: "s".to_string(),
             session_path: String::new(),
+            approval: "sensible".to_string(),
         });
         let (prompt, attached, images) = app.expand_attachments("@a.txt summarize this");
         assert!(prompt.contains("attached body"), "{}", prompt);
@@ -3314,6 +3323,7 @@ mod tests {
             cwd: dir.display().to_string(),
             session: String::new(),
             session_path: String::new(),
+            approval: "sensible".to_string(),
         });
         assert_eq!(
             app.bindings.action(&Key::CtrlP),
@@ -3368,6 +3378,7 @@ mod tests {
             cwd: dir.display().to_string(),
             session: "s".to_string(),
             session_path: String::new(),
+            approval: "sensible".to_string(),
         });
         let (_prompt, attached, images) = app.expand_attachments("@pixel.png what is this");
         assert_eq!(attached, vec!["pixel.png".to_string()]);
@@ -3531,6 +3542,7 @@ mod tests {
         );
         app.ready = Some(ReadyInfo {
             cwd: "/work/a".to_string(),
+            approval: "sensible".to_string(),
             ..Default::default()
         });
         app.sessions = vec![
@@ -3608,6 +3620,7 @@ mod tests {
             cwd: "D:\\code\\mpi\\argent".to_string(),
             session: "demo-session".to_string(),
             session_path: "C:\\Users\\demo\\.argent".to_string(),
+            approval: "sensible".to_string(),
         });
         app.transcript
             .push_user("帮我看看 src/main.rs 里的启动逻辑");
@@ -4635,6 +4648,8 @@ mod cursor_tests {
             cwd: "/tmp".to_string(),
             session: "s".to_string(),
             session_path: "/tmp/s.jsonl".to_string(),
+        
+            approval: "sensible".to_string(),
         });
         assert_eq!(app.metrics.context_max, 960_000);
     }
@@ -4650,6 +4665,8 @@ mod cursor_tests {
             cwd: "/tmp".to_string(),
             session: "s".to_string(),
             session_path: "/tmp/s.jsonl".to_string(),
+        
+            approval: "sensible".to_string(),
         });
         app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 0 }));
         app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText(
@@ -4691,6 +4708,8 @@ mod cursor_tests {
             cwd: "/tmp".to_string(),
             session: "s".to_string(),
             session_path: "/tmp/s.jsonl".to_string(),
+        
+            approval: "sensible".to_string(),
         });
         let turn = |app: &mut App, q: &str, a: &str| {
             app.transcript.push_entry(Entry::User(q.into()));
@@ -4758,6 +4777,8 @@ mod cursor_tests {
             cwd: "/tmp".to_string(),
             session: "s".to_string(),
             session_path: "/tmp/s.jsonl".to_string(),
+        
+            approval: "sensible".to_string(),
         });
         app.handle_ui(UiEvent::TurnDone {
             reason: FinishReason::Aborted,
@@ -4878,5 +4899,90 @@ mod cursor_tests {
         let pad = first.chars().take_while(|ch| *ch == ' ').count();
         assert_eq!(pad, 40, "body capped at 120 and centered: {first:?}");
         assert!(first.contains("hi"), "{first:?}");
+    }
+
+    #[test]
+    fn up_down_move_between_lines_of_a_multiline_input() {
+        let mut app = app();
+        app.input = "one\ntwo\nthree".chars().collect();
+        app.cursor = app.input.len();
+        let worker = test_worker();
+
+        // 光标在第三行：↑ 移到第二行，列被截在行尾（第二行只有 3 个字符）。
+        app.handle_key(&worker, Key::Up);
+        let (row, col) = app.cursor_line_position();
+        assert_eq!((row, col), (1, 3));
+        assert_eq!(app.cursor, 7);
+
+        // ↓ 移回第三行，同样保持列。
+        app.handle_key(&worker, Key::Down);
+        let (row, col) = app.cursor_line_position();
+        assert_eq!((row, col), (2, 3));
+    }
+
+    #[test]
+    fn up_at_the_first_line_and_down_at_the_last_still_walk_history() {
+        let mut app = app();
+        app.history.push("earlier prompt".to_string());
+        app.input = "line one\nline two".chars().collect();
+        app.cursor = 3; // 首行
+        let worker = test_worker();
+
+        app.handle_key(&worker, Key::Up);
+        assert_eq!(app.input.iter().collect::<String>(), "earlier prompt");
+
+        // 末行按 ↓ 同样落回历史导航：history_next 从当前 pos 走到下一条。
+        // （history_pos 为 None 是草稿状态，↓ 无处可去、保持输入不变——
+        // 与单行输入的历史语义一致，这里不重复验证。）
+        app.input = "line one\nline two".chars().collect();
+        app.cursor = app.input.len();
+        app.history = vec!["first prompt".to_string(), "earlier prompt".to_string()];
+        app.history_pos = Some(0); // 模拟已经按过 ↑ 翻到第一条
+        app.handle_key(&worker, Key::Down);
+        assert_eq!(app.input.iter().collect::<String>(), "earlier prompt");
+    }
+
+    #[test]
+    fn selection_highlights_only_the_selected_cells() {
+        // 跨界 span 要切开：只有 "llo" 反显。
+        let mut line = Line::new()
+            .push(Span::new("hello ", Style::plain()))
+            .push(Span::new("world", Style::plain()));
+        highlight_cells(&mut line, 2, 5);
+        let joined: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(joined, "hello world");
+        let reversed: Vec<bool> = line.spans.iter().map(|s| s.style.reverse).collect();
+        assert_eq!(reversed, vec![false, true, true, true, false, false]);
+
+        // 宽字符按单元格算：[2,4) 恰好选中"文"，"中"不反显。
+        let mut line = Line::new().push(Span::new("中文", Style::plain()));
+        highlight_cells(&mut line, 2, 4);
+        assert_eq!(line.spans.len(), 2);
+        assert!(!line.spans[0].style.reverse);
+        assert!(line.spans[1].style.reverse);
+    }
+
+    #[test]
+    fn search_hits_are_highlighted_in_the_session_picker() {
+        let base = Style::plain();
+        let spans = highlight_spans("alpha beta", "bet", base);
+        let joined: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(joined, "alpha beta");
+        // 命中在 6..9：前后各一段 + 命中段，共 3 个 span。
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].text, "alpha ");
+        assert_eq!(spans[1].text, "bet");
+        assert_eq!(spans[2].text, "a");
+        let accent = crate::theme::current().accent;
+        assert_eq!(spans[1].style.fg, Some(accent));
+        assert!(spans[1].style.bold);
+        assert!(!spans[0].style.bold);
+
+        // 空查询原样返回；命中大小写不敏感。
+        assert_eq!(highlight_spans("x", "", base).len(), 1);
+        let hits = highlight_spans("ABC", "b", base);
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[1].text, "B");
+        assert!(hits[1].style.bold);
     }
 }

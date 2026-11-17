@@ -216,12 +216,14 @@ TUI 里输入 `/help` 看键位与全部命令。最常用的几个：
 消息里写 `@src/main.rs` 会把文件内容附给模型（最多三个）。写类工具会弹审批：
 `y` 允许一次、`a` 本轮全允、`n` 拒绝；Policy 规则是硬门，审批点不掉。
 
-键位：`Enter` 发送；**`↑ ↓` 翻输入历史**（`Ctrl+P`/`Ctrl+N` 同义）；**`Esc` 只中止
-正在跑的回合**；退出用 `/quit`（`Ctrl+D` 也行）；鼠标拖选/右键复制粘贴交给终端
-原生处理，`PgUp`/`PgDn` 翻页；`Ctrl+E` 展开工具输出；`Alt+1…9` 展开/折叠第 N 个
-思考块；`Ctrl+J` 在输入框里换行（`Enter` 仍是发送）；`Ctrl+L` 重绘；`Shift+Tab` 切
-plan 模式。`Ctrl+C` 默认不绑定——终端里它常用于复制，避免误触打断运行；绑定都能在
-`~/.argent/keybindings.json` 里改，`argent keybindings` 查看。
+键位：`Enter` 发送；**`↑ ↓` 翻输入历史**（多行输入时先在行间移动，首/末行才翻历史，
+`Ctrl+P`/`Ctrl+N` 同义）；**`Esc` 只中止正在跑的回合**；退出用 `/quit`（`Ctrl+D`
+也行）；鼠标由 TUI 接管——按住拖选（逐格反显，宽字符不切碎）、松开复制、右键粘
+贴、点击折叠的思考块可展开/收起；`PgUp`/`PgDn` 翻页；`Ctrl+E` 展开工具输出；
+`Alt+1…9` 展开/折叠第 N 个思考块；`Ctrl+J` 在输入框里换行（`Enter` 仍是发送）；
+`Ctrl+L` 重绘；`Shift+Tab` 切 plan 模式。`Ctrl+C` 默认不绑定——终端里它常用于复
+制，避免误触打断运行；绑定都能在 `~/.argent/keybindings.json` 里改，`argent
+keybindings` 查看。
 
 ### 三种用法
 

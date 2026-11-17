@@ -317,6 +317,45 @@ pub(super) fn slice_cells(text: &str, from: usize, to: usize) -> String {
 ///
 /// 选区边界常落在 span 中间，跨界的 span 要切开，才能逐字高亮
 /// 而不是把整行染成反色。宽字符只要和选区相交就整体反显。
+/// Split `text` into spans, accentuating every case-insensitive hit of
+/// `query`. Used by the session picker so a filter shows *why* a row matched.
+#[allow(dead_code)] // 选择器列表当前用 (String, String) 行；高亮 helper 供后续渲染接入
+pub(super) fn highlight_spans(text: &str, query: &str, base: Style) -> Vec<Span> {
+    if query.is_empty() {
+        return vec![Span::new(text.to_string(), base)];
+    }
+    let lowered = text.to_lowercase();
+    let needle = query.to_lowercase();
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative) = lowered[cursor..].find(&needle) {
+        let start = cursor + relative;
+        let end = start + needle.len();
+        if start > cursor {
+            spans.push(Span::new(text[cursor..start].to_string(), base));
+        }
+        let theme = crate::theme::current();
+        spans.push(Span::new(
+            text[start..end].to_string(),
+            Style {
+                fg: Some(theme.accent),
+                bg: base.bg,
+                bold: true,
+                dim: false,
+                reverse: false,
+            },
+        ));
+        cursor = end;
+    }
+    if cursor < text.len() {
+        spans.push(Span::new(text[cursor..].to_string(), base));
+    }
+    if spans.is_empty() {
+        spans.push(Span::new(text.to_string(), base));
+    }
+    spans
+}
+
 pub(super) fn highlight_cells(line: &mut Line, from: usize, to: usize) {
     if to <= from {
         return;
@@ -331,23 +370,23 @@ pub(super) fn highlight_cells(line: &mut Line, from: usize, to: usize) {
             continue;
         }
         let mut piece = String::new();
-        let mut piece_width = 0usize;
+        // span 内已消费的单元格宽度——贯穿整个 span 累加，绝不因分段
+        // 而清零：清零会让后续字符的 ch_start 丢掉基准，选区错位。
+        let mut char_offset = 0usize;
         for ch in span.text.chars() {
             let cell = text_width(&ch.to_string()).max(1);
-            let ch_start = offset + piece_width;
+            let ch_start = offset + char_offset;
             let highlighted = ch_start + cell > from && ch_start < to;
-            if highlighted && piece_width > 0 {
+            if highlighted && !piece.is_empty() {
                 rebuilt.push(Span::new(std::mem::take(&mut piece), span.style));
-                piece_width = 0;
             }
             piece.push(ch);
-            piece_width += cell;
             if highlighted {
                 let mut style = span.style;
                 style.reverse = true;
                 rebuilt.push(Span::new(std::mem::take(&mut piece), style));
-                piece_width = 0;
             }
+            char_offset += cell;
         }
         if !piece.is_empty() {
             rebuilt.push(Span::new(piece, span.style));
