@@ -154,8 +154,6 @@ pub fn t(locale: Locale, key: &str) -> &'static str {
         (Locale::Zh, "tui.plan_on") => "计划模式已开启（Shift+Tab 退出）",
         (Locale::En, "tui.plan_off") => "plan mode off",
         (Locale::Zh, "tui.plan_off") => "计划模式已关闭",
-        (Locale::En, "tui.folded_hint") => "thinking folded (Ctrl+E)",
-        (Locale::Zh, "tui.folded_hint") => "思考已折叠 (Ctrl+E)",
         (Locale::En, "ui.new_chat") => "＋ New chat",
         (Locale::Zh, "ui.new_chat") => "＋ 新对话",
         (Locale::En, "ui.new_task") => "New task",

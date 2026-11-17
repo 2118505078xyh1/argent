@@ -1553,12 +1553,14 @@ struct BodyCache {
     expand: bool,
     version: u64,
     lines: Arc<Vec<Line>>,
-    /// Body 行号列表：折叠思考块的提示行（点这一行可展开）。
-    fold_rows: Vec<usize>,
+    /// Body 行号列表：思考块的标题行（点这一行可展开/收起）。
+    fold_rows: Vec<(usize, usize)>,
     /// 最后一条用户消息在 body 里的首行行号。
     user_row: Option<usize>,
     /// 构建时有多少条摘要；摘要追加了正文尾部不能复用缓存。
     summaries: usize,
+    /// 展开集合＋计时长度打包的指纹，任何一个变了都要重建正文。
+    thinking: u64,
 }
 
 struct App {
@@ -1573,12 +1575,18 @@ struct App {
     /// whole UI feel laggy.
     body_cache: Option<BodyCache>,
     /// 布局后的 body 元信息，缓存命中时从缓存回填，不必重算。
-    body_fold_rows: Vec<usize>,
+    body_fold_rows: Vec<(usize, usize)>,
     body_user_row: Option<usize>,
     body_total: usize,
     frame_body_height: usize,
-    /// 屏幕上的折叠提示行号（body 行号减去滚动偏移）。
-    visible_fold_rows: Vec<usize>,
+    /// 屏幕上的思考标题行号（body 行号减去滚动偏移）＋ 块序号。
+    visible_fold_rows: Vec<(u16, usize)>,
+    /// 手动展开的思考块（组序号）。Ctrl+E 折叠全部；点击只切这一块。
+    expanded_thinking: std::collections::BTreeSet<usize>,
+    /// 每个思考块的流式计时（组序号 → 时长）；重建会话时清空。
+    thinking_durations: Vec<std::time::Duration>,
+    thinking_block_started: Option<std::time::Instant>,
+    thinking_block_last: Option<std::time::Instant>,
     /// 每轮结束追加一行 dim 摘要（model · 时长 · tok/s · ttft），
     /// 值为 (该轮结束时的 entries 数, 文本)：渲染到锚点立即打印，
     /// 而不是全部堆在正文尾巴。重开会话（SessionOpened 重建正文）时清空。
@@ -1649,6 +1657,10 @@ impl App {
             body_total: 0,
             frame_body_height: 0,
             visible_fold_rows: Vec::new(),
+            expanded_thinking: std::collections::BTreeSet::new(),
+            thinking_durations: Vec::new(),
+            thinking_block_started: None,
+            thinking_block_last: None,
             turn_summaries: Vec::new(),
             locale,
             statusline,
@@ -1692,6 +1704,18 @@ impl App {
     }
 
     fn handle_ui(&mut self, event: UiEvent) {
+        // 思考块计时：第一个 delta 开计时，最后一个 delta 落定时长；
+        // 任何非思考事件都会先把进行中的块关掉。
+        match &event {
+            UiEvent::Agent(AgentEvent::Thinking(_)) => {
+                let now = std::time::Instant::now();
+                if self.thinking_block_started.is_none() {
+                    self.thinking_block_started = Some(now);
+                }
+                self.thinking_block_last = Some(now);
+            }
+            _ => self.close_thinking_block(),
+        }
         match event {
             UiEvent::Ready {
                 model,
@@ -1721,6 +1745,7 @@ impl App {
                     self.transcript.push_entry(entry);
                 }
                 self.turn_summaries.clear();
+                self.reset_thinking_state();
                 self.scroll = 0;
             }
             UiEvent::Agent(event) => {
@@ -1798,6 +1823,7 @@ impl App {
                     self.transcript.push_entry(entry);
                 }
                 self.turn_summaries.clear();
+                self.reset_thinking_state();
                 self.scroll = 0;
             }
             UiEvent::Models(models) => {
@@ -1816,6 +1842,40 @@ impl App {
             }
         }
         self.dirty = true;
+    }
+
+    /// 结束进行中的思考块，把"首个 delta → 最后一个 delta"折算成一段时长。
+    fn close_thinking_block(&mut self) {
+        if let (Some(start), Some(last)) =
+            (self.thinking_block_started.take(), self.thinking_block_last.take())
+        {
+            self.thinking_durations
+                .push(last.saturating_duration_since(start));
+        }
+        self.thinking_block_last = None;
+    }
+
+    /// 重建会话正文（重开会话 / 历史导入）：丢掉所有按序号的交互状态。
+    fn reset_thinking_state(&mut self) {
+        self.thinking_block_started = None;
+        self.thinking_block_last = None;
+        self.thinking_durations.clear();
+        self.expanded_thinking.clear();
+    }
+
+    /// FNV-1a：展开集合的序号 + 已知时长的数量，打成一个 64 位指纹给缓存用。
+    fn thinking_fingerprint(&self) -> u64 {
+        let mut hash: u64 = 1469598103934665603;
+        const PRIME: u64 = 1099511628211;
+        for ordinal in &self.expanded_thinking {
+            for byte in (*ordinal as u64).to_le_bytes() {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(PRIME);
+            }
+        }
+        hash ^= self.thinking_durations.len() as u64;
+        hash = hash.wrapping_mul(PRIME);
+        hash
     }
 
     fn handle_approval(&mut self, request: ApprovalRequest) {
@@ -1841,12 +1901,18 @@ impl App {
     }
 
     fn handle_key(&mut self, worker: &Worker, key: Key) {
-        // 鼠标点击：点折叠思考提示行展开/收起。
+        // 鼠标点击：点思考标题行展开/收起那一个思考块。
         if let Key::MouseClick { row, .. } = key {
-            if self.visible_fold_rows.contains(&(row as usize)) {
-                self.expand = !self.expand;
+            if let Some(&(_, ordinal)) = self
+                .visible_fold_rows
+                .iter()
+                .find(|&&(screen_row, _)| screen_row == row)
+            {
+                if !self.expanded_thinking.remove(&ordinal) {
+                    self.expanded_thinking.insert(ordinal);
+                }
+                self.dirty = true;
             }
-            self.dirty = true;
             return;
         }
         if let Some(pending) = self.pending.take() {
@@ -2868,8 +2934,8 @@ impl App {
             .body_fold_rows
             .iter()
             .copied()
-            .filter(|&row| row >= start && row < end)
-            .map(|row| row - start)
+            .filter(|&(body_row, _)| body_row >= start && body_row < end)
+            .map(|(body_row, ordinal)| ((body_row - start) as u16, ordinal))
             .collect();
 
         if let Some(overlay) = self.overlay_lines(width) {
@@ -3100,8 +3166,9 @@ impl App {
     fn transcript_lines(&mut self, width: usize) -> Arc<Vec<Line>> {
         let version = self.transcript.version();
         let expand = self.expand;
+        let thinking = self.thinking_fingerprint();
         if let Some(cache) = &self.body_cache {
-            if cache.width == width && cache.expand == expand && cache.version == version && cache.summaries == self.turn_summaries.len() {
+            if cache.width == width && cache.expand == expand && cache.version == version && cache.summaries == self.turn_summaries.len() && cache.thinking == thinking {
                 self.body_fold_rows = cache.fold_rows.clone();
                 self.body_user_row = cache.user_row;
                 self.body_total = cache.lines.len();
@@ -3121,11 +3188,12 @@ impl App {
             fold_rows,
             user_row,
             summaries: self.turn_summaries.len(),
+            thinking,
         });
         lines
     }
 
-    fn transcript_lines_uncached(&self, width: usize) -> (Vec<Line>, Vec<usize>, Option<usize>) {
+    fn transcript_lines_uncached(&self, width: usize) -> (Vec<Line>, Vec<(usize, usize)>, Option<usize>) {
         // 流式 delta 是交错到达的（思考→回答→补充思考→继续回答），不合并
         // 的话每个碎片都另起一段，读起来是碎的。相邻同类条目先合成一篇
         // 连续文本再渲染。
@@ -3136,7 +3204,8 @@ impl App {
             Thinking(Vec<String>),
             Other(Entry),
         }
-        let mut fold_rows: Vec<usize> = Vec::new();
+        let mut fold_rows: Vec<(usize, usize)> = Vec::new();
+        let mut thinking_ordinal = 0usize;
         let mut user_row: Option<usize> = None;
         let mut seen_any = false;
         let mut consumed = 0usize;
@@ -3181,26 +3250,26 @@ impl App {
                 }
                 Group::Thinking(parts) => {
                     let text = parts.join("");
-                    let mut rendered = wrapped(
-                        &text,
-                        width,
-                        "✻ ",
-                        "  ",
-                        Style::dim(crate::theme::current().dim),
-                    );
-                    let folded = !self.expand && rendered.len() > 4;
-                    if folded {
-                        rendered.truncate(3);
-                        rendered.push(Line::new().push(Span::new(
-                            format!("  … {}", argent_i18n::t(self.locale, "tui.folded_hint")),
-                            Style::dim(crate::theme::current().dim),
-                        )));
+                    let ordinal = thinking_ordinal;
+                    thinking_ordinal += 1;
+                    let expanded = self.expand || self.expanded_thinking.contains(&ordinal);
+                    let dim = Style::dim(crate::theme::current().dim);
+                    let accent = Style::fg(crate::theme::current().accent);
+                    let mut header = Line::new()
+                        .push(Span::new(if expanded { "-" } else { "+" }, accent))
+                        .push(Span::new("Thought", dim));
+                    if let Some(duration) = self.thinking_durations.get(ordinal) {
+                        header = header.push(Span::new(
+                            format!(" · {}", format_thought_duration(*duration)),
+                            dim,
+                        ));
                     }
-                    if folded {
-                        // 折叠提示行的行号，交给点击展开用。
-                        fold_rows.push(lines.len() + rendered.len() - 1);
+                    // 标题行的 body 行号＋块序号给点击展开/收起用。
+                    fold_rows.push((lines.len(), ordinal));
+                    lines.push(header);
+                    if expanded {
+                        lines.extend(wrapped(&text, width, "  ", "  ", dim));
                     }
-                    lines.extend(rendered);
                 }
                 Group::Other(entry) => match entry {
                 Entry::Tool(run) => {
@@ -3675,6 +3744,20 @@ fn wrapped(
 }
 
 /// `19M` / `1.6M` / `8.2k`：状态行的上传/下载累计。
+/// 思考块时长：500ms / 1.3s / 12s / 1m 05s。
+fn format_thought_duration(d: std::time::Duration) -> String {
+    let ms = d.as_millis();
+    if ms < 1_000 {
+        format!("{}ms", ms)
+    } else if ms < 10_000 {
+        format!("{:.1}s", d.as_secs_f64())
+    } else if ms < 60_000 {
+        format!("{}s", d.as_secs())
+    } else {
+        format!("{}m {}s", d.as_secs() / 60, d.as_secs() % 60)
+    }
+}
+
 fn compact_count(n: u64) -> String {
     if n < 1000 {
         return n.to_string();
@@ -3802,8 +3885,8 @@ pub fn run_remote(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 不开鼠标上报：框选复制必须能用（Windows Terminal 里 ?1000h 会把
-    // 普通拖拽变成点击事件）。折叠思考是 Ctrl+E，跳回用户消息是 Esc。
+    // 鼠标上报：点击折叠的思考行展开（Shift+拖拽仍可选中复制）。
+    terminal::enable_mouse();
 
     let locale = argent_i18n::Locale::from_env();
     let (key_tx, key_rx) = mpsc::channel();
@@ -3892,6 +3975,7 @@ pub fn run_remote(
         std::thread::sleep(Duration::from_millis(33));
     }
 
+    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     drop(guard);
@@ -3933,13 +4017,16 @@ pub fn run(
     };
     terminal::enter_alternate_screen();
     terminal::hide_cursor();
-    // 不开鼠标上报：框选复制必须能用（Windows Terminal 里 ?1000h 会把
-    // 普通拖拽变成点击事件）。折叠思考是 Ctrl+E，跳回用户消息是 Esc。
+    // 鼠标上报：点击折叠的思考行展开（Shift+拖拽仍可选中复制）。
+    terminal::enable_mouse();
 
     let locale = argent_i18n::Locale::from_env();
     let statusline = config.statusline.clone();
     let bindings = crate::keybindings::Bindings::load(&cwd)?;
-    let max_context_tokens = config.max_context_tokens;
+    // 上下文窗口优先用 provider 目录的实时值（/v1/models 会回报
+    // context_length，本地网关是 960000），网络不可用时再回退
+    // max_context_tokens（默认 128000 只是下限）。
+    let max_context_tokens = argent_session::controller::model_context_window(&agent, config.max_context_tokens);
     let worker = spawn(agent, session, checkpoints, config, index, cwd.clone(), hooks.clone(), locale);
     let (key_tx, key_rx) = mpsc::channel();
     spawn_input(key_tx);
@@ -4051,6 +4138,7 @@ pub fn run(
         ..HookContext::default()
     };
     let _ = run_hook_event(&hooks, HookEvent::SessionEnd, &end_ctx);
+    terminal::disable_mouse();
     terminal::show_cursor();
     terminal::leave_alternate_screen();
     // 备用屏里选不中文字：退出时把对话回显到主屏，方便选中复制。
@@ -4265,7 +4353,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_is_labelled_with_the_star_glyph() {
+    fn the_thinking_block_is_labelled_with_a_folded_marker() {
         let mut app = App::new(
             Vec::new(),
             crate::prompts::PromptLibrary::new(),
@@ -4275,10 +4363,36 @@ mod tests {
         );
         app.transcript
             .push_entry(argent_ui_core::Entry::Thinking("reasoning here".to_string()));
-        let frame = app.frame(80, 24).join("
-");
-        assert!(frame.contains("✻"), "the original star glyph: {}", frame);
-        assert!(frame.contains("reasoning here"), "{}", frame);
+        let stripped = |app: &mut App| -> String {
+            app.frame(80, 24)
+                .iter()
+                .map(|line| {
+                    let mut out = String::with_capacity(line.len());
+                    let mut chars = line.chars();
+                    while let Some(c) = chars.next() {
+                        if c == '' {
+                            for c in chars.by_ref() {
+                                if c.is_ascii_alphabetic() {
+                                    break;
+                                }
+                            }
+                        } else {
+                            out.push(c);
+                        }
+                    }
+                    out
+                })
+                .collect::<Vec<_>>()
+                .join("
+")
+        };
+        let frame = stripped(&mut app);
+        assert!(frame.contains("+Thought"), "folded marker: {}", frame);
+        assert!(!frame.contains("reasoning here"), "folded by default: {}", frame);
+        app.expand = true;
+        let frame = stripped(&mut app);
+        assert!(frame.contains("-Thought"), "global expand shows -Thought: {}", frame);
+        assert!(frame.contains("reasoning here"), "global expand shows the body: {}", frame);
     }
     #[test]
     fn reload_resources_rebinds_keys_from_disk() {
@@ -5079,15 +5193,44 @@ mod cursor_tests {
         app.transcript.push_entry(Entry::Thinking(
             (0..10).map(|i| format!("思考 {i}")).collect::<Vec<_>>().join("\n"),
         ));
-        let _ = app.frame(80, 24);
-        assert!(!app.visible_fold_rows.is_empty(), "折叠提示行应被记录");
+        let joined = |app: &mut App| {
+            app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n")
+        };
+        let collapsed = joined(&mut app);
+        assert!(collapsed.contains("+Thought"), "折叠态应只有一行 +Thought：{}", collapsed);
+        assert!(!collapsed.contains("思考 3"), "折叠态不应露出正文：{}", collapsed);
+        assert!(!app.visible_fold_rows.is_empty(), "思考标题行应被记录");
         assert!(!app.expand);
         let worker = test_worker();
-        let row = app.visible_fold_rows[0] as u16;
+        let (row, _) = app.visible_fold_rows[0];
         app.handle_key(&worker, Key::MouseClick { row, col: 0 });
-        assert!(app.expand);
-        app.handle_key(&worker, Key::MouseClick { row: row, col: 0 });
-        assert!(!app.expand);
+        let expanded = joined(&mut app);
+        assert!(expanded.contains("-Thought"), "点击后应展开为 -Thought：{}", expanded);
+        assert!(expanded.contains("思考 3"), "点击后正文可见：{}", expanded);
+        let (row, _) = app.visible_fold_rows[0];
+        app.handle_key(&worker, Key::MouseClick { row, col: 0 });
+        let collapsed = joined(&mut app);
+        assert!(collapsed.contains("+Thought"), "再点一次应收起：{}", collapsed);
+    }
+
+    #[test]
+    fn thought_duration_format_is_human_readable() {
+        use std::time::Duration;
+        assert_eq!(format_thought_duration(Duration::from_millis(500)), "500ms");
+        assert_eq!(format_thought_duration(Duration::from_millis(1300)), "1.3s");
+        assert_eq!(format_thought_duration(Duration::from_secs(12)), "12s");
+        assert_eq!(format_thought_duration(Duration::from_secs(65)), "1m 5s");
+    }
+
+    #[test]
+    fn the_thinking_header_shows_the_stream_duration() {
+        let mut app = app();
+        app.handle_ui(UiEvent::Agent(AgentEvent::Thinking("想一个字 ".to_string())));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        app.handle_ui(UiEvent::Agent(AgentEvent::Thinking("再想一个字".to_string())));
+        app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText("答案".to_string())));
+        let joined = app.frame(80, 24).iter().map(|l| strip_ansi(l)).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("Thought · "), "思考块应显示 · 时长：{}", joined);
     }
 
     #[test]

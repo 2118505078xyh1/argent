@@ -12,8 +12,8 @@
         {
           "id": "auto/deepseek-v4.1-flash",
           "name": "Auto (local gateway)",
-          "context": 128000,
-          "maxOutput": 16384,
+          "context": 960000,
+          "maxOutput": 524288,
           "tools": true,
           "reasoning": true
         }

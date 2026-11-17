@@ -159,7 +159,7 @@ impl RawModeGuard {
         const PROCESSED_INPUT: u32 = 0x0001;
         const LINE_INPUT: u32 = 0x0002;
         const ECHO_INPUT: u32 = 0x0004;
-        const QUICK_EDIT_MODE: u32 = 0x0040;
+        const ENABLE_MOUSE_INPUT: u32 = 0x0010;
         const EXTENDED_FLAGS: u32 = 0x0080;
         const VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
@@ -192,11 +192,12 @@ impl RawModeGuard {
             // Turn off line buffering and echo: the UI draws every character
             // itself, so a second echo would double everything on screen.
             raw &= !(LINE_INPUT | ECHO_INPUT | PROCESSED_INPUT);
-            // Quick-edit 必须保留：它是控制台自己的鼠标选中/右键复制粘贴。
-            // 我们不需要向终端要鼠标事件（TUI 不用鼠标操作），关掉它只会让
-            // 用户既选不中文字、也右键粘贴不了。以前这里清掉 QUICK_EDIT_MODE
-            // 正是"选不中、粘不了"的原因。
-            raw |= QUICK_EDIT_MODE | EXTENDED_FLAGS;
+            // 思考块的点击展开需要鼠标事件：这里关掉 Quick-Edit 框选、
+            // 打开 ENABLE_MOUSE_INPUT，鼠标点击会以 MOUSE_EVENT 记录送达。
+            // 代价：终端里不再能用鼠标直接拖选文字，改用 Shift+拖拽
+            // （Windows Terminal 原生支持）。EXTENDED_FLAGS 必须带上，
+            // ENABLE_MOUSE_INPUT 才生效。
+            raw |= ENABLE_MOUSE_INPUT | EXTENDED_FLAGS;
             // Windows Terminal / ConPTY 靠 VT input 把键盘字节流转成按键记录；
             // 关掉它会让 ReadConsoleInputW 在伪终端里收不到任何输入。
             raw |= VIRTUAL_TERMINAL_INPUT;
