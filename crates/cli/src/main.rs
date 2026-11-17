@@ -1368,7 +1368,17 @@ fn run_repl(
             Ok(_) => {}
             Err(e) => return Err(argent_core::Error::io(format!("read prompt failed: {}", e))),
         }
-        let mut prompt = line.trim().to_string();
+        let mut prompt = line.trim_end_matches(['\n', '\r']).trim().to_string();
+        // A line containing Ctrl+E opens $EDITOR, like Pi. The prefix before
+        // it pre-fills the draft.
+        if let Some(index) = prompt.find('\u{5}') {
+            let draft = prompt[..index].trim().to_string();
+            prompt = if draft.is_empty() {
+                "/edit".to_string()
+            } else {
+                format!("/edit {}", draft)
+            };
+        }
         if prompt.is_empty() {
             continue;
         }
@@ -1499,6 +1509,63 @@ enum ReplAction {
     Submit(String),
 }
 
+/// Lines starting with `#` are stripped when the file comes back, so the
+/// editor's instructions never leak into the conversation.
+pub(crate) fn strip_editor_comments(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The editor to open: $VISUAL, then $EDITOR, splitting on whitespace so
+/// `"code --wait"` works. Falls back to notepad/vi.
+fn editor_command() -> Vec<String> {
+    let raw = std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("EDITOR").ok().filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
+    raw.split_whitespace().map(str::to_string).collect()
+}
+
+/// Open the editor on a scratch file seeded with `draft`; return its
+/// contents. The scratch file is removed afterwards.
+fn compose_in_editor(draft: &str) -> Result<String> {
+    let scratch = std::env::temp_dir().join(format!(
+        "argent-prompt-{}-{}.md",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_millis())
+            .unwrap_or(0)
+    ));
+    let seed = if draft.is_empty() {
+        "# Write your prompt below. Lines starting with # are stripped.\n\n".to_string()
+    } else {
+        format!("{}\n\n# Lines starting with # are stripped.\n", draft)
+    };
+    std::fs::write(&scratch, &seed)
+        .map_err(|error| argent_core::Error::io(format!("cannot write {}: {error}", scratch.display())))?;
+    let editor = editor_command();
+    let Some((program, args)) = editor.split_first() else {
+        let _ = std::fs::remove_file(&scratch);
+        return Err(argent_core::Error::io("no editor found (set $EDITOR)".to_string()));
+    };
+    let status = std::process::Command::new(program)
+        .args(args)
+        .arg(&scratch)
+        .status()
+        .map_err(|error| argent_core::Error::io(format!("cannot run {program}: {error}")))?;
+    let text = std::fs::read_to_string(&scratch)
+        .map_err(|error| argent_core::Error::io(format!("cannot read {}: {error}", scratch.display())))?;
+    let _ = std::fs::remove_file(&scratch);
+    if !status.success() {
+        return Err(argent_core::Error::io(format!("{program} exited with {status}")));
+    }
+    Ok(text)
+}
+
 fn repl_command(
     agent: &mut Agent,
     renderer: &mut Renderer,
@@ -1530,6 +1597,7 @@ fn repl_command(
                  /changelog       show this version's changes\n\
                  /tools           list the tools in the schema\n\
                  /provider        show the active provider\n\
+                 /edit            compose a prompt in $EDITOR (or press Ctrl+E)\n\
                  /exit            quit"
             );
         }
@@ -1572,6 +1640,25 @@ fn repl_command(
         }
         "/changelog" => {
             println!("{}", changelog_for_current_version());
+        }
+        "/edit" => {
+            // Compose a prompt in $EDITOR (Pi's Ctrl+E): the only reliable way
+            // to write a long multi-line prompt from a line-oriented console.
+            match compose_in_editor(&argument) {
+                Ok(text) => {
+                    let text = strip_editor_comments(&text).trim().to_string();
+                    if text.is_empty() {
+                        println!("edit cancelled (nothing to send)");
+                        return ReplAction::Continue;
+                    } else {
+                        return ReplAction::Submit(text);
+                    }
+                }
+                Err(error) => {
+                    println!("editor failed: {}", error);
+                    return ReplAction::Continue;
+                }
+            }
         }
         "/session" => {
             // Pi's `/session`: verify the current session file, id, message
@@ -2505,6 +2592,25 @@ pub fn probe_chat(config: &Config, prompt: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn editor_comments_are_stripped_from_a_saved_draft() {
+        let saved = "# Write your prompt below. Lines starting with # are stripped.\n\n\
+                     请帮我把这个函数重构成可测试的形态\n\
+                     要求：\n\
+                     - 保留公开 API\n\
+                     - 先补测试\n\
+                     # trailing note from the user is not stripped mid-way\n";
+        let stripped = strip_editor_comments(saved);
+        assert!(stripped.trim_start().starts_with("请帮我把这个函数重构成可测试的形态"));
+        assert!(stripped.contains("保留公开 API"));
+        assert!(!stripped.contains("Lines starting with #"));
+        // Only lines whose first non-blank character is # are comments.
+        assert!(stripped.contains("保留公开 API"));
+        // A completely blank result means the user cancelled.
+        let empty = strip_editor_comments("# just the instructions\n\n");
+        assert!(empty.trim().is_empty());
+    }
+
     #[test]
     fn session_header_reports_file_title_and_message_count() {
         let dir = std::env::temp_dir().join(format!("argent-repl-session-{}", std::process::id()));
