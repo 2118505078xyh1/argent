@@ -2367,6 +2367,26 @@ pub(crate) fn doctor() -> Result<i32> {
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // 配置体检：拼错的键每次启动都会告警，doctor 里再给一份完整的。
+    match Config::load(&cwd) {
+        Ok(config) if config.unknown_keys.is_empty() => {
+            println!("config             : ok");
+        }
+        Ok(config) => {
+            println!(
+                "config             : {} unknown setting(s)",
+                config.unknown_keys.len()
+            );
+            for (key, source) in &config.unknown_keys {
+                let hint = match argent_core::config::suggest_setting(key) {
+                    Some(known) => format!(" — did you mean \"{known}\"?"),
+                    None => String::new(),
+                };
+                println!("  - \"{key}\" in {source}{hint}");
+            }
+        }
+        Err(error) => println!("config             : load failed: {}", error),
+    }
     match Settings::load(&cwd) {
         Ok(settings) => {
             let mut catalog = ProviderCatalog::builtin();
