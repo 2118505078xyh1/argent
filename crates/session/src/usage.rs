@@ -263,6 +263,56 @@ fn add(into: &mut BTreeMap<String, ModelUsage>, key: &str, record: &UsageRecord)
     entry.cost += record.cost.unwrap_or(0.0);
 }
 
+/// Why prompt tokens were recomputed instead of read from cache.
+///
+/// The ledger has no provider-side trace, so this is a cheap per-session
+/// heuristic over consecutive turns: a cold first turn, an idle gap, a model
+/// switch, a total miss (provider/prefix changed beyond recognition), or a
+/// partial prefix drift. It is meant to point at the biggest bucket, not to
+/// prove causality.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CacheAttribution {
+    pub cold_start: u64,
+    pub idle: u64,
+    pub model_changed: u64,
+    pub prefix_drift: u64,
+    pub provider_cold: u64,
+}
+
+impl CacheAttribution {
+    pub fn total(&self) -> u64 {
+        self.cold_start + self.idle + self.model_changed + self.prefix_drift + self.provider_cold
+    }
+}
+
+/// Attribute missed prompt tokens to the most likely cause.
+pub fn attribute(records: &[UsageRecord]) -> CacheAttribution {
+    // `read_at` preserves file order, which is usually chronological; sort so
+    // a merged or hand-edited ledger still compares neighbouring turns.
+    let mut sorted: Vec<&UsageRecord> = records.iter().collect();
+    sorted.sort_by(|a, b| a.epoch.cmp(&b.epoch).then(a.session.cmp(&b.session)));
+    let mut previous: BTreeMap<&str, &UsageRecord> = BTreeMap::new();
+    let mut out = CacheAttribution::default();
+    for record in sorted {
+        let missed = record.missed_tokens();
+        if missed > 0 {
+            match previous.get(record.session.as_str()) {
+                None => out.cold_start += missed,
+                Some(prev) if prev.model != record.model => out.model_changed += missed,
+                Some(prev) if record.epoch.saturating_sub(prev.epoch) > 300 => {
+                    out.idle += missed
+                }
+                // A complete miss with the same model is either a provider
+                // that does not cache or a prefix the cache could not match.
+                Some(_) if record.cached_tokens == 0 => out.provider_cold += missed,
+                Some(_) => out.prefix_drift += missed,
+            }
+        }
+        previous.insert(record.session.as_str(), record);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +375,35 @@ mod tests {
             ttft_ms: None,
         };
         assert_eq!(record.missed_tokens(), 0);
+    }
+
+    #[test]
+    fn attribution_separates_cold_idle_model_and_prefix_causes() {
+        let record = |epoch, session: &str, model: &str, cached| UsageRecord {
+            epoch,
+            session: session.to_string(),
+            model: model.to_string(),
+            prompt_tokens: 100,
+            completion_tokens: 0,
+            cached_tokens: cached,
+            requests: 1,
+            cost: None,
+            ttft_ms: None,
+        };
+        let records = vec![
+            record(1_000, "a", "m1", 0),   // cold start: 100
+            record(1_010, "a", "m1", 90),  // prefix drift: 10
+            record(1_900, "a", "m1", 90),  // idle: 10
+            record(1_910, "a", "m2", 90),  // model change: 10
+            record(1_920, "a", "m2", 0),   // provider/prefix cold: 100
+            record(1_930, "b", "m2", 0),   // another cold start: 100
+        ];
+        let out = attribute(&records);
+        assert_eq!(out.cold_start, 200);
+        assert_eq!(out.prefix_drift, 10);
+        assert_eq!(out.idle, 10);
+        assert_eq!(out.model_changed, 10);
+        assert_eq!(out.provider_cold, 100);
+        assert_eq!(out.total(), 330);
     }
 }

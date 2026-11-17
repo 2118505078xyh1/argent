@@ -2366,6 +2366,14 @@ fn usage(args: &[String]) -> Result<i32> {
             models.set(name, entry);
         }
         data.set("models", models);
+        let attribution = argent_session::usage::attribute(&records);
+        let mut causes = Json::obj();
+        causes.set("cold_start", Json::num(attribution.cold_start as f64));
+        causes.set("idle", Json::num(attribution.idle as f64));
+        causes.set("model_changed", Json::num(attribution.model_changed as f64));
+        causes.set("prefix_drift", Json::num(attribution.prefix_drift as f64));
+        causes.set("provider_cold", Json::num(attribution.provider_cold as f64));
+        data.set("miss_attribution", causes);
         println!("{}", data.dump_pretty());
         return Ok(0);
     }
@@ -2420,6 +2428,28 @@ fn usage(args: &[String]) -> Result<i32> {
                 model_hit,
                 short_tokens(item.missed_tokens),
                 item.cost
+            );
+        }
+    }
+    if args.iter().any(|arg| arg == "--explain") {
+        let attribution = argent_session::usage::attribute(&records);
+        let total = attribution.total().max(1);
+        println!("cache miss attribution (heuristic):");
+        for (label, tokens) in [
+            ("cold start (first turn)", attribution.cold_start),
+            ("idle gap > 5m", attribution.idle),
+            ("model changed", attribution.model_changed),
+            ("prefix drift (partial)", attribution.prefix_drift),
+            ("provider cold / full miss", attribution.provider_cold),
+        ] {
+            if tokens == 0 {
+                continue;
+            }
+            println!(
+                "  {:<28} {:>8}  {:>3}%",
+                label,
+                short_tokens(tokens),
+                tokens * 100 / total
             );
         }
     }
