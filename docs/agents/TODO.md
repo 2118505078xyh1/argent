@@ -117,3 +117,49 @@
 3. 再下一轮：缓存归因（idle/切换/前缀漂移）→ cache warmer 保活。
 4. 之后：SDK、skills/commands 可视、插件市场、主题系统。
 5. 战略项（agent teams/宿主/远程/发布）等前四项稳定后再评估。
+
+## 下一轮计划（对照 Kimi / DeepSeek Harness，2026-11-18）
+
+档案补齐到七家后的结论：Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，
+DSH 把办公自动化做成了捆绑运行时。argent 的取舍照旧——能力还给模型、单二进制、
+省 token。
+
+### P0
+
+- [ ] **delegate 子代理用便宜模型（`secondaryModel`）**
+  - Kimi `/secondary-model` 已验证此路径。argent 的 delegate 目前用主模型跑子代理，
+    而背景小模型已有 `backgroundModel` 先例——配置加 `secondaryModel`（config +
+    `--secondary-model`），delegate 与 backgroundIntelligence 共用同一解析逻辑。
+  - 直接省 token：子代理干的多是检索/归纳，4B 档模型够用。
+  - 验收：`delegate` 请求的 model 换成 secondary；usage 账本按模型分开可见；无
+    secondary 时回退主模型。
+
+### P1
+
+- [ ] **后台任务/定时任务暴露成模型工具**
+  - Kimi 把 `TaskList/TaskOutput/TaskStop/CronCreate/List/Delete` 做成工具（写类走
+    审批）。argent 的 `jobs`/`automation` crate 能力都在，但模型看不见。
+  - 做法：不加新 crate，只在 tools 注册薄薄一层（`jobs_list`、`jobs_output`、
+    `cron_create` 等写类标 `is_mutating()`），权限沿用现有审批门。
+  - 验收：模型能查看后台任务输出并自行创建定时任务；`tool_search` 目录里可见。
+- [ ] **导入 Claude Code / Codex 会话**
+  - Kimi `/import-sessions` 做迁移友好；argent `sessions` 已有 export，补 import
+    （CC/Codex JSONL → argent 树式会话），工作量小、生态收益直接。
+- [ ] **`/btw` 式侧聊**
+  - 分叉子代理的旁路问答，不打断主回合。argent 已有 delegate 协程基础，TUI 侧加一个
+    独立输入入口即可。先做协议（复用 delegate），再做面板。
+
+### P2
+
+- [ ] **Tower 式多 worktree 任务**：`--worktree` 已有，缺的是"多任务并行 + 状态面板 +
+    teardown 保护脏 worktree"。等 delegate 稳定后评估。
+- [ ] **视频输入**：`ReadMediaFile` 抽帧 → 现有 vision 管道。本地 4B 模型吃不动，
+    优先级低。
+- [ ] **`/goal` 目标队列**：与 follow_ups 重叠度高，先观察 Kimi 的实际用法再决定
+    是否值得。
+
+### 明确不做（对照 DSH）
+
+- 捆绑 Python/Node/MSYS 运行时（违背单二进制；办公文档走 MCP/Rhai 扩展）。
+- IM/微信/QQ 机器人集成（超出本地编码代理定位）。
+- 桌面宠物。
