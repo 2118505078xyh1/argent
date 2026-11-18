@@ -35,7 +35,9 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use argent_agent::{Agent, AgentEvent, EventSink, FinishReason};
 use argent_core::config::ApprovalMode;
@@ -191,7 +193,7 @@ impl ServerRef {
             return write_json(&mut stream, 401, &error_body(&message));
         }
         match path.as_str() {
-            "/v1/events" => self.events(&mut stream),
+            "/v1/events" => self.events(&mut stream, &request),
             "/v1/prompt" => self.prompt(&mut stream, &request),
             "/v1/snapshot" => self.snapshot(&mut stream),
             "/v1/tools" => self.tools(&mut stream),
@@ -293,9 +295,32 @@ impl ServerRef {
         if text.trim().is_empty() {
             return write_json(stream, 400, &error_body("prompt needs a 'text' field"));
         }
+        // A mobile web client already receives the live stream from
+        // /v1/events. Let it start the turn without leaving a second SSE
+        // response body unread, which can backpressure the agent thread.
+        if !Self::wants_event_stream(request) {
+            let agent = Arc::clone(&self.agent);
+            let compaction = Arc::clone(&self.compaction);
+            let bus = Arc::clone(&self.bus);
+            std::thread::spawn(move || {
+                let Ok(mut agent) = agent.lock() else {
+                    return;
+                };
+                let Ok(mut compaction) = compaction.lock() else {
+                    return;
+                };
+                let mut sink = SseSink { stream: None, bus };
+                let result = run_turn(&mut agent, &mut compaction, &text, &mut sink);
+                sink.finish(&result);
+            });
+            let mut body = Json::obj();
+            body.set("accepted", Json::bool(true));
+            return write_json(stream, 200, &body);
+        }
         let head = "HTTP/1.1 200 OK\r\n\
                     content-type: text/event-stream\r\n\
-                    cache-control: no-cache\r\n\
+                    cache-control: no-cache, no-transform\r\n\
+                    x-accel-buffering: no\r\n\
                     connection: close\r\n\r\n";
         stream
             .write_all(head.as_bytes())
@@ -323,18 +348,39 @@ impl ServerRef {
         Ok(())
     }
 
+    /// `/v1/prompt` defaults to SSE for existing CLI clients. Web/mobile can
+    /// ask for a JSON acknowledgement and receive events from `/v1/events`.
+    fn wants_event_stream(request: &Request) -> bool {
+        if !request.body.bool_or("stream", true) {
+            return false;
+        }
+        if request
+            .header("accept")
+            .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
+        {
+            return false;
+        }
+        true
+    }
+
     /// `GET /v1/events`：订阅事件流。
     ///
-    /// 先回放环形缓冲里已有的事件（晚接上的 attach 不会漏掉开头），再
-    /// 跟着实时流走。客户端断开即退订。
-    fn events(&self, stream: &mut TcpStream) -> Result<()> {
+    /// 先回放最近的尾部事件，再跟着实时流走。客户端断开即退订；
+    /// `Last-Event-ID` 只补发该 id 之后的事件，避免手机每次重连都重放整段历史。
+    fn events(&self, stream: &mut TcpStream, request: &Request) -> Result<()> {
         let head = "HTTP/1.1 200 OK\r\n\
                     content-type: text/event-stream\r\n\
-                    cache-control: no-cache\r\n\
+                    cache-control: no-cache, no-transform\r\n\
+                    x-accel-buffering: no\r\n\
                     connection: close\r\n\r\n";
         stream
             .write_all(head.as_bytes())
             .map_err(|e| Error::io(format!("write failed: {}", e)))?;
+        // A short retry keeps a phone from hammering the server after a
+        // network handoff, while the id fields make EventSource resume.
+        if stream.write_all(b"retry: 3000\n\n").is_err() {
+            return Ok(());
+        }
         // 先发一帧 ready：审批策略是 attach 端画 YOLO 徽标的依据。
         let ready = format!(
             "event: ready\ndata: {{\"approval\":\"{}\"}}\n\n",
@@ -343,18 +389,34 @@ impl ServerRef {
         if stream.write_all(ready.as_bytes()).is_err() {
             return Ok(());
         }
-        for frame in self.bus.snapshot() {
+        let last_id = request
+            .header("last-event-id")
+            .and_then(|value| value.trim().parse::<u64>().ok());
+        let (replay, receiver) = self.bus.subscribe_since(last_id);
+        for frame in replay {
             if stream.write_all(frame.as_bytes()).is_err() {
                 return Ok(());
             }
         }
         let _ = stream.flush();
-        let receiver = self.bus.subscribe();
-        for frame in receiver {
-            if stream.write_all(frame.as_bytes()).is_err() {
-                break;
+        loop {
+            match receiver.recv_timeout(KEEPALIVE_INTERVAL) {
+                Ok((_id, frame)) => {
+                    if stream.write_all(frame.as_bytes()).is_err() {
+                        break;
+                    }
+                    let _ = stream.flush();
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    // Mobile carriers and reverse proxies commonly drop an
+                    // idle SSE connection. A comment frame keeps it alive.
+                    if stream.write_all(b": keepalive\n\n").is_err() {
+                        break;
+                    }
+                    let _ = stream.flush();
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
             }
-            let _ = stream.flush();
             // 一轮结束也不关流：attach 要能继续看到下一轮、继续发话。
             // 连接只在客户端断开或服务进程退出时结束。
         }
@@ -567,45 +629,106 @@ fn write_json(stream: &mut TcpStream, status: u16, body: &Json) -> Result<()> {
 ///
 /// `prompt` 把事件同时写进订阅者套接字和这里的环形缓冲，所以晚到的
 /// attach 先回放最近的事件，再跟实时流。
+/// Keep enough history for diagnostics, but only replay a short tail to a
+/// reconnecting phone. A long token stream should not turn every reconnect
+/// into a multi-thousand-frame download.
+const EVENT_HISTORY_LIMIT: usize = 4_000;
+const EVENT_REPLAY_LIMIT: usize = 200;
+const SUBSCRIBER_QUEUE: usize = 256;
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
 struct EventBus {
-    history: Mutex<VecDeque<String>>,
-    subscribers: Mutex<Vec<std::sync::mpsc::Sender<String>>>,
+    state: Mutex<BusState>,
+}
+
+struct BusState {
+    next_id: u64,
+    history: VecDeque<(u64, String)>,
+    subscribers: Vec<SyncSender<(u64, String)>>,
 }
 
 impl EventBus {
     fn new() -> EventBus {
         EventBus {
-            history: Mutex::new(VecDeque::new()),
-            subscribers: Mutex::new(Vec::new()),
+            state: Mutex::new(BusState {
+                next_id: 0,
+                history: VecDeque::new(),
+                subscribers: Vec::new(),
+            }),
         }
     }
 
-    fn publish(&self, frame: String) {
-        if let Ok(mut history) = self.history.lock() {
-            history.push_back(frame.clone());
-            // 回的只够一个会话的尾部：attach 重连时不需要看几万行。
-            while history.len() > 4_000 {
-                history.pop_front();
-            }
-        }
-        if let Ok(mut list) = self.subscribers.lock() {
-            list.retain(|sender| sender.send(frame.clone()).is_ok());
-        }
-    }
-
-    fn snapshot(&self) -> Vec<String> {
-        self.history
+    /// Assign an SSE id, remember the frame, and fan it out without letting a
+    /// slow phone block the agent. A full subscriber queue is dropped; its
+    /// client reconnects and resumes from the last event id it saw.
+    fn publish(&self, frame: String) -> String {
+        let mut state = self
+            .state
             .lock()
-            .map(|history| history.iter().cloned().collect())
-            .unwrap_or_default()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.next_id += 1;
+        let id = state.next_id;
+        let frame = format!("id: {}\n{}", id, frame);
+        state.history.push_back((id, frame.clone()));
+        while state.history.len() > EVENT_HISTORY_LIMIT {
+            state.history.pop_front();
+        }
+        state
+            .subscribers
+            .retain(|sender| match sender.try_send((id, frame.clone())) {
+                Ok(()) => true,
+                Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
+            });
+        frame
     }
 
-    fn subscribe(&self) -> std::sync::mpsc::Receiver<String> {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        if let Ok(mut list) = self.subscribers.lock() {
-            list.push(sender);
-        }
-        receiver
+    /// Atomically snapshot the replay tail and register the live subscriber.
+    /// Doing both under one lock means no event can fall into the gap between
+    /// replay and live streaming.
+    fn subscribe_since(&self, last_id: Option<u64>) -> (Vec<String>, Receiver<(u64, String)>) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let start = match last_id {
+            Some(id) => state
+                .history
+                .iter()
+                .position(|(event_id, _)| *event_id > id)
+                .unwrap_or(state.history.len()),
+            None => state.history.len().saturating_sub(EVENT_REPLAY_LIMIT),
+        };
+        // If the client has been away longer than the replay window, prefer a
+        // recent tail over replaying thousands of stale token deltas.
+        let start = if state.history.len().saturating_sub(start) > EVENT_REPLAY_LIMIT {
+            state.history.len().saturating_sub(EVENT_REPLAY_LIMIT)
+        } else {
+            start
+        };
+        let replay = state
+            .history
+            .iter()
+            .skip(start)
+            .take(EVENT_REPLAY_LIMIT)
+            .map(|(_, frame)| frame.clone())
+            .collect();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(SUBSCRIBER_QUEUE);
+        state.subscribers.push(sender);
+        (replay, receiver)
+    }
+
+    #[cfg(test)]
+    fn snapshot(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .map(|state| {
+                state
+                    .history
+                    .iter()
+                    .map(|(_, frame)| frame.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -619,7 +742,7 @@ impl SseSink {
     /// bus every attached reader is on.
     fn write(&self, event: &str, data: &Json) {
         let frame = format!("event: {}\ndata: {}\n\n", event, data.dump());
-        self.bus.publish(frame.clone());
+        let frame = self.bus.publish(frame);
         if let Some(stream) = &self.stream {
             if let Ok(mut stream) = stream.lock() {
                 let _ = stream.write_all(frame.as_bytes());
@@ -798,19 +921,36 @@ mod tests {
         bus.publish("event: finished\ndata: {}\n\n".to_string());
         let snapshot = bus.snapshot();
         assert_eq!(snapshot.len(), 2);
-        assert!(snapshot[0].starts_with("event: turn_start"));
-        assert!(snapshot[1].starts_with("event: finished"));
+        assert!(snapshot[0].starts_with("id: 1\nevent: turn_start"));
+        assert!(snapshot[1].starts_with("id: 2\nevent: finished"));
     }
 
     #[test]
     fn a_subscriber_sees_what_comes_after_it_joined() {
         let bus = EventBus::new();
-        let receiver = bus.subscribe();
+        let (replay, receiver) = bus.subscribe_since(None);
+        assert!(replay.is_empty());
         bus.publish("event: text\ndata: {}\n\n".to_string());
-        let frame = receiver
+        let (id, frame) = receiver
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("frame");
-        assert!(frame.starts_with("event: text"));
+        assert_eq!(id, 1);
+        assert!(frame.starts_with("id: 1\nevent: text"));
+    }
+
+    #[test]
+    fn a_reconnect_replays_only_the_tail_or_the_missing_range() {
+        let bus = EventBus::new();
+        for index in 0..300 {
+            bus.publish(format!("event: text\ndata: {{\"n\":{}}}\n\n", index));
+        }
+        let (replay, _) = bus.subscribe_since(None);
+        assert_eq!(replay.len(), EVENT_REPLAY_LIMIT);
+        assert!(replay[0].contains("\"n\":100"), "{}", replay[0]);
+
+        let (missing, _) = bus.subscribe_since(Some(250));
+        assert_eq!(missing.len(), 50);
+        assert!(missing[0].contains("\"n\":250"), "{}", missing[0]);
     }
 
     #[test]
@@ -820,7 +960,7 @@ mod tests {
             bus.publish(format!("event: text\ndata: {{\"n\":{}}}\n\n", index));
         }
         let snapshot = bus.snapshot();
-        assert_eq!(snapshot.len(), 4_000);
+        assert_eq!(snapshot.len(), EVENT_HISTORY_LIMIT);
         // The oldest frames are the ones that go.
         assert!(snapshot[0].contains("\"n\":100"));
     }
@@ -835,7 +975,7 @@ mod tests {
         sink.write("text", &Json::obj());
         let snapshot = bus.snapshot();
         assert_eq!(snapshot.len(), 1);
-        assert!(snapshot[0].starts_with("event: text"));
+        assert!(snapshot[0].starts_with("id: 1\nevent: text"));
         assert!(snapshot[0].contains("data: "));
     }
 
@@ -870,6 +1010,19 @@ mod tests {
             bus: Arc::clone(&server.bus),
             approval: server.approval.clone(),
         }
+    }
+
+    #[test]
+    fn a_prompt_can_request_a_json_ack() {
+        let mut request = request_with(None);
+        request.body = Json::parse(r#"{"text":"hello","stream":false}"#).unwrap();
+        assert!(!ServerRef::wants_event_stream(&request));
+
+        request.body = Json::obj();
+        assert!(ServerRef::wants_event_stream(&request));
+
+        request.headers = vec![("accept".to_string(), "application/json".to_string())];
+        assert!(!ServerRef::wants_event_stream(&request));
     }
 
     #[test]

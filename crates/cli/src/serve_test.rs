@@ -176,6 +176,21 @@ fn a_prompt_comes_back_as_server_sent_events() {
 }
 
 #[test]
+fn a_prompt_can_be_acknowledged_without_sse() {
+    let address = start_server(Some("secret"));
+    let (status, body) = request(
+        &address,
+        "POST",
+        "/v1/prompt",
+        Some("secret"),
+        Some("{\"text\":\"hello\",\"stream\":false}"),
+    );
+    assert_eq!(status, 200);
+    assert!(body.contains("\"accepted\":true"), "body was: {}", body);
+    assert!(!body.contains("event:"), "body was: {}", body);
+}
+
+#[test]
 fn an_unknown_endpoint_is_a_404() {
     let address = start_server(Some("secret"));
     let (status, _) = request(&address, "GET", "/v1/nope", Some("secret"), None);

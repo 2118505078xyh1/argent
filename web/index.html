@@ -22,6 +22,29 @@ textarea{width:100%;min-height:5rem}button{background:#d77757;border:0;cursor:po
 const $ = id => document.getElementById(id);
 $('token').value = sessionStorage.getItem('argent-token') || '';
 const headers = () => ({'content-type':'application/json','authorization':'Bearer '+$('token').value});
+const out = $('out');
+const MAX_LINES = 2000;
+let pending = '';
+let shown = '';
+let scheduled = false;
+const schedule = window.requestAnimationFrame || (cb => setTimeout(cb, 50));
+function flush() {
+  scheduled = false;
+  if (!pending) return;
+  shown += pending;
+  pending = '';
+  const lines = shown.split('\n');
+  if (lines.length > MAX_LINES) shown = lines.slice(-MAX_LINES).join('\n');
+  out.textContent = shown;
+}
+function append(text) {
+  if (!text) return;
+  pending += text;
+  if (!scheduled) {
+    scheduled = true;
+    schedule(flush);
+  }
+}
 function connect() {
   const token = $('token').value;
   sessionStorage.setItem('argent-token', token);
@@ -30,7 +53,7 @@ function connect() {
     try {
       const frame = JSON.parse(event.data);
       const text = frame.text || frame.data?.text;
-      if (text) $('out').textContent += text;
+      if (text) append(text);
     } catch (_) {}
   };
   source.addEventListener('text', show);
@@ -40,11 +63,21 @@ $('token').onchange = () => { sessionStorage.setItem('argent-token',$('token').v
 $('send').onclick = async () => {
   const text = $('prompt').value.trim();
   if (!text) return;
-  $('out').textContent += '\n› ' + text + '\n';
+  append('\n› ' + text + '\n');
   $('prompt').value = '';
-  await fetch('/v1/prompt', {method:'POST', headers: headers(), body: JSON.stringify({text})});
+  try {
+    const response = await fetch('/v1/prompt', {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({text, stream: false})
+    });
+    if (!response.ok) append('\n! send failed: ' + response.status + '\n');
+    else await response.json();
+  } catch (error) {
+    append('\n! send failed: ' + error + '\n');
+  }
 };
-$('stop').onclick = () => fetch('/v1/abort', {method:'POST', headers: headers()});
+$('stop').onclick = () => fetch('/v1/abort', {method: 'POST', headers: headers()});
 connect();
 </script>
 </body>
