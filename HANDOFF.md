@@ -117,7 +117,8 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
    icons/publisher/category 已填。安装 `tauri-cli 2.12.6` 后实测
    `cargo tauri build --bundles nsis` 产出 `Argent_0.3.2_x64-setup.exe`（3.46 MiB），
    `--bundles msi` 产出 `Argent_0.3.2_x64_en-US.msi`（5.10 MiB）；release 二进制
-   也通过 CDP 冒烟。**剩余**：代码签名与自动更新通道。
+   也通过 CDP 冒烟。最终重打包：NSIS 3.49 MiB / MSI 5.15 MiB，release 二进制
+   再次通过 CDP 冒烟。**剩余**：代码签名与自动更新通道。
 8. **阶段 2 追加完成 ✅（2026-11-19）**：Loaded 事件重放五种 Entry、斜杠命令
    （含 `/compact`，`ui-core::Command::Compact` + engine 处理）、cost/requests
    状态栏、会话列表搜索/分组/相对时间、模型窗口与思考档位从 Ready 带出并持久化、
