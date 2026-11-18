@@ -91,7 +91,9 @@ settings 的 `tools.include` / `tools.exclude`、profile 的 `tools` /
 `readOnly: true` 直接拿掉所有 `is_mutating()` 工具。
 
 此外，`permissions` 块是一道**独立于审批的硬门禁**：路径/命令/工具黑名单
-在审批弹窗之前生效，被拒的调用第二次重试时直接结束运行。详见“安全”一节。
+在审批弹窗之前生效，被拒的调用按“工具 + 归一化原因”计数，第二次同类拒绝
+直接结束运行。路径规则同时检查词法路径和 canonical 目标，symlink 不能把
+`allowPaths` 内的路径带到被拒目录。详见“安全”一节。
 
 ### 4. 审计日志与密钥脱敏
 
@@ -103,8 +105,9 @@ argent policy                    # 当前生效的权限规则
 argent doctor                    # 终端、provider、profiles、策略、审计路径
 ```
 
-`sk-…`、`ghp_…`、`AKIA…`、JWT、`Bearer …`、`api_key=…` 在进入日志前
-替换成 `[redacted:*]`，所以日志可以直接贴进 issue。
+`sk-…`、`ghp_…`、`AKIA…`、JWT、`Bearer …` 以及 `password` / `token` /
+`api_key` 等键的 JSON 值在进入日志前替换成 `[redacted:*]`；审计 reason 也
+经过同一脱敏。所以日志可以直接贴进 issue。
 
 ### 5. HTTP 服务
 
@@ -117,18 +120,26 @@ argent --serve --serve-port 7777 --serve-token mytoken
 
 | 端点 | 说明 |
 |---|---|
-| `POST /v1/prompt` | 以 `text/event-stream` 流式返回 `turn_start` / `text` / `tool_requested` / `tool_finished` / `finished` / `result`。 |
-| `GET /v1/snapshot` | 模型、请求数、token 用量和完整消息历史。 |
-| `GET /v1/tools` | 当前可见工具。 |
-| `GET /v1/models` | provider 的模型目录。 |
-| `GET /v1/history` | 消息历史。 |
+| `GET /v1/events` | 常驻 SSE：先回放最近 200 帧，再转发实时事件；带事件 id、`Last-Event-ID` 续传、15 秒 keepalive 和有界订阅队列。 |
+| `POST /v1/prompt` | 默认以 `text/event-stream` 返回一轮事件；传 `{"text":"...","stream":false}` 或 `Accept: application/json` 时只返回 `{"accepted":true}`，事件统一走 `/v1/events`。 |
+| `POST /v1/snapshot` | 模型、请求数、token 用量和完整消息历史。 |
+| `POST /v1/tools` | 当前可见工具。 |
+| `POST /v1/models` | provider 的模型目录。 |
+| `POST /v1/history` | 消息历史。 |
 | `POST /v1/clear` | 清空历史。 |
 | `POST /v1/abort` | 中止当前回合。 |
+| `POST /v1/compact` | 立即压缩上下文。 |
+| `POST /v1/steer` | 给运行中的回合插话。 |
 | `GET /v1/health` | 唯一不需要 token 的端点。 |
 
+`/` 是内置的手机/远程页面：发送 prompt 时只取 JSON ack，文本更新按
+`requestAnimationFrame` 合并，最多保留最近 2000 行；断线重连自动带
+`Last-Event-ID`，不会重复回放整段历史。
+
 默认只绑 `127.0.0.1`；`--serve-address` 改地址，`--serve-token` 或
-`ARGENT_SERVE_TOKEN` 启用 Bearer 认证。9 个集成测试用真实 HTTP 连接验证了
-认证、SSE、历史与未知端点。
+`ARGENT_SERVE_TOKEN` 启用 Bearer 认证。EventSource 不能设置请求头，手机页面
+把 token 放在 `/v1/events?token=...`；其他端点仍要求 `Authorization` 头。
+集成测试用真实 HTTP 连接覆盖认证、SSE 续传、历史与未知端点。
 
 ### 6. 纯 Rust 进程内插件
 
@@ -480,6 +491,13 @@ argent --sessions               列出已有会话
   thinking delta、usage/cache 统计。
 - 核心工具（`read`、`write`、`edit`、`bash`）加上 explore、plan、memory、
   skills、web、codeintel、jobs、subagents、device 工具。
+- 可续传的手机/远程同步：`/v1/events` 带事件 id、`Last-Event-ID` 回放、
+  15 秒心跳和 200 帧尾部；`/v1/prompt` 支持 `stream=false` JSON ack，
+  内置 `/` 页面按帧合并 DOM。
+- 前端回合契约：prompt 失败终态、审批、切会话、rewind/fork 在 TUI、
+  engine、ACP 三端有共享契约和确定性回归测试。
+- 跨平台 CI：Windows 全量、Linux/macOS portable crates、单线程稳定性跑；
+  并发与固定 sleep 的测试竞态已收口。
 - 文件检查点：write/edit 改文件前留快照，TUI/REPL/桌面的 `/rewind [n]`
   按运行回滚（恢复旧内容、删除新建文件），native 窗口有“↶ 回滚”按钮；
   子代理的写入记在父运行里。
@@ -700,9 +718,14 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 - **审计日志（默认开启）**：每次工具调用的决定（`allowed` / `blocked` /
   `blocked-again` / `declined` / `failed`）与**脱敏后的**参数写入
   `~/.argent/audit/<day>.jsonl`。`argent audit` 查看最近 50 条。
-- **密钥脱敏**：`sk-…`、`ghp_…`、`AKIA…`、JWT、`Bearer …`、
-  `api_key=…` 形态的凭据在进入审计日志前替换为 `[redacted:*]` 占位符，
-  日志可以安全地贴进 bug 报告。
+- **密钥脱敏**：`sk-…`、`ghp_…`、`AKIA…`、JWT、`Bearer …` 以及
+  `password` / `token` / `api_key` 等键的 JSON 值在进入审计日志前替换为
+  `[redacted:*]` 占位符，审计 reason 也一并脱敏；日志可以安全地贴进 bug
+  报告。
+- **路径与安装面硬化**：策略同时检查词法路径和 canonical 目标，symlink
+  不能绕过 allow/deny；插件名必须是单个安全路径段，安装目标再做
+  canonical containment；marketplace 的 git source 拒绝 `-` 开头和含控制
+  字符的值。插件签名仍由 `pluginSignature: required|warn|off` 控制。
 - 标记为危险的工具受审批策略约束：`plan`/`build` 全部审批，`edit`/`guarded`
   只审危险调用，`yolo` 不审。
 - 工具和 hook 的 shell 命令优先用 bash（Windows 上是 Git Bash），机器上没有

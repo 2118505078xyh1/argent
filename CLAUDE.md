@@ -121,7 +121,10 @@ cli -> every crate except engine / native
   only → patch) and sync the workspace `version` → commit → push master →
   annotated tag `vX.Y.Z` + push tag → build release binaries → GitHub
   Release with the CHANGELOG section as notes and Windows zips attached.
-- Commit author must stay `argent-dev <dev@argent.local>`; credentials go
-  through the Windows credential manager, never into output or files.
+- Commit author is the repo-local git identity: `寒弦问月夜未阑 <hanxian@local>`
+  (`git config --local user.name/user.email`). Do not set a global identity or
+  rewrite published history; older `argent-dev` commits stay as they are.
+  Credentials go through the Windows credential manager, never into output or
+  files.
 
 Further reading: `README.md` (feature overview), `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/PARITY.md` (component-by-component mapping to ZCode and Pi).

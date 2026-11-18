@@ -3,8 +3,27 @@
 All notable changes to argent are documented here. The format is a loose
 Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
-## Unreleased
+## 0.3.0 — 2026-11-18
 
+- **Mobile remote sync is resumable and cheaper.** `/v1/prompt` accepts
+  `stream=false` and returns a JSON acknowledgement while the turn streams
+  through `/v1/events`; SSE now carries event ids, `Last-Event-ID` replay,
+  a 200-frame tail, 15s keepalives and bounded subscriber queues. The phone
+  page batches DOM updates and keeps only the recent transcript tail.
+- **Security hardening.** Plugin names are validated and install targets
+  canonicalized; marketplace git sources reject option-like input and use
+  `--`; policy paths resolve symlinks; repeated denials are counted by tool
+  and reason; audit JSON and hook reasons are scrubbed structurally.
+- **Frontend turn contract.** A shared `argent-ui-core` contract now covers
+  prompt-failure terminal events, approvals, session switches, rewind and
+  fork across TUI, engine and ACP, with one deterministic test per intent.
+- **Smaller modules.** TUI tests, input editing and the session picker moved
+  out of `app.rs`; tool dispatch moved out of `agent_loop.rs`; the workspace
+  no longer globally allows `type_complexity`.
+- **CI and determinism.** Linux portable tests, a single-threaded stability
+  job and a macOS portable job were added; the jobs kill test waits for a
+  running child instead of sleeping, and session ordering uses the
+  millisecond filename tiebreak.
 - **Subagents run on a cheaper model (`secondaryModel`)**. Delegate
   children default to a configured secondary model (config key or
   `--secondary-model`) instead of the primary conversation model;
