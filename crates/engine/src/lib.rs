@@ -331,9 +331,10 @@ pub fn start_session(
                     ) {
                         Some(_) => {
                             let after = argent_agent::estimate_tokens(agent.history());
-                            let entries = argent_ui_core::Transcript::from_messages(agent.history())
-                                .entries()
-                                .to_vec();
+                            let entries =
+                                argent_ui_core::Transcript::from_messages(agent.history())
+                                    .entries()
+                                    .to_vec();
                             let _ = event_tx.send(UiEvent::Loaded(entries));
                             let _ = event_tx.send(UiEvent::Agent(AgentEvent::Notice(format!(
                                 "context compacted: {} -> {} tokens",
@@ -1364,7 +1365,8 @@ mod session_worker_tests {
 
     #[test]
     fn compact_command_reports_when_history_is_empty() {
-        let dir = std::env::temp_dir().join(format!("argent-engine-compact-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("argent-engine-compact-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let config = Config {
@@ -1378,7 +1380,9 @@ mod session_worker_tests {
         let mut saw = false;
         while std::time::Instant::now() < deadline {
             match engine.events.recv_timeout(Duration::from_millis(500)) {
-                Ok(UiEvent::Agent(AgentEvent::Notice(text))) if text.contains("nothing to compact") => {
+                Ok(UiEvent::Agent(AgentEvent::Notice(text)))
+                    if text.contains("nothing to compact") =>
+                {
                     saw = true;
                     break;
                 }

@@ -358,7 +358,11 @@ pub fn get_state(state: State<'_, Backend>) -> Value {
 pub fn new_tab(state: State<'_, Backend>, app: AppHandle) -> Result<String, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let config = prepare_config(&cwd)?;
-    let sid = state.shared.next_tab.fetch_add(1, Ordering::Relaxed).to_string();
+    let sid = state
+        .shared
+        .next_tab
+        .fetch_add(1, Ordering::Relaxed)
+        .to_string();
     let engine = start_session(config, cwd, None, Arc::clone(&state.shared.approval_ids));
     let handle = Arc::new(SessionHandle {
         engine: Mutex::new(engine),
@@ -705,7 +709,10 @@ pub fn list_extensions() -> Result<Value, String> {
     commands.extend(list_markdown_names(&cwd.join(".argent").join("commands")));
 
     let mut hooks = Vec::new();
-    for path in [global.join("hooks.json"), cwd.join(".argent").join("hooks.json")] {
+    for path in [
+        global.join("hooks.json"),
+        cwd.join(".argent").join("hooks.json"),
+    ] {
         let Ok(body) = std::fs::read_to_string(path) else {
             continue;
         };
@@ -792,7 +799,11 @@ pub fn import_session_text(
 }
 
 #[tauri::command]
-pub fn search_sessions(state: State<'_, Backend>, query: String, limit: usize) -> Result<Value, String> {
+pub fn search_sessions(
+    state: State<'_, Backend>,
+    query: String,
+    limit: usize,
+) -> Result<Value, String> {
     let needle = query.trim().to_ascii_lowercase();
     if needle.is_empty() {
         return Ok(json!([]));
@@ -846,7 +857,8 @@ fn collect_documents(dir: &std::path::Path, depth: usize, out: &mut Vec<Value>) 
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let mut children: Vec<std::path::PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    let mut children: Vec<std::path::PathBuf> =
+        entries.flatten().map(|entry| entry.path()).collect();
     children.sort();
     for path in children {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -887,7 +899,8 @@ fn collect_files(
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let mut children: Vec<std::path::PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    let mut children: Vec<std::path::PathBuf> =
+        entries.flatten().map(|entry| entry.path()).collect();
     children.sort();
     for path in children {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -905,7 +918,11 @@ fn collect_files(
             .unwrap_or(&path)
             .to_string_lossy()
             .into_owned();
-        if query.is_empty() || relative.to_ascii_lowercase().contains(&query.to_ascii_lowercase()) {
+        if query.is_empty()
+            || relative
+                .to_ascii_lowercase()
+                .contains(&query.to_ascii_lowercase())
+        {
             out.push(relative);
         }
     }
@@ -976,11 +993,7 @@ pub fn list_automations() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn create_automation(
-    name: String,
-    schedule: String,
-    prompt: String,
-) -> Result<(), String> {
+pub fn create_automation(name: String, schedule: String, prompt: String) -> Result<(), String> {
     let name = name.trim();
     let prompt = prompt.trim();
     if name.is_empty() || prompt.is_empty() {
