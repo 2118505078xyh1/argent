@@ -441,3 +441,62 @@ impl Agent {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoProvider;
+
+    impl argent_ai::Provider for NoProvider {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        fn models(&self) -> argent_core::error::Result<Vec<argent_ai::ModelInfo>> {
+            Ok(Vec::new())
+        }
+
+        fn chat(
+            &self,
+            _request: &argent_ai::ChatRequest,
+        ) -> argent_core::error::Result<
+            Box<dyn Iterator<Item = argent_core::error::Result<argent_ai::StreamEvent>> + Send>,
+        > {
+            unreachable!("the gate test never calls the provider")
+        }
+    }
+
+    fn agent(approval: Option<bool>) -> Agent {
+        let mut config = AgentConfig::new("test");
+        config.policy_approval = approval.map(|value| {
+            std::sync::Arc::new(move |_: &str, _: &Json| Some(value))
+                as std::sync::Arc<dyn crate::config::PolicyApproval>
+        });
+        Agent::new(
+            Box::new(NoProvider),
+            std::sync::Arc::new(ToolRegistry::with_core()),
+            config,
+            ToolCtx::new(std::env::temp_dir()),
+            "system",
+        )
+    }
+
+    #[test]
+    fn an_ask_rule_blocks_without_an_approval_channel() {
+        let mut agent = agent(Some(true));
+        let call = argent_ai::ToolCall::new("c1", "bash", r#"{"command":"echo hi"}"#);
+        let outcome = agent
+            .gate_decision(&call, &call.parsed_args())
+            .expect("ask must block");
+        assert!(outcome.is_error);
+        assert!(outcome.content.contains("no approval channel"));
+    }
+
+    #[test]
+    fn an_allow_rule_skips_approval() {
+        let mut agent = agent(Some(false));
+        let call = argent_ai::ToolCall::new("c1", "bash", r#"{"command":"echo hi"}"#);
+        assert!(agent.gate_decision(&call, &call.parsed_args()).is_none());
+    }
+}
