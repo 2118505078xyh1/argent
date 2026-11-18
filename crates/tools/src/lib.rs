@@ -1,7 +1,6 @@
 //! argent tool layer: the tool trait, built-in tools and the registry.
-pub mod apply_patch;
-pub use apply_patch::ApplyPatchTool;
 
+pub mod apply_patch;
 pub mod bash;
 pub mod checkpoint;
 pub mod codemode;
@@ -18,6 +17,7 @@ pub mod tool;
 pub mod toolsearch;
 pub mod websearch;
 
+pub use apply_patch::ApplyPatchTool;
 pub use bash::{locate_posix_shell, BashTool, CurrentTimeTool, ShellFlavor};
 pub use checkpoint::CheckpointStore;
 pub use codemode::{CodeTool, RunnerSlot, ToolGate, ToolRunner};
