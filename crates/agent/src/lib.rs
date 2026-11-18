@@ -14,6 +14,7 @@ pub use agent_loop::{
     prune_tool_spills, AbortHandle, Agent, AgentConfig, StreamFailure, DEFAULT_MAX_TURNS,
 };
 pub use child::ChildFactory;
+pub use config::{ApprovalScope, Budget, CacheWarming, FollowUpMode, PolicyApproval};
 pub use context::{project_instructions, session_context};
 pub use events::{
     event_from_json, event_to_json, AgentEvent, CollectingSink, EventSink, FinishReason, NullSink,
