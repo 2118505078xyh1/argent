@@ -1,19 +1,27 @@
 import { For, createSignal, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 
-type ExtensionList = { skills: string[]; commands: string[]; hooks: string[] };
+type ExtensionList = {
+  skills: string[];
+  commands: string[];
+  hooks: string[];
+  mcpServers: string[];
+};
 
 export default function Extensions() {
   const [data, setData] = createSignal<ExtensionList>({
     skills: [],
     commands: [],
     hooks: [],
+    mcpServers: [],
   });
   const [error, setError] = createSignal("");
 
   onMount(async () => {
     try {
-      setData(await invoke<ExtensionList>("list_extensions"));
+      const extensions = await invoke<Omit<ExtensionList, "mcpServers">>("list_extensions");
+      const servers = await invoke<string[]>("list_mcp_servers");
+      setData({ ...extensions, mcpServers: servers });
     } catch (err) {
       setError(String(err));
     }
@@ -23,6 +31,7 @@ export default function Extensions() {
     { title: "Skills", items: () => data().skills, empty: "暂无 skills" },
     { title: "自定义命令", items: () => data().commands, empty: "暂无自定义命令" },
     { title: "Hooks", items: () => data().hooks, empty: "暂无 hooks" },
+    { title: "MCP 服务", items: () => data().mcpServers, empty: "暂无 MCP 服务" },
   ];
 
   return (

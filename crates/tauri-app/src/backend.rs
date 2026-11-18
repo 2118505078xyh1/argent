@@ -658,6 +658,35 @@ fn list_markdown_names(dir: &std::path::Path) -> Vec<String> {
 }
 
 #[tauri::command]
+pub fn list_mcp_servers() -> Result<Value, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let global = config_root();
+    let mut names = Vec::new();
+    for path in [
+        global.join("settings.json"),
+        cwd.join(".argent").join("settings.json"),
+    ] {
+        let Ok(body) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&body) else {
+            continue;
+        };
+        for pointer in ["/mcpServers", "/mcp/servers"] {
+            if let Some(map) = value.pointer(pointer).and_then(Value::as_object) {
+                for key in map.keys() {
+                    if !names.contains(key) {
+                        names.push(key.clone());
+                    }
+                }
+            }
+        }
+    }
+    names.sort();
+    Ok(json!(names))
+}
+
+#[tauri::command]
 pub fn git_status() -> Result<Value, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let output = std::process::Command::new("git")
