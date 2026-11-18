@@ -210,15 +210,16 @@ async def run(args):
                 # Secondary screens must mount without blocking the chat worker.
                 await cdp.eval(
                     "Array.from(document.querySelectorAll('.side-tabs button'))"
-                    ".find((b) => b.textContent.includes('记忆')).click()"
+                    ".find((b) => /记忆|Memory/.test(b.textContent)).click()"
                 )
                 await cdp.wait_for(
-                    "document.querySelector('.page h2')?.textContent.includes('长期记忆')",
+                    "/长期记忆|Memory/.test("
+                    "  document.querySelector('.page h2')?.textContent || '')",
                     label="memory page",
                 )
                 await cdp.eval(
                     "Array.from(document.querySelectorAll('.side-tabs button'))"
-                    ".find((b) => b.textContent.includes('聊天')).click()"
+                    ".find((b) => /聊天|Chat/.test(b.textContent)).click()"
                 )
                 await cdp.wait_for("!!document.querySelector('textarea')", label="chat restored")
 

@@ -1172,25 +1172,25 @@ function App() {
             classList={{ active: screen() === "memory" }}
             onClick={() => setScreen("memory")}
           >
-            记忆
+            {t(locale(), "memory")}
           </button>
           <button
             classList={{ active: screen() === "extensions" }}
             onClick={() => setScreen("extensions")}
           >
-            扩展
+            {t(locale(), "extensions")}
           </button>
           <button
             classList={{ active: screen() === "usage" }}
             onClick={() => setScreen("usage")}
           >
-            用量
+            {t(locale(), "usage")}
           </button>
           <button
             classList={{ active: screen() === "git" }}
             onClick={() => setScreen("git")}
           >
-            Git
+            {t(locale(), "git")}
           </button>
         </div>
         <div class="side-head">

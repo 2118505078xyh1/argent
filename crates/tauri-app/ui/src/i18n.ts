@@ -30,6 +30,10 @@ const zh = {
   composerPlaceholder: "给 argent 发消息…",
   steerPlaceholder: "运行中，输入内容会插话…",
   welcome: "问点什么，或者输入 / 看命令。",
+  memory: "记忆",
+  extensions: "扩展",
+  usage: "用量",
+  git: "Git",
 } as const;
 
 type Key = keyof typeof zh;
@@ -61,6 +65,10 @@ const en: Record<Key, string> = {
   composerPlaceholder: "Message argent…",
   steerPlaceholder: "Running — typing here steers the turn…",
   welcome: "Ask something, or type / for commands.",
+  memory: "Memory",
+  extensions: "Extensions",
+  usage: "Usage",
+  git: "Git",
 };
 
 export function detectLocale(): Locale {
