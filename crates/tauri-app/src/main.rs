@@ -7,6 +7,7 @@ use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let backend = backend::Backend::start(app.handle().clone())?;
             app.manage(backend);

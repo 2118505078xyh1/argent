@@ -12,6 +12,17 @@ import Markdown from "./Markdown";
 import Automations from "./Automations";
 import Documents from "./Documents";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  asNumber,
+  asRecord,
+  asString,
+  parseReady,
+  THINKING_LEVELS,
+  type ModelInfo,
+  type Ready,
+  type UnknownRecord,
+} from "./ipc";
+import { formatCost, formatTokens, relativeStamp, sessionGroup } from "./format";
 
 type Tool = {
   id: string;
@@ -52,30 +63,6 @@ type LoadedEntry =
       state: "running" | "ok" | "error";
       durationMs?: number;
     };
-
-type ModelInfo = { id: string; contextLength: number };
-
-type Ready = {
-  model: string;
-  level: string;
-  models: ModelInfo[];
-  thinkingLevels: string[];
-  contextMax: number;
-  cwd: string;
-  provider: string;
-  protocol: string;
-};
-
-const THINKING_LEVELS = [
-  "auto",
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
 
 type AgentEvent =
   | { type: "turn_start" }
@@ -122,20 +109,6 @@ type Incoming = (
   | { kind: "error"; message: string }
 ) & { sid?: string };
 
-type UnknownRecord = Record<string, unknown>;
-
-function asRecord(value: unknown): UnknownRecord | null {
-  return typeof value === "object" && value !== null ? (value as UnknownRecord) : null;
-}
-
-function asString(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value : fallback;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function storageGet(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -150,65 +123,6 @@ function storageSet(key: string, value: string): void {
   } catch {
     // Private modes can deny storage; selection still works for this run.
   }
-}
-
-function formatTokens(count: number): string {
-  if (count <= 0) return "—";
-  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
-  return String(count);
-}
-
-function formatCost(cost: number): string {
-  if (cost <= 0) return "$0";
-  if (cost < 0.0001) return "<$0.0001";
-  return `$${cost.toFixed(4)}`;
-}
-
-function dayStamp(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${month}-${day}`;
-}
-
-function sessionGroup(updated: string): "今天" | "昨天" | "更早" {
-  const stamp = /^(\d{2}-\d{2})/.exec(updated)?.[1];
-  if (!stamp) return "更早";
-  const now = new Date();
-  if (stamp === dayStamp(now)) return "今天";
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (stamp === dayStamp(yesterday)) return "昨天";
-  return "更早";
-}
-
-function relativeStamp(updated: string): string {
-  const time = /(\d{2}:\d{2})$/.exec(updated)?.[1] ?? "";
-  const group = sessionGroup(updated);
-  return group === "更早" ? updated : `${group} ${time}`.trim();
-}
-
-function parseReady(raw: UnknownRecord): Ready {
-  return {
-    model: asString(raw.model),
-    level: asString(raw.level),
-    models: Array.isArray(raw.models)
-      ? raw.models
-          .map((value) => asRecord(value))
-          .filter((value): value is UnknownRecord => value !== null)
-          .map((value) => ({
-            id: asString(value.id),
-            contextLength: asNumber(value.contextLength) ?? 0,
-          }))
-          .filter((value) => value.id.length > 0)
-      : [],
-    thinkingLevels: Array.isArray(raw.thinking)
-      ? raw.thinking.filter((value): value is string => typeof value === "string")
-      : [],
-    contextMax: asNumber(raw.contextMax) ?? 0,
-    cwd: asString(raw.cwd),
-    provider: asString(raw.provider),
-    protocol: asString(raw.protocol),
-  };
 }
 
 function parseAgentEvent(raw: unknown): AgentEvent | null {
@@ -378,6 +292,7 @@ function App() {
   const [tabStatus, setTabStatus] = createSignal<Record<string, string>>({ "1": "starting" });
   const [tabPath, setTabPath] = createSignal<Record<string, string>>({});
   const [input, setInput] = createSignal("");
+  const [lastPrompt, setLastPrompt] = createSignal("");
   const [approval, setApproval] = createSignal<Approval | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -418,6 +333,7 @@ function App() {
     storageGet("argent.theme") === "light" ? "light" : "dark",
   );
   const [screen, setScreen] = createSignal<"chat" | "automations" | "documents">("chat");
+  const [help, setHelp] = createSignal(false);
   const [promptTokens, setPromptTokens] = createSignal(0);
   const [cachedTokens, setCachedTokens] = createSignal(0);
   const [requests, setRequests] = createSignal(0);
@@ -426,6 +342,8 @@ function App() {
   const [completionTokens, setCompletionTokens] = createSignal(0);
   const [totalTokens, setTotalTokens] = createSignal(0);
   const [follow, setFollow] = createSignal(true);
+  const [expandedTools, setExpandedTools] = createSignal<Record<string, boolean>>({});
+  const [expandAllTools, setExpandAllTools] = createSignal(false);
 
   const filteredSessions = createMemo(() => {
     const query = sessionQuery().trim().toLowerCase();
@@ -558,6 +476,17 @@ function App() {
           if (payload.requests !== undefined) setRequests(payload.requests);
           if (payload.cost !== undefined) setCost(payload.cost);
           if (payload.priced !== undefined) setPriced(payload.priced);
+          if (
+            document.hidden &&
+            "Notification" in window &&
+            Notification.permission === "granted"
+          ) {
+            try {
+              new Notification("Argent 回合完成", { body: payload.reason });
+            } catch {
+              // Some WebViews expose the API but refuse to display a toast.
+            }
+          }
         }
         break;
       case "approval":
@@ -666,16 +595,40 @@ function App() {
 
   onMount(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!approval()) return;
       const target = event.target as HTMLElement | null;
-      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-      const key = event.key.toLowerCase();
-      if (key === "y" || key === "enter") {
+      const typing = !!target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        void answer(true);
-      } else if (key === "n" || key === "escape") {
-        event.preventDefault();
-        void answer(false);
+        setScreen("chat");
+        setHelp(false);
+        requestAnimationFrame(() => {
+          try {
+            composer.focus();
+          } catch {
+            // The composer may still be mounting after a screen switch.
+          }
+        });
+        return;
+      }
+      if (approval()) {
+        if (typing) return;
+        const key = event.key.toLowerCase();
+        if (key === "y" || key === "enter") {
+          event.preventDefault();
+          void answer(true);
+        } else if (key === "n" || key === "escape") {
+          event.preventDefault();
+          void answer(false);
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        if (help()) {
+          setHelp(false);
+        } else if (busy()) {
+          event.preventDefault();
+          void abort();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -699,6 +652,7 @@ function App() {
   const send = async () => {
     const text = input().trim();
     if (!text) return;
+    setLastPrompt(text);
     setInput("");
     setError(null);
     composer.style.height = "auto";
@@ -1203,6 +1157,13 @@ function App() {
           <button class="icon" title="新建会话标签" onClick={() => void addTab()}>
             ＋
           </button>
+          <span class="spacer" />
+          <button
+            class="ghost tab-tools"
+            onClick={() => setExpandAllTools((value) => !value)}
+          >
+            {expandAllTools() ? "收起工具" : "展开工具"}
+          </button>
         </div>
         <header class="topbar">
           <div class="title-block">
@@ -1257,6 +1218,9 @@ function App() {
             >
               {theme() === "dark" ? "☀" : "☾"}
             </button>
+            <button class="icon" title="快捷键帮助" onClick={() => setHelp(true)}>
+              ?
+            </button>
           </div>
         </header>
 
@@ -1277,6 +1241,9 @@ function App() {
                   <div class="welcome-mark">argent</div>
                   <p>问点什么，或者输入 / 看命令。</p>
                   <div class="path">{ready()?.cwd || "D:\\code\\mpi\\argent"}</div>
+                  <p class="welcome-hint">
+                    首次使用请在终端运行 <code>argent login</code> 配置模型凭据。
+                  </p>
                   <div class="shortcuts">
                     <button
                       onClick={() =>
@@ -1311,7 +1278,21 @@ function App() {
             <For each={items()}>
               {(item) => {
                 if (item.kind === "tool") {
-                  return <ToolCard tool={item.tool} />;
+                  return (
+                    <ToolCard
+                      tool={item.tool}
+                      expanded={expandAllTools() || (expandedTools()[item.tool.id] ?? false)}
+                      onToggle={() =>
+                        setExpandedTools((prev) => ({
+                          ...prev,
+                          [item.tool.id]: !(
+                            expandAllTools() ||
+                            (prev[item.tool.id] ?? false)
+                          ),
+                        }))
+                      }
+                    />
+                  );
                 }
                 if (item.kind === "user") {
                   return (
@@ -1385,6 +1366,17 @@ function App() {
         <Show when={error()}>
           <div class="error-bar">
             <span>{error()}</span>
+            <Show when={lastPrompt()}>
+              <button
+                class="ghost"
+                onClick={() => {
+                  setInput(lastPrompt());
+                  void send();
+                }}
+              >
+                重试
+              </button>
+            </Show>
             <button class="icon" onClick={() => setError(null)}>
               ×
             </button>
@@ -1448,6 +1440,15 @@ function App() {
               <span class="sep">·</span>
               <span>{formatCost(cost())}</span>
             </Show>
+            <Show
+              when={
+                (ready()?.contextMax ?? 0) > 0 &&
+                (promptTokens() * 100) / (ready()?.contextMax ?? 1) >= 80
+              }
+            >
+              <span class="sep">·</span>
+              <span class="warn-text">上下文接近上限 · /compact</span>
+            </Show>
           </div>
         </footer>
         </Show>
@@ -1458,11 +1459,44 @@ function App() {
           <Documents onAddToChat={addDocumentToChat} />
         </Show>
       </main>
+
+      <Show when={help()}>
+        <div class="overlay" onClick={() => setHelp(false)}>
+          <div class="help-panel" onClick={(event) => event.stopPropagation()}>
+            <div class="log-head">
+              <strong>快捷键与命令</strong>
+              <button class="icon" onClick={() => setHelp(false)}>
+                ×
+              </button>
+            </div>
+            <div class="help-body">
+              <div><kbd>Enter</kbd><span>发送；运行中改为插话</span></div>
+              <div><kbd>Shift+Enter</kbd><span>换行</span></div>
+              <div><kbd>Ctrl+K</kbd><span>聚焦输入框</span></div>
+              <div><kbd>Esc</kbd><span>中止当前回合 / 关闭面板 / 拒绝审批</span></div>
+              <div><kbd>Y / N</kbd><span>允许 / 拒绝工具审批</span></div>
+              <div><kbd>/help</kbd><span>查看斜杠命令</span></div>
+              <Show when={"Notification" in window && Notification.permission === "default"}>
+                <div>
+                  <kbd>通知</kbd>
+                  <button class="ghost" onClick={() => void Notification.requestPermission()}>
+                    开启完成后桌面通知
+                  </button>
+                </div>
+              </Show>
+            </div>
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }
 
-function ToolCard(props: { tool: Tool }) {
+function ToolCard(props: {
+  tool: Tool;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const stateLabel = () => {
     if (props.tool.state === "running") return "运行中";
     if (props.tool.state === "error") return "失败";
@@ -1474,9 +1508,10 @@ function ToolCard(props: { tool: Tool }) {
       classList={{
         failed: props.tool.state === "error",
         running: props.tool.state === "running",
+        expanded: props.expanded,
       }}
     >
-      <div class="tool-head">
+      <button class="tool-head" onClick={props.onToggle}>
         <span class="tool-state">
           {props.tool.state === "error"
             ? "✗"
@@ -1491,9 +1526,23 @@ function ToolCard(props: { tool: Tool }) {
           {stateLabel()}
           {props.tool.duration !== undefined ? ` · ${props.tool.duration}ms` : ""}
         </span>
-      </div>
-      <Show when={props.tool.output}>
-        <pre class="tool-output">{props.tool.output}</pre>
+        <span class="tool-toggle">{props.expanded ? "▾" : "▸"}</span>
+      </button>
+      <Show when={props.expanded}>
+        <div class="tool-detail">
+          <Show when={props.tool.args}>
+            <div class="tool-detail-block">
+              <span class="tool-detail-label">原始参数</span>
+              <pre>{props.tool.args}</pre>
+            </div>
+          </Show>
+          <Show when={props.tool.output}>
+            <div class="tool-detail-block">
+              <span class="tool-detail-label">输出</span>
+              <pre class="tool-output">{props.tool.output}</pre>
+            </div>
+          </Show>
+        </div>
       </Show>
     </div>
   );

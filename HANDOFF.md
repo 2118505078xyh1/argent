@@ -133,6 +133,12 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
    （CDP asyncio 驱动）。实测：prompt → 审批卡点允许 → 工具卡 → 助手回答 →
    点会话重放历史，全部通过；截图 `dist/tauri-smoke.png`。
    运行：`python scripts/tauri-smoke.py`（需先 `cargo build` 于 Tauri workspace）。
+11. **P1/P2 续做 ✅（2026-11-19）**：工具卡折叠/原始参数、快捷键与帮助面板、
+    错误重试、完成通知、首次使用引导、上下文警告、窗口状态持久化
+    （`tauri-plugin-window-state`）；工程质量：IPC/format 纯函数拆分 + vitest
+    （6 tests）、map_event 契约测试（8 tests）、两个 workspace 的 clippy
+    `-D warnings` 通过、独立 `.github/workflows/tauri.yml`、版本一致性脚本。
+    重新编译后 CDP 冒烟仍通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

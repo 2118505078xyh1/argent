@@ -13,6 +13,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 argent-agent = { path = "../agent" }
+argent-ai = { path = "../ai" }
 argent-automation = { path = "../automation" }
 argent-core = { path = "../core" }
 argent-engine = { path = "../engine" }
@@ -21,6 +22,7 @@ argent-ui-core = { path = "../ui-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
+tauri-plugin-window-state = "2"
 
 [features]
 default = ["custom-protocol"]

@@ -335,6 +335,15 @@ button {
   color: var(--accent);
 }
 
+.welcome-hint {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.warn-text {
+  color: var(--warn);
+}
+
 .md {
   overflow-wrap: anywhere;
   line-height: 1.65;
@@ -483,9 +492,59 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   min-width: 0;
   padding: 8px 10px;
+  background: transparent;
   color: var(--dim);
+  text-align: left;
+}
+
+.tool-toggle {
+  flex: none;
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.tool-detail {
+  padding: 0 10px 10px;
+}
+
+.tool-detail-block + .tool-detail-block {
+  margin-top: 8px;
+}
+
+.tool-detail-label {
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.tool-detail pre {
+  max-height: 220px;
+  margin: 4px 0 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.tool-output {
+  max-height: 280px;
+  margin: 0;
+  overflow: auto;
+  padding: 9px 11px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.tab-tools {
+  font-size: 11px;
 }
 
 .tool-state {
@@ -520,18 +579,6 @@ button {
 .tool-meta {
   flex: none;
   font-size: 11px;
-}
-
-.tool-output {
-  max-height: 280px;
-  margin: 0;
-  overflow: auto;
-  padding: 9px 11px;
-  border-top: 1px solid var(--border-subtle);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 12px;
-  white-space: pre-wrap;
 }
 
 .spacer {
@@ -1044,6 +1091,43 @@ button {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.help-panel {
+  width: min(520px, 86vw);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.help-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  font-size: 12px;
+}
+
+.help-body > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.help-body kbd {
+  min-width: 96px;
+  padding: 3px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--element);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: center;
+}
+
+.help-body span {
+  color: var(--dim);
 }
 
 .doc-actions {

@@ -745,7 +745,7 @@ mod tests {
         bridge.insert(7, reply_tx);
         // The frontend's "允许" button maps to answer(id, true).
         bridge.answer(7, true).expect("answer delivered");
-        assert_eq!(reply_rx.recv().unwrap(), true);
+        assert!(reply_rx.recv().unwrap());
     }
 
     #[test]
@@ -754,7 +754,7 @@ mod tests {
         let (reply_tx, reply_rx) = mpsc::channel();
         bridge.insert(9, reply_tx);
         bridge.answer(9, false).expect("deny delivered");
-        assert_eq!(reply_rx.recv().unwrap(), false);
+        assert!(!reply_rx.recv().unwrap());
         // A second click on the same dialog must not reach the worker again.
         assert!(bridge.answer(9, true).is_err());
     }
@@ -810,6 +810,46 @@ mod tests {
         let mut guard = queue.lock().expect("queue lock");
         assert_eq!(guard.pop_front().as_deref(), Some("first"));
         assert_eq!(guard.pop_front().as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn ready_and_turn_done_payloads_carry_picker_and_usage_data() {
+        use argent_agent::FinishReason;
+        use argent_ai::Usage;
+
+        let ready = map_event(UiEvent::Ready {
+            model: "m".into(),
+            level: "low".into(),
+            context_max: 128_000,
+            models: vec![("m".into(), 960_000)],
+            thinking: vec!["low".into(), "high".into()],
+            cwd: "/work".into(),
+            provider: "local".into(),
+            protocol: "openai-chat-completions".into(),
+            theme: "dark".into(),
+        });
+        assert_eq!(ready["models"][0]["id"], "m");
+        assert_eq!(ready["models"][0]["contextLength"], 960_000);
+        assert_eq!(ready["thinking"][1], "high");
+
+        let done = map_event(UiEvent::TurnDone {
+            reason: FinishReason::Complete,
+            usage: Usage {
+                prompt_tokens: 12,
+                completion_tokens: 3,
+                total_tokens: 15,
+                cached_tokens: 4,
+            },
+            requests: 2,
+            cost: Some(0.5),
+        });
+        assert_eq!(done["promptTokens"], 12);
+        assert_eq!(done["completionTokens"], 3);
+        assert_eq!(done["totalTokens"], 15);
+        assert_eq!(done["cachedTokens"], 4);
+        assert_eq!(done["requests"], 2);
+        assert_eq!(done["cost"], 0.5);
+        assert_eq!(done["priced"], true);
     }
 
     #[test]
