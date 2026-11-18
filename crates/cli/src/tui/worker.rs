@@ -150,15 +150,26 @@ pub fn spawn(
                     let provider = config.provider.clone();
                     let base_url = config.base_url.clone();
                     let model = config.model.clone();
+                    let api_key = config.api_key.clone();
                     let btw_cwd = cwd.clone();
+                    let btw_storage = std::env::temp_dir().join(format!(
+                        "argent-btw-{}-{}",
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|elapsed| elapsed.as_nanos())
+                            .unwrap_or(0)
+                    ));
                     let event_tx = event_tx.clone();
                     std::thread::spawn(move || {
                         let Some(exe) = exe else {
                             let _ = event_tx.send(UiEvent::Btw("cannot locate argent".to_string()));
                             return;
                         };
-                        let output = std::process::Command::new(exe)
+                        let mut command = std::process::Command::new(exe);
+                        command
                             .current_dir(&btw_cwd)
+                            .env("ARGENT_STORAGE_DIR", &btw_storage)
                             .arg("--provider")
                             .arg(provider)
                             .arg("--base-url")
@@ -172,9 +183,11 @@ pub fn spawn(
                             .arg("--max-turns")
                             .arg("1")
                             .arg("-c")
-                            .arg("tools.include=[\"__none__\"]")
-                            .arg(prompt)
-                            .output();
+                            .arg("tools.include=[\"__none__\"]");
+                        if let Some(key) = api_key {
+                            command.arg("--api-key").arg(key);
+                        }
+                        let output = command.arg(prompt).output();
                         let text = match output {
                             Ok(output) if output.status.success() => {
                                 let stdout =
@@ -192,6 +205,7 @@ pub fn spawn(
                             }
                             Err(error) => format!("failed: {error}"),
                         };
+                        let _ = std::fs::remove_dir_all(&btw_storage);
                         let _ = event_tx.send(UiEvent::Btw(text));
                     });
                 }
