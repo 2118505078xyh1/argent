@@ -126,8 +126,7 @@ Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，DSH 
 
 ### P0
 
-- [x] **delegate 子代理用便宜模型（`secondaryModel`）**
-  - Kimi `/secondary-model` 已验证此路径。argent 的 delegate 目前用主模型跑子代理，
+- [x] **delegate 子代理用便宜模型（`secondaryModel`）**  - Kimi `/secondary-model` 已验证此路径。argent 的 delegate 目前用主模型跑子代理，
     而背景小模型已有 `backgroundModel` 先例——配置加 `secondaryModel`（config +
     `--secondary-model`），delegate 与 backgroundIntelligence 共用同一解析逻辑。
   - 直接省 token：子代理干的多是检索/归纳，4B 档模型够用。
@@ -137,12 +136,12 @@ Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，DSH 
 
 ### P1
 
-- [ ] **后台任务/定时任务暴露成模型工具**
+- [x] **后台任务/定时任务暴露成模型工具**
   - Kimi 把 `TaskList/TaskOutput/TaskStop/CronCreate/List/Delete` 做成工具（写类走
-    审批）。argent 的 `jobs`/`automation` crate 能力都在，但模型看不见。
-  - 做法：不加新 crate，只在 tools 注册薄薄一层（`jobs_list`、`jobs_output`、
-    `cron_create` 等写类标 `is_mutating()`），权限沿用现有审批门。
-  - 验收：模型能查看后台任务输出并自行创建定时任务；`tool_search` 目录里可见。
+    审批）。调查发现 `jobs` 工具本就已注册（start/list/output/kill/wait/prune，
+    start/kill 走审批）——计划里这半条本来就有；真正缺的只有定时任务。
+  - 已完成：`cron` 工具（`crates/automation/src/tools.rs`），list/add/remove/run，
+    add/remove/run 走审批；注册为 `cron` 插件（CLI+engine），3 个新测试。
 - [ ] **导入 Claude Code / Codex 会话**
   - Kimi `/import-sessions` 做迁移友好；argent `sessions` 已有 export，补 import
     （CC/Codex JSONL → argent 树式会话），工作量小、生态收益直接。

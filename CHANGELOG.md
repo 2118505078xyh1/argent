@@ -11,6 +11,12 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
   a role or per-request model choice still wins, and unset keeps the
   old behavior. Retrieval and summarizing scouts stop burning the
   main model's tokens.
+- **`cron` tool: scheduled runs become a conversation capability.** The
+  model can now list, add, remove and fire automation tasks (a scheduled
+  prompt or workflow per workspace store) through one tool;
+  add/remove/run ask for approval first. The `jobs` tool already
+  covered background commands — together the whole jobs/automation
+  surface is model-visible.
 - **Mouse caret placement in the input area.** A press inside the input
   rows moves the cursor to the clicked cell (CJK cells included); release
   no longer leaks into transcript selection, copy or thinking toggles.

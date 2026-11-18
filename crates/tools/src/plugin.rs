@@ -37,6 +37,8 @@ pub const WEB: &str = "web";
 pub const CODEINTEL: &str = "codeintel";
 /// Commands that outlive a turn.
 pub const JOBS: &str = "jobs";
+/// Scheduled runs (prompts or workflows) in a workspace store.
+pub const CRON: &str = "cron";
 /// Child agents with a narrower tool set.
 pub const DELEGATE: &str = "delegate";
 /// Browser, desktop and pseudoterminal control.
@@ -62,6 +64,7 @@ pub fn summary(name: &str) -> Option<&'static str> {
         WEB => "web search and current time",
         CODEINTEL => "language-server queries and structural search",
         JOBS => "background commands, logs and kill",
+        CRON => "schedule prompts or workflows for later runs",
         DELEGATE => "run a task in a child agent",
         DEVICE => "browser, desktop and pseudoterminal control",
         OFFICE => "read text from DOCX, PPTX, XLSX and PDF files",

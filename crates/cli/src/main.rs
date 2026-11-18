@@ -438,6 +438,10 @@ pub fn run(raw: &[String]) -> Result<i32> {
     // a skill registry, a job table, a runner slot, an approval channel.
     base_registry.register_plugin_tool(argent_tools::plugin::CODEINTEL, Box::new(CodeIntelTool));
     base_registry.register_plugin_tool(argent_tools::plugin::JOBS, Box::new(JobsTool));
+    base_registry.register_plugin_tool(
+        argent_tools::plugin::CRON,
+        Box::new(argent_automation::CronTool),
+    );
 
     // Skills are markdown procedures on disk. Only their one-line index enters
     // the prompt, and only when the plugin is loaded; the body arrives through

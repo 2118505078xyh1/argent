@@ -18,6 +18,10 @@ use argent_config::Paths;
 use argent_core::error::{Error, Result};
 use argent_core::json::Json;
 
+mod tools;
+
+pub use tools::CronTool;
+
 /// What a task does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {

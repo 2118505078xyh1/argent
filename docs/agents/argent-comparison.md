@@ -27,7 +27,7 @@
 | 工具按需加载 | ● plugin + `tool_search` | ◐ `--tools` 裁剪 | ● feature + plugins | ● skills/tools 白名单 | ● agent 级权限/工具 | ● ToolSearch | ◐ 只读/写执行分层，无 promotion | 待补 |
 | 子代理 | ● `delegate` + workflow DAG | ◐ 扩展/SDK | ● agents + 多会话 | ● subagents + agent teams | ● general/explore | ● Subagents + Expert + DWF | ● `Agent` + swarm + `/secondary-model` | 待补 |
 | 并行/工作流 | ● workflow（依赖、并发、journal） | ◐ 扩展 | ◐ agent teams feature | ● `/batch` + worktrees | ◐ 多标签/后台 | ● DWF + Expert | ● swarm / Tower(worktree 任务) / goal 队列 | 待补 |
-| 后台任务 | ● jobs/PTY/后台会话（**模型不可见**） | ◐ 扩展 | ● 后台会话/queue | ● background agents | ● 后台 service | ● tasks/后台 | ● Task*/Cron* 全是模型工具 | 待补 |
+| 后台任务 | ● `jobs` 工具（start/list/output/kill/wait/prune） | ◐ 扩展 | ● 后台会话/queue | ● background agents | ● 后台 service | ● tasks/后台 | ● Task*/WaitFor 模型工具 | 待补 |
 | LSP 代码智能 | ● codeintel | ○ | ◐ IDE/诊断 | ● IDE LSP + 插件 | ● LSP 插件/IDE | ● 内建 IDE | ○ | 待补 |
 | 浏览器/桌面自动化 | ● device（CDP/desktop） | ○ | ● browser/computer-use 插件 | ● Chrome/computer use | ◐ websearch/attachments | ● browser-use/CUA | ○ | 待补 |
 | Office/文档 | ● office（docx/pptx/xlsx/pdf） | ○ | ● documents/pdf/spreadsheets 插件 | ◐ 读文件/PDF | ◐ 附件 | ● office/design 插件 | ○ | ● 捆绑 python-docx/pptx/openpyxl 栈 |
@@ -92,7 +92,7 @@
 | HTTP 服务 | ● `--serve` SSE | ○ | ● app-server | ● gateway | ● serve v2 API | ● app-server | ◐ `/web` + Server API(Beta) | ◐ 远程 relay |
 | ACP | ● | ● | ○ | ○ | ● | ◐（SDK 依赖） | ● stdio | 待补 |
 | SDK | ● TS SDK（`sdk/typescript`） | ● TS SDK | ● app-server 协议 | ● Python/TS Agent SDK | ● client/sdk | ○ 公开 SDK | ◐ Server API(Beta) | 待补 |
-| 定时任务 | ● automation daemon（**模型不可见**） | ○ | ◐ Cloud | ● Routines | ○ | ◐ 远程 | ● CronCreate/List/Delete 模型工具 | 待补 |
+| 定时任务 | ● automation daemon + `cron` 工具（list/add/remove/run） | ○ | ◐ Cloud | ● Routines | ○ | ◐ 远程 | ● CronCreate/List/Delete 模型工具 | 待补 |
 | 评测 | ● `eval` 套件 + `replay --to-eval` | ○ | ◐ evals | ◐ | ◐ | ○ | ○ | 待补 |
 | 遥测 | ● 可开关 | ● | ● OTel | ● OTel/enterprise | ● | ● | ◐ | ◐ sentry |
 | 自更新/签名 | ● keygen/sign/update | ● update | ● update | ● install/update | ● upgrade | ● 自动更新 | ● `upgrade` | ● 应用内更新器 |
@@ -118,8 +118,8 @@
 
 | 差距 | 对比对象 | 影响 | 优先级 |
 | --- | --- | --- | --- |
-| delegate 子代理用主模型（缺 `secondaryModel`） | Kimi | 子代理检索/归纳烧主模型 token | P0 |
-| 后台任务/定时任务对模型不可见 | Kimi（Task*/Cron* 工具化） | automation 能力无法在对话中被模型使用 | P0 |
+| delegate 子代理用主模型（缺 `secondaryModel`） | Kimi | 子代理检索/归纳烧主模型 token | ~~P0~~ 已补（`secondaryModel`） |
+| 后台任务对模型不可见 | Kimi（Task*/Cron* 工具化） | ~~jobs 工具本就有；cron 工具已补~~ 已闭环 | 已补 |
 | 会话导入（CC/Codex 迁移） | Kimi `/import-sessions` | 生态迁移摩擦 | P1 |
 | 侧聊（不打断主回合的旁路问答） | Kimi `/btw` | 长回合中问小问题的体验 | P1 |
 | 官网/文档站 | 全部 | 上手成本；GitHub Releases 已带二进制 | P1 |

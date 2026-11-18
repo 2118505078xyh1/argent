@@ -12,3 +12,4 @@ workspace = true
 [dependencies]
 argent-core = { path = "../core" }
 argent-config = { path = "../config" }
+argent-tools = { path = "../tools" }
