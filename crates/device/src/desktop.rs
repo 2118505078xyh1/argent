@@ -458,9 +458,6 @@ mod win {
         fn SetForegroundWindow(window: Handle) -> i32;
     }
 
-    #[allow(dead_code)]
-    extern "system" {}
-
     const SRCCOPY: u32 = 0x00CC_0020;
     const SM_CXSCREEN: i32 = 0;
     const SM_CYSCREEN: i32 = 1;
