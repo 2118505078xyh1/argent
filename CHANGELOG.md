@@ -3,6 +3,21 @@
 All notable changes to argent are documented here. The format is a loose
 Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
+## Unreleased
+
+- **TUI visual refresh.** The composer is a rounded box, tool runs are bordered
+  status-coloured cards, the status line has a surface, and Markdown headings,
+  links, inline code and borders use new semantic theme tokens.
+- **Titanium palette.** `dark` and the new `titanium` palette share a soft
+  blue-grey canvas, periwinkle accent and clearer tool states; native uses a
+  larger type scale and a welcome card with quick prompts.
+- **Window sizing.** The native window defaults to 1100×720 logical pixels so
+  composers and status bars remain visible on scaled laptop displays.
+- **Tauri + SolidJS prototype.** A standalone `crates/tauri-app` shell bridges
+  `argent-engine` events, prompts and approvals into a SolidJS chat surface.
+  The existing iced and TUI frontends remain the shipping paths until feature
+  parity; the multi-end frontend plan is documented in `docs/FRONTEND.md`.
+
 ## 0.3.2 — 2026-11-18
 
 - **Batch anchored edits.** `edit` accepts an `edits` JSON array of

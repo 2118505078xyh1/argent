@@ -5,6 +5,10 @@
 //! uses: commands go in, events and approval requests come out. A short timer
 //! drains those channels, so streaming text appears without blocking the
 //! renderer.
+            Message::SetPrompt(value) => {
+                self.input = text_editor::Content::with_text(&value);
+                return iced::widget::operation::focus(INPUT_ID);
+            }
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};

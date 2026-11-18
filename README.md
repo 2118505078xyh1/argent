@@ -9,6 +9,41 @@ WebView、HTML 或 JS。
 commands、hooks、MCP），并用 Rust 重新实现。项目中不包含它们的源码、压缩
 JS、图标或其他专有资产。
 
+## 界面
+
+原生 iced 窗口，不使用 WebView、HTML 或 JS；同一份 `argent-ui-core` 同时驱动
+TUI 与 native：
+
+<img src="docs/assets/native.png" alt="Argent native iced interface" width="760">
+
+## 前端路线
+
+当前发布版仍保留两条原生路径：
+
+- `argent tui`：自绘 ANSI 全屏终端界面
+- `argent-native`：iced + tiny-skia 桌面窗口
+
+下一阶段的主线是 **Tauri 2 + SolidJS**：
+
+| 端 | 方案 |
+|---|---|
+| Windows / macOS / Linux | Tauri 2 桌面壳 |
+| 浏览器 | 同一套 SolidJS 构建 |
+| iOS / Android | Tauri 2 移动壳，或远程客户端 |
+| Agent 运行时 | 继续使用 Rust 的 `engine` / `agent` / `tools` / `session` |
+| 终端 | 保留 headless CLI；全屏 TUI 在迁移期冻结 |
+
+这样做的原因是多端复用和迭代速度：同一套前端覆盖桌面、浏览器和移动端；
+系统 WebView 让外壳保持轻量，不需要打包 Chromium；SolidJS 的细粒度信号适合
+token 流式输出和频繁变化的工具状态。
+
+代价也要明确：Tauri 引入系统 WebView，运行时内存会高于现在的 iced native，
+并且不再满足“完全无 WebView”的定位。迁移期间 iced 仍是回退方案；达到功能
+对齐后再切换默认桌面入口。
+
+更完整的取舍和迁移阶段见 [docs/FRONTEND.md](docs/FRONTEND.md)。当前仓库中的
+`crates/tauri-app` 是迁移原型，尚未成为默认桌面二进制。
+
 ## 为什么更小
 
 | 对比项 | ZCode | argent |
@@ -26,7 +61,7 @@ CLI/TUI 路径完全不启动浏览器引擎；原生 iced 前端（`argent-nati
 | 进程 | 二进制 | 工作集 |
 |---|---|---|
 | `argent tui`（全屏） | 5.52 MB | 约 8.6 MB |
-| `argent-native`（iced + tiny-skia） | 6.98 MB | 约 32 MB |
+| `argent-native`（iced + tiny-skia） | 6.98 MB | 约 35 MB（活动时；空窗约 30 MB） |
 
 发布 zip 约 6.1 MB，内置 CLI、native、README、docs 和 examples。  
 `argent --version` 冷/热混合 7 次：中位数 35 ms，最小 33 ms，最大 146 ms（Windows x64）。

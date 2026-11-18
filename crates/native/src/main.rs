@@ -21,7 +21,7 @@ fn main() -> iced::Result {
         .theme(app::App::theme)
         .subscription(app::App::subscription)
         .default_font(style::ui_font())
-        .window_size((1180.0, 780.0))
+        .window_size((1100.0, 720.0))
         .centered()
         .antialiasing(true)
         .run()

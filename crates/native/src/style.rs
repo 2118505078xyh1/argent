@@ -77,6 +77,20 @@ pub fn user_bubble(p: Palette) -> impl Fn(&Theme) -> container::Style + 'static 
     }
 }
 
+/// The first-run card: a quiet surface, not a blank canvas.
+pub fn welcome_card(p: Palette) -> impl Fn(&Theme) -> container::Style + 'static {
+    move |_| container::Style {
+        text_color: Some(color(p.text)),
+        background: Some(Background::Color(color(p.surface))),
+        border: Border {
+            color: color(p.border_subtle),
+            width: 1.0,
+            radius: 18.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
 /// A tool call.
 pub fn tool_card(p: Palette) -> impl Fn(&Theme) -> container::Style + 'static {
     move |_| container::Style {

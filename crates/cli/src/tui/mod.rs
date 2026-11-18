@@ -18,7 +18,6 @@ pub(crate) use keys::{spawn_input, Key};
 /// 中文字体里缩成一个难辨认的墨点。
 pub(crate) const ASSISTANT_MARK: &str = "◆ ";
 pub(crate) const TOOL_MARK: &str = "● ";
-pub(crate) const USER_MARK: &str = "› ";
 
 mod app;
 mod events;

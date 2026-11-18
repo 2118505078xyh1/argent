@@ -1,5 +1,7 @@
 use super::*;
 use crate::tui::run::*;
+    assert!(frame.contains("╭─ ✗ bash"), "{}", frame);
+    assert!(frame.contains("╰─ ✗"), "{}", frame);
 
 static LAST_COPIED_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
@@ -526,7 +528,6 @@ fn the_ready_event_keeps_the_context_window() {
     });
     assert_eq!(app.metrics.context_max, 960_000);
 }
-
 #[test]
 fn turn_done_prints_a_dim_summary_line() {
     let mut app = app();
@@ -538,7 +539,6 @@ fn turn_done_prints_a_dim_summary_line() {
         cwd: "/tmp".to_string(),
         session: "s".to_string(),
         session_path: "/tmp/s.jsonl".to_string(),
-        approval: "sensible".to_string(),
     });
     app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 0 }));
     app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText(
@@ -639,7 +639,6 @@ fn summaries_print_right_after_their_own_turn() {
     );
     assert_eq!(app.turn_summaries.len(), 2);
 }
-
 #[test]
 fn turn_done_without_a_model_call_stays_quiet() {
     let mut app = app();
@@ -651,7 +650,6 @@ fn turn_done_without_a_model_call_stays_quiet() {
         cwd: "/tmp".to_string(),
         session: "s".to_string(),
         session_path: "/tmp/s.jsonl".to_string(),
-        approval: "sensible".to_string(),
     });
     app.handle_ui(UiEvent::TurnDone {
         reason: FinishReason::Aborted,
@@ -682,7 +680,6 @@ fn the_user_message_block_fills_the_row_with_bg() {
         assert_eq!(line.width(), 40, "the row is padded to full width");
     }
 }
-
 #[test]
 fn wide_characters_advance_the_cursor_by_two_cells() {
     let mut app = app();
@@ -704,7 +701,6 @@ fn the_input_window_wraps_a_long_line() {
     // The frame still has exactly the requested height.
     assert_eq!(app.frame(100, 30).len(), 30);
 }
-
 #[test]
 fn a_long_input_window_keeps_the_cursor_visible() {
     let mut app = app();

@@ -1,7 +1,7 @@
 //! 配色主题。
 //!
 //! 主题是一张颜色表，渲染层按语义取值（accent/dim/error…），不认具体颜色。
-//! 内置 `dark` 与 `light`（Claude Code 风格：近黑/奶油底、陶土橙强调色）；
+//! 内置 `dark`/`light`/`contrast`：`dark` 是钛蓝配色，`light` 是奶油纸底；
 //! 用户主题放在 `~/.argent/themes/<name>.json`
 //! （项目级 `.argent/themes/<name>.json` 优先），只覆盖写到的字段。
 
@@ -36,30 +36,53 @@ pub struct Theme {
     /// 代码块的前景与底色，同样必须成对。
     pub code_fg: Color,
     pub code_bg: Color,
+    /// 卡片/输入框边框。
+    pub border: Color,
+    /// 二级面板底色（输入框、工具卡）。
+    pub panel: Color,
+    /// 选中项底色。
+    pub selected_bg: Color,
+    pub tool_pending_bg: Color,
+    pub tool_success_bg: Color,
+    pub tool_error_bg: Color,
+    /// 状态栏底色。
+    pub statusline_bg: Color,
+    pub md_heading: Color,
+    pub md_link: Color,
+    pub md_code: Color,
 }
 
 impl Theme {
     /// 内置主题。
     pub fn builtin(name: &str) -> Option<Theme> {
         match name {
-            // Claude Code 的深色配色：近黑底、白字、陶土橙强调色。
-            // 强调色只做提示符、列表符号、行内码，正文保持白色，
-            // 长时间阅读不会像高饱和主题那样累。
+            // 深色主题：蓝灰底、冷淡紫强调色，和 native 的 titanium 保持同一套语义。
+            // 强调色只做提示符、列表符号、行内码，正文保持柔和白。
             "dark" => Some(Theme {
                 name: "dark".to_string(),
-                background: Color::Rgb(0x1a, 0x1a, 0x1a),
-                accent: Color::Rgb(0xd7, 0x77, 0x57),
-                secondary: Color::Rgb(0xb1, 0xb9, 0xf9),
-                text: Color::Rgb(0xff, 0xff, 0xff),
+                background: Color::Rgb(0x0b, 0x0e, 0x14),
+                accent: Color::Rgb(0x7a, 0xa2, 0xf7),
+                secondary: Color::Rgb(0xbb, 0x9a, 0xf7),
+                text: Color::Rgb(0xd7, 0xde, 0xe9),
                 // 中性灰：状态栏和思考正文退到背景里，但仍能看清。
-                dim: Color::Rgb(0x88, 0x88, 0x88),
-                success: Color::Rgb(0x4e, 0xba, 0x65),
-                warning: Color::Rgb(0xff, 0xc1, 0x07),
-                error: Color::Rgb(0xff, 0x6b, 0x80),
-                user_fg: Color::Rgb(0xff, 0xff, 0xff),
-                user_bg: Color::Rgb(0x37, 0x37, 0x37),
-                code_fg: Color::Rgb(0xf0, 0xf0, 0xf0),
-                code_bg: Color::Rgb(0x26, 0x26, 0x26),
+                dim: Color::Rgb(0x7f, 0x8b, 0x9f),
+                success: Color::Rgb(0x9e, 0xce, 0x6a),
+                warning: Color::Rgb(0xe0, 0xaf, 0x68),
+                error: Color::Rgb(0xf7, 0x76, 0x8e),
+                user_fg: Color::Rgb(0xd7, 0xde, 0xe9),
+                user_bg: Color::Rgb(0x18, 0x20, 0x2b),
+                code_fg: Color::Rgb(0xd7, 0xde, 0xe9),
+                code_bg: Color::Rgb(0x18, 0x20, 0x2b),
+                border: Color::Rgb(0x2b, 0x35, 0x45),
+                panel: Color::Rgb(0x15, 0x1b, 0x24),
+                selected_bg: Color::Rgb(0x20, 0x2b, 0x3b),
+                tool_pending_bg: Color::Rgb(0x1a, 0x22, 0x30),
+                tool_success_bg: Color::Rgb(0x13, 0x25, 0x1d),
+                tool_error_bg: Color::Rgb(0x2a, 0x1a, 0x1d),
+                statusline_bg: Color::Rgb(0x10, 0x15, 0x1c),
+                md_heading: Color::Rgb(0x7a, 0xa2, 0xf7),
+                md_link: Color::Rgb(0xbb, 0x9a, 0xf7),
+                md_code: Color::Rgb(0xe0, 0xaf, 0x68),
             }),
             // 高对比主题：纯黑底 + 纯白字 + 亮黄强调色，供低视力/强光环境使用。
             "contrast" => Some(Theme {
@@ -76,6 +99,16 @@ impl Theme {
                 user_bg: Color::Rgb(0x00, 0x33, 0x66),
                 code_fg: Color::Rgb(0xff, 0xff, 0xff),
                 code_bg: Color::Rgb(0x11, 0x11, 0x11),
+                border: Color::Rgb(0x88, 0x88, 0x88),
+                panel: Color::Rgb(0x12, 0x12, 0x12),
+                selected_bg: Color::Rgb(0x00, 0x33, 0x66),
+                tool_pending_bg: Color::Rgb(0x12, 0x1c, 0x2e),
+                tool_success_bg: Color::Rgb(0x00, 0x2a, 0x11),
+                tool_error_bg: Color::Rgb(0x33, 0x00, 0x00),
+                statusline_bg: Color::Rgb(0x00, 0x00, 0x00),
+                md_heading: Color::Rgb(0xff, 0xd7, 0x00),
+                md_link: Color::Rgb(0x00, 0xe5, 0xff),
+                md_code: Color::Rgb(0x00, 0xff, 0x66),
             }),
             // Claude 的浅色配色：奶油纸底、深墨字，橙色压暗一档保证对比度。
             "light" => Some(Theme {
@@ -92,6 +125,16 @@ impl Theme {
                 user_bg: Color::Rgb(0xf0, 0xee, 0xe6),
                 code_fg: Color::Rgb(0x1f, 0x1e, 0x1d),
                 code_bg: Color::Rgb(0xee, 0xec, 0xe3),
+                border: Color::Rgb(0xd8, 0xd8, 0xd2),
+                panel: Color::Rgb(0xf1, 0xf1, 0xec),
+                selected_bg: Color::Rgb(0xe7, 0xe7, 0xe0),
+                tool_pending_bg: Color::Rgb(0xf3, 0xf3, 0xf0),
+                tool_success_bg: Color::Rgb(0xe6, 0xf2, 0xe9),
+                tool_error_bg: Color::Rgb(0xf7, 0xe9, 0xe7),
+                statusline_bg: Color::Rgb(0xf0, 0xef, 0xe9),
+                md_heading: Color::Rgb(0xc1, 0x5f, 0x3c),
+                md_link: Color::Rgb(0x6f, 0x5d, 0xa8),
+                md_code: Color::Rgb(0x9a, 0x67, 0x00),
             }),
             _ => None,
         }
@@ -143,6 +186,36 @@ impl Theme {
         }
         if let Some(color) = pick("code_bg")? {
             self.code_bg = color;
+        }
+        if let Some(color) = pick("border")? {
+            self.border = color;
+        }
+        if let Some(color) = pick("panel")? {
+            self.panel = color;
+        }
+        if let Some(color) = pick("selected_bg")? {
+            self.selected_bg = color;
+        }
+        if let Some(color) = pick("tool_pending_bg")? {
+            self.tool_pending_bg = color;
+        }
+        if let Some(color) = pick("tool_success_bg")? {
+            self.tool_success_bg = color;
+        }
+        if let Some(color) = pick("tool_error_bg")? {
+            self.tool_error_bg = color;
+        }
+        if let Some(color) = pick("statusline_bg")? {
+            self.statusline_bg = color;
+        }
+        if let Some(color) = pick("md_heading")? {
+            self.md_heading = color;
+        }
+        if let Some(color) = pick("md_link")? {
+            self.md_link = color;
+        }
+        if let Some(color) = pick("md_code")? {
+            self.md_code = color;
         }
         Ok(self)
     }
@@ -310,8 +383,8 @@ mod tests {
         let overlaid = theme.overlaid(&value).expect("overlay");
         assert!(matches!(overlaid.accent, Color::Red));
         assert!(matches!(overlaid.dim, Color::Fixed(39)));
-        // 未提及的字段保持内置值（dark 的 success 是 Claude 的柔和绿）。
-        assert_eq!(overlaid.success, Color::Rgb(0x4e, 0xba, 0x65));
+        // 未提及的字段保持内置值（dark 的 success 是钛蓝配色里的柔和绿）。
+        assert_eq!(overlaid.success, Color::Rgb(0x9e, 0xce, 0x6a));
         assert_eq!(overlaid.user_bg, expected_user_bg);
     }
 

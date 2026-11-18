@@ -30,9 +30,9 @@ pub(super) fn markdown_lines(text: &str, width: usize, first: &str, rest: &str) 
         }
         let (spans, _) = inline_spans(trimmed, theme);
         let spans: Vec<Span> = if trimmed.starts_with('#') {
-            // Claude 风格：标题只加粗，不用高饱和色抢正文的注意力。
+            // 标题用 md_heading：比正文更亮，但不抢走正文的白。
             let body = trimmed.trim_start_matches('#').trim_start();
-            vec![Span::new(body.to_string(), Style::bold(theme.text))]
+            vec![Span::new(body.to_string(), Style::bold(theme.md_heading))]
         } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
             // pi: mdListBullet = violet/accent
             let mut decorated = vec![Span::new("- ", Style::fg(theme.accent))];
@@ -87,7 +87,7 @@ pub(super) fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span
                     if !buf.is_empty() {
                         spans.push(Span::new(std::mem::take(&mut buf), Style::plain()));
                     }
-                    spans.push(Span::new(label, Style::fg(theme.secondary)));
+                    spans.push(Span::new(label, Style::fg(theme.md_link)));
                     if !url.is_empty() {
                         spans.push(Span::new(format!(" ({})", url), Style::dim(theme.dim)));
                     }
@@ -120,7 +120,7 @@ pub(super) fn inline_spans(text: &str, theme: &crate::theme::Theme) -> (Vec<Span
                 code.push(next);
             }
             if !code.is_empty() {
-                spans.push(Span::new(code, Style::fg(theme.accent)));
+                spans.push(Span::new(code, Style::fg(theme.md_code)));
                 saw_style = true;
             }
             continue;
@@ -406,9 +406,96 @@ pub(super) fn indent_line(line: Line, pad: usize) -> Line {
 }
 
 pub(super) fn input_top(width: usize) -> Line {
-    // 只有一条细线：输入区不贴标签，`›` 已经说明了它是什么。
-    // 整行铺满终端，和状态栏一样是界面边框。
-    Line::plain("─".repeat(width)).with_style(Style::dim(crate::theme::current().dim))
+    let border = Style::fg(crate::theme::current().border).with_bg(crate::theme::current().panel);
+    Line::new()
+        .push(Span::new("╭", border))
+        .push(Span::new("─".repeat(width.saturating_sub(2)), border))
+        .push(Span::new("╮", border))
+}
+
+pub(super) fn input_bottom(width: usize) -> Line {
+    let border = Style::fg(crate::theme::current().border).with_bg(crate::theme::current().panel);
+    Line::new()
+        .push(Span::new("╰", border))
+        .push(Span::new("─".repeat(width.saturating_sub(2)), border))
+        .push(Span::new("╯", border))
+}
+
+/// A bordered, status-coloured tool card.
+pub(super) fn tool_card_lines(
+    run: &argent_ui_core::ToolRun,
+    width: usize,
+    expanded: bool,
+) -> Vec<Line> {
+    let theme = crate::theme::current();
+    let (state_color, bg) = if run.state.is_failed() {
+        (theme.error, theme.tool_error_bg)
+    } else if run.state.is_running() {
+        (theme.warning, theme.tool_pending_bg)
+    } else {
+        (theme.success, theme.tool_success_bg)
+    };
+    let border = Style::fg(theme.border).with_bg(bg);
+    let ink = Style::plain().with_bg(bg);
+    let state = Style::fg(state_color).with_bg(bg);
+    let primary = tool_primary_arg(&run.arguments)
+        .map(|value| format!(" ({})", value))
+        .unwrap_or_default();
+    let label = format!("{} {}{}", run.state.glyph(), run.name, primary);
+    let label = clip_to_width(&label, width.saturating_sub(5));
+    if width < 12 {
+        return vec![Line::new()
+            .push(Span::new(format!("{} ", run.state.glyph()), state))
+            .push(Span::new(label, ink))];
+    }
+    let mut out = Vec::new();
+    let head = format!("╭─ {} ", label);
+    let fill = width.saturating_sub(text_width(&head) + 1);
+    out.push(
+        Line::new()
+            .push(Span::new(head, state))
+            .push(Span::new("─".repeat(fill), border))
+            .push(Span::new("╮", border)),
+    );
+    let inner = width.saturating_sub(4);
+    let mut row = |text: String| {
+        let text = clip_to_width(&text, inner);
+        let pad = inner.saturating_sub(text_width(&text));
+        out.push(
+            Line::new()
+                .push(Span::new("│ ", border))
+                .push(Span::new(text, ink))
+                .push(Span::new(" ".repeat(pad), ink))
+                .push(Span::new(" │", border)),
+        );
+    };
+    if expanded {
+        for line in run.output.lines().take(16) {
+            row(line.to_string());
+        }
+        if run.output.lines().count() > 16 {
+            row(format!("… {} more lines", run.output.lines().count() - 16));
+        }
+    } else if run.state.is_failed() {
+        if let Some(first) = run.output.lines().find(|line| !line.trim().is_empty()) {
+            row(first.to_string());
+        }
+    }
+    let mut footer = format!("╰─ {} {}", run.state.glyph(), run.state.describe());
+    let output_lines = run.output.lines().count();
+    if output_lines > 0 {
+        let unit = if output_lines == 1 { "line" } else { "lines" };
+        footer.push_str(&format!(" · {} {}", output_lines, unit));
+    }
+    let footer = clip_to_width(&footer, width.saturating_sub(5));
+    let fill = width.saturating_sub(text_width(&footer) + 1);
+    out.push(
+        Line::new()
+            .push(Span::new(footer, border))
+            .push(Span::new("─".repeat(fill), border))
+            .push(Span::new("╯", border)),
+    );
+    out
 }
 
 pub(super) fn fill_between(mut left: Line, right: String, width: usize, style: Style) -> Line {

@@ -7,6 +7,40 @@
 //! [`Rgb`] is what the GUI frontends use directly; the terminal one ignores it
 //! and keeps its own ANSI mapping.
 
+    fn contrast(a: Rgb, b: Rgb) -> f32 {
+        fn channel(value: u8) -> f32 {
+            let value = value as f32 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        fn relative(rgb: Rgb) -> f32 {
+            0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+        }
+        let a = relative(a);
+        let b = relative(b);
+        let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn text_and_accent_clear_the_background() {
+        for palette in [Palette::dark(), Palette::titanium(), Palette::light()] {
+            assert!(
+                contrast(palette.text, palette.background) >= 7.0,
+                "{} body text",
+                palette.name
+            );
+            assert!(
+                contrast(palette.accent, palette.background) >= 4.5,
+                "{} accent",
+                palette.name
+            );
+        }
+    }
+
 /// An 8-bit-per-channel colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb {

@@ -439,7 +439,7 @@ impl App {
             .input_hit_rows
             .iter()
             .find(|&&(screen_row, _, _)| screen_row == row)?;
-        let target = (col as usize).saturating_sub(text_width(USER_MARK));
+        let target = (col as usize).saturating_sub(INPUT_PAD + text_width(USER_MARK));
         let mut used = 0usize;
         for (index, ch) in text.chars().enumerate() {
             if used >= target {
@@ -1834,8 +1834,8 @@ impl App {
         };
         let palette_height = palette.as_ref().map(|(_, shown)| *shown).unwrap_or(0);
         let (input_rows, _) = self.input_window(width);
-        // 输入区上方一条细线、下方直接接状态栏，不再用两条线夹住一行。
-        let tail = 2 + input_rows.len();
+        // 圆角输入框：顶线 + 输入行 + 底线，下面再压状态栏。
+        let tail = 3 + input_rows.len();
         let body_height = height
             .saturating_sub(tail)
             .saturating_sub(palette_height)
@@ -1887,6 +1887,7 @@ impl App {
             }
         }
         lines.push(input_top(width));
+        let input_inner = width.saturating_sub(4);
         for (index, row) in input_rows.iter().enumerate() {
             // 输入行在整帧里的行号：鼠标点进输入区时据此定位光标。
             self.input_hit_rows
@@ -1896,12 +1897,21 @@ impl App {
             } else {
                 "  "
             };
+            let avail = input_inner.saturating_sub(text_width(mark));
+            let text = clip_to_width(&row.text, avail);
+            let pad = avail.saturating_sub(text_width(&text));
+            let border = Style::fg(crate::theme::current().border);
             lines.push(
                 Line::new()
+                    .push(Span::new("│ ", border))
                     .push(Span::new(mark, Style::fg(crate::theme::current().accent)))
-                    .push(Span::new(row.text.clone(), Style::plain())),
+                    .push(Span::new(text, Style::plain()))
+                    .push(Span::new(" ".repeat(pad), Style::plain()))
+                    .push(Span::new(" │", border))
+                    .with_style(Style::plain().with_bg(crate::theme::current().panel)),
             );
         }
+        lines.push(input_bottom(width));
         lines.push(self.status_line(width));
 
         // 鼠标拖选：逐字反显（中文占两格按单元格算），松开时复制。
@@ -2122,6 +2132,7 @@ impl App {
             }
         }
         fill_between(left, right, width, Style::dim(theme.dim))
+            .with_style(Style::plain().with_bg(theme.statusline_bg))
     }
 
     /// 两轮 Model 之间的紧凑时长（摘要行用）：4.2s / 14m 21s / 2h 5m。
@@ -2232,10 +2243,11 @@ impl App {
             .take(self.cursor.saturating_sub(current.start))
             .collect();
         let terminal_row = height
+            .saturating_sub(1)
             .saturating_sub(row_count)
             .saturating_add(cursor_row)
             .max(1);
-        let col = 1 + text_width(USER_MARK) + text_width(&prefix);
+        let col = INPUT_PAD + text_width(USER_MARK) + text_width(&prefix);
         (terminal_row, col.max(1).min(width))
     }
 
@@ -2427,65 +2439,7 @@ impl App {
                 }
                 Group::Other(entry) => match entry {
                     Entry::Tool(run) => {
-                        // 第一行是"做了什么"：名字 + 主参数（path/command…），
-                        // 不把整段 JSON 甩在对话里。
-                        let primary = tool_primary_arg(&run.arguments)
-                            .map(|value| format!("({})", value))
-                            .unwrap_or_default();
-                        let style = if run.state.is_failed() {
-                            Style::fg(crate::theme::current().error)
-                        } else if run.state.is_running() {
-                            Style::fg(crate::theme::current().warning)
-                        } else {
-                            Style::fg(crate::theme::current().success)
-                        };
-                        lines.push(
-                            Line::new()
-                                .push(Span::new(TOOL_MARK, style))
-                                .push(Span::new(format!("{}{}", run.name, primary), style)),
-                        );
-                        // 第二行是"结果如何"：状态、耗时、行数。
-                        let mut footer = format!("{} {}", run.state.glyph(), run.state.describe());
-                        let output_lines = run.output.lines().count();
-                        if output_lines > 0 {
-                            let unit = if output_lines == 1 { "line" } else { "lines" };
-                            footer.push_str(&format!(" · {} {}", output_lines, unit));
-                        }
-                        let footer_style = if run.state.is_failed() {
-                            Style::fg(crate::theme::current().error)
-                        } else {
-                            Style::dim(crate::theme::current().dim)
-                        };
-                        lines.push(
-                            Line::new().push(Span::new(format!("  ⎿ {}", footer), footer_style)),
-                        );
-                        if self.expand && !run.output.is_empty() {
-                            for output in run.output.lines().take(16) {
-                                lines.push(Line::new().push(Span::new(
-                                    format!(
-                                        "   {}",
-                                        clip_to_width(output, width.saturating_sub(4))
-                                    ),
-                                    Style::dim(crate::theme::current().dim),
-                                )));
-                            }
-                            if run.output.lines().count() > 16 {
-                                lines.push(Line::plain(format!(
-                                    "   … {} more lines",
-                                    run.output.lines().count() - 16
-                                )));
-                            }
-                        } else if run.state.is_failed() {
-                            // 失败原因不藏在 Ctrl+E 后面：一眼要能看出错在哪。
-                            if let Some(first) =
-                                run.output.lines().find(|line| !line.trim().is_empty())
-                            {
-                                lines.push(Line::new().push(Span::new(
-                                    format!("   {}", clip_to_width(first, width.saturating_sub(4))),
-                                    Style::fg(crate::theme::current().error),
-                                )));
-                            }
-                        }
+                        lines.extend(tool_card_lines(&run, width, self.expand));
                     }
                     Entry::Notice(kind, text) => {
                         let style = match kind {
