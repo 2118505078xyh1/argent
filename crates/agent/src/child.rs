@@ -23,7 +23,8 @@ use argent_tools::{
     ToolCtx, ToolRegistry,
 };
 
-use crate::agent_loop::{Agent, AgentConfig, ApprovalScope};
+use crate::agent_loop::{Agent, AgentConfig};
+use crate::config::ApprovalScope;
 use crate::events::{AgentEvent, EventSink, FinishReason};
 use crate::roles::Role;
 

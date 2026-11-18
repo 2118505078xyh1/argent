@@ -2,6 +2,7 @@
 
 pub mod agent_loop;
 pub mod child;
+pub mod config;
 pub mod context;
 pub mod diagnostics;
 pub mod events;
@@ -10,8 +11,7 @@ pub mod roles;
 
 pub use agent_loop::{
     build_system_prompt, estimate_message_tokens, estimate_text_tokens, estimate_tokens,
-    prune_tool_spills, AbortHandle, Agent, AgentConfig, ApprovalScope, Budget, CacheWarming,
-    FollowUpMode, StreamFailure, DEFAULT_MAX_TURNS,
+    prune_tool_spills, AbortHandle, Agent, AgentConfig, StreamFailure, DEFAULT_MAX_TURNS,
 };
 pub use child::ChildFactory;
 pub use context::{project_instructions, session_context};
