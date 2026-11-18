@@ -93,6 +93,20 @@ class CDP:
         raise TimeoutError(f"timed out waiting for {label}: {expression}")
 
 
+async def press(cdp, key, code, virtual_key, modifiers):
+    for event_type in ("keyDown", "keyUp"):
+        await cdp.call(
+            "Input.dispatchKeyEvent",
+            {
+                "type": event_type,
+                "key": key,
+                "code": code,
+                "windowsVirtualKeyCode": virtual_key,
+                "modifiers": modifiers,
+            },
+        )
+
+
 async def send_prompt(cdp, text):
     literal = json.dumps(text)
     await cdp.eval(
@@ -222,6 +236,16 @@ async def run(args):
                     ".find((b) => /聊天|Chat/.test(b.textContent)).click()"
                 )
                 await cdp.wait_for("!!document.querySelector('textarea')", label="chat restored")
+
+                # Global shortcuts open the palette and the session search.
+                await press(cdp, "P", "KeyP", 80, 10)  # Ctrl+Shift
+                await cdp.wait_for("!!document.querySelector('.palette')", label="command palette")
+                await press(cdp, "Escape", "Escape", 27, 0)
+                await press(cdp, "F", "KeyF", 70, 10)  # Ctrl+Shift
+                await cdp.wait_for(
+                    "!!document.querySelector('.search-panel')", label="session search"
+                )
+                await press(cdp, "Escape", "Escape", 27, 0)
 
                 shot = await cdp.call("Page.captureScreenshot", {"format": "png"})
                 args.out.parent.mkdir(parents=True, exist_ok=True)
