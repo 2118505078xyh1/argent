@@ -195,6 +195,32 @@ pub(super) fn sessions(args: &[String]) -> Result<i32> {
                 .unwrap_or_else(|| paths.storage().join("argent.sqlite3"));
             export_sqlite(&index, &sqlite)
         }
+        "import" => {
+            let source = args
+                .get(1)
+                .map(PathBuf::from)
+                .ok_or_else(|| Error::config("usage: argent sessions import <claude-or-codex.jsonl> [--title NAME]"))?;
+            let title = args
+                .iter()
+                .position(|arg| arg == "--title")
+                .and_then(|position| args.get(position + 1))
+                .map(String::as_str)
+                .unwrap_or("Imported session");
+            let text = std::fs::read_to_string(&source)
+                .map_err(|e| Error::io(format!("cannot read {}: {}", source.display(), e)))?;
+            let turns = argent_session::import::parse(&text)?;
+            if turns.is_empty() {
+                return Err(Error::config("no user/assistant messages found in source"));
+            }
+            let path = argent_session::import::import(&index, &cwd, title, turns.clone())?;
+            println!(
+                "imported {} message(s) from {} into {}",
+                turns.len(),
+                source.display(),
+                path.display()
+            );
+            Ok(0)
+        }
         "archive" => {
             let reference = args
                 .get(1)

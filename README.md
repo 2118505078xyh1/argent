@@ -250,6 +250,7 @@ RPC 的 extension UI 子协议：需要操作者批准工具调用时，服务�
 argent sessions list                       # 会话列表
 argent sessions search "那段校验逻辑"       # 按内容搜会话
 argent sessions export --html out.html     # 导出单文件 HTML
+argent sessions import <cc-or-codex.jsonl> # 导入 Claude Code / Codex 会话
 argent themes                              # 可用主题（dark/light/用户主题）
 argent keybindings                         # 当前键位绑定
 argent completion bash                     # 补全脚本（bash/zsh/fish/powershell）
@@ -454,7 +455,7 @@ argent hooks trust status|review|grant|revoke
 argent --workflow <file>        依赖感知的子代理工作流
 argent workflow validate <file>
 argent bug                       本地脱敏报告（不联网）
-argent sessions list|export --sqlite <path>|prune [--dry-run]
+argent sessions list|import <file> [--title NAME]|export --sqlite <path>|prune [--dry-run]
 argent replay <session|events.jsonl>    离线渲染会话或捕获的事件流
 argent telemetry status|enable [--endpoint <url> --consent]|disable
 argent update keygen|sign|check|download|apply|rollback

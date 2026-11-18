@@ -1,6 +1,7 @@
 //! argent session layer: JSONL transcripts, session trees and compaction.
 
 pub mod controller;
+pub mod import;
 pub mod sqlite;
 pub mod store;
 pub mod tree;

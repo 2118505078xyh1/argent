@@ -142,9 +142,10 @@ Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，DSH 
     start/kill 走审批）——计划里这半条本来就有；真正缺的只有定时任务。
   - 已完成：`cron` 工具（`crates/automation/src/tools.rs`），list/add/remove/run，
     add/remove/run 走审批；注册为 `cron` 插件（CLI+engine），3 个新测试。
-- [ ] **导入 Claude Code / Codex 会话**
-  - Kimi `/import-sessions` 做迁移友好；argent `sessions` 已有 export，补 import
-    （CC/Codex JSONL → argent 树式会话），工作量小、生态收益直接。
+- [x] **导入 Claude Code / Codex 会话**
+  - `argent sessions import <file> [--title NAME]`：CC/Codex JSONL → argent 树式会话。
+    只搬用户/助手文本与 thinking 块（工具 schema 不兼容，跳过）；真实文件冒烟通过
+    （CC 2424 条 / Codex 477 条），导入产物已清理。
 - [ ] **`/btw` 式侧聊**
   - 分叉子代理的旁路问答，不打断主回合。argent 已有 delegate 协程基础，TUI 侧加一个
     独立输入入口即可。先做协议（复用 delegate），再做面板。

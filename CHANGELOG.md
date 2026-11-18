@@ -11,6 +11,10 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
   a role or per-request model choice still wins, and unset keeps the
   old behavior. Retrieval and summarizing scouts stop burning the
   main model's tokens.
+- **Import Claude Code / Codex sessions** (`argent sessions import <file> [--title NAME]`).
+  JSONL transcripts become ordinary argent sessions: user/assistant prose
+  and thinking blocks carry over, tool calls are skipped (incompatible
+  schemas). Verified against real installed CC and Codex sessions.
 - **`cron` tool: scheduled runs become a conversation capability.** The
   model can now list, add, remove and fire automation tasks (a scheduled
   prompt or workflow per workspace store) through one tool;
