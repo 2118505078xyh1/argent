@@ -195,6 +195,10 @@ OMP 的强项不是功能数量，而是编辑安全和批处理。argent 0.3.1 
 7. **P2 multi-file rollback**：把批量编辑纳入单次 checkpoint 事务，`/rewind`
    一次回滚整批。
 
+**结构拆分结论（已完成）**：`Budget`、`ApprovalScope`、`FollowUpMode`、
+`CacheWarming`、`PolicyApproval` 已移到 `agent/config.rs`；`agent_loop` 测试
+仍与私有 fixture/状态同文件，避免为拆分而扩大机械改动面。
+
 ### 明确不做（对照 DSH）
 
 - 捆绑 Python/Node/MSYS 运行时（违背单二进制；办公文档走 MCP/Rhai 扩展）。
