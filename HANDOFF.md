@@ -143,6 +143,9 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     按钮）、斜杠补全、按 tab 记忆滚动位置、窗口关闭时向所有 worker 发
     Shutdown、CSP 从 null 收紧为白名单表达式、单实例插件（重开聚焦已有窗口）。
     `cargo clippy --all-targets -D warnings` 与 CDP 冒烟均通过。
+13. **P1 第四轮 ✅（2026-11-19）**：流式 token 按帧合并、消息复制/回滚到此、
+    aria-live 与 focus-visible、窄屏侧栏改顶栏、帮助面板内诊断信息。
+    `bun run typecheck/test/build` 与 CDP 冒烟均通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

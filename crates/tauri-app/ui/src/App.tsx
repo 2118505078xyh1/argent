@@ -401,6 +401,32 @@ function App() {
     });
   };
 
+  // Token deltas can arrive far faster than a display frame. Coalesce them so
+  // a long answer updates the transcript once per animation frame.
+  const streamBuffer = new Map<string, { kind: TextItem["kind"]; text: string; sid: string }>();
+  let streamFrame = 0;
+  const flushStream = () => {
+    for (const [key, value] of streamBuffer) {
+      append(value.kind, value.text, true, value.sid);
+      streamBuffer.delete(key);
+    }
+  };
+  const appendStream = (kind: TextItem["kind"], text: string, sid: string) => {
+    const key = `${sid}:${kind}`;
+    const pending = streamBuffer.get(key);
+    if (pending) {
+      pending.text += text;
+    } else {
+      streamBuffer.set(key, { kind, text, sid });
+    }
+    if (!streamFrame) {
+      streamFrame = requestAnimationFrame(() => {
+        streamFrame = 0;
+        flushStream();
+      });
+    }
+  };
+
   const applyReady = (value: Ready, sid = active()) => {
     setReadyFor(sid, value);
     setStatusFor(sid, "ready");
@@ -422,10 +448,10 @@ function App() {
         setStatusFor(sid, "thinking");
         break;
       case "assistant_text":
-        append("assistant", event.text, true, sid);
+        appendStream("assistant", event.text, sid);
         break;
       case "thinking":
-        append("thinking", event.text, true, sid);
+        appendStream("thinking", event.text, sid);
         break;
       case "tool_requested":
         setItemsFor(sid, (prev) => [
@@ -486,6 +512,7 @@ function App() {
         handleAgent(payload.event, sid);
         break;
       case "turn_done":
+        flushStream();
         setBusyFor(sid, false);
         setStatusFor(sid, payload.reason);
         if (isActive) {
@@ -528,6 +555,7 @@ function App() {
         );
         break;
       case "session_cleared":
+        flushStream();
         setItemsFor(sid, []);
         setSessionPathFor(sid, "");
         setTabs((prev) =>
@@ -541,6 +569,7 @@ function App() {
         setSessions(payload.sessions);
         break;
       case "loaded":
+        flushStream();
         setItemsFor(sid, loadedItems(payload.entries));
         if (isActive) {
           setError(null);
@@ -934,6 +963,15 @@ function App() {
     return "";
   };
 
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      append("notice", "已复制");
+    } catch (err) {
+      setError(`复制失败：${String(err)}`);
+    }
+  };
+
   const copyLast = async () => {
     const text = lastAssistantText();
     if (!text) {
@@ -1261,6 +1299,8 @@ function App() {
 
         <section
           class="transcript"
+          role="log"
+          aria-live="polite"
           ref={viewport}
           onScroll={() => {
             const atEnd =
@@ -1311,7 +1351,11 @@ function App() {
             }
           >
             <For each={items()}>
-              {(item) => {
+              {(item, index) => {
+                const stepsAfter = () =>
+                  items()
+                    .slice(index() + 1)
+                    .filter((entry) => entry.kind === "user").length;
                 if (item.kind === "tool") {
                   return (
                     <ToolCard
@@ -1333,7 +1377,25 @@ function App() {
                   return (
                     <div class="user-row">
                       <div class="user-bubble">
-                        <div class="role">你</div>
+                        <div class="role">
+                          你
+                          <button
+                            class="msg-action"
+                            title="复制这条消息"
+                            onClick={() => void copyText(item.text)}
+                          >
+                            复制
+                          </button>
+                          <Show when={stepsAfter() > 0}>
+                            <button
+                              class="msg-action"
+                              title="回滚到这条消息之前"
+                              onClick={() => void rewind(stepsAfter())}
+                            >
+                              回滚到此
+                            </button>
+                          </Show>
+                        </div>
                         <div class="text">{item.text}</div>
                       </div>
                     </div>
@@ -1352,7 +1414,25 @@ function App() {
                 }
                 return (
                   <div class="assistant">
-                    <div class="role">argent</div>
+                    <div class="role">
+                      argent
+                      <button
+                        class="msg-action"
+                        title="复制这条回复"
+                        onClick={() => void copyText(item.text)}
+                      >
+                        复制
+                      </button>
+                      <Show when={stepsAfter() > 0}>
+                        <button
+                          class="msg-action"
+                          title="回滚到这条回复之前"
+                          onClick={() => void rewind(stepsAfter())}
+                        >
+                          回滚到此
+                        </button>
+                      </Show>
+                    </div>
                     <Markdown text={item.text} />
                   </div>
                 );
@@ -1473,7 +1553,9 @@ function App() {
           </div>
           <div class="statusbar">
             <span class="dot" classList={{ live: busy() }} />
-            <span>{status()}</span>
+            <span role="status" aria-live="polite">
+              {status()}
+            </span>
             <span class="sep">·</span>
             <span>{currentRow()?.title || (sessionPath() ? "未命名会话" : "新任务")}</span>
             <span class="sep">·</span>
@@ -1542,6 +1624,33 @@ function App() {
                   </button>
                 </div>
               </Show>
+            </div>
+            <div class="diag">
+              <div>provider · {ready()?.provider || "—"}</div>
+              <div>protocol · {ready()?.protocol || "—"}</div>
+              <div>model · {ready()?.model || "—"}</div>
+              <div>cwd · {ready()?.cwd || "—"}</div>
+              <button
+                class="ghost"
+                onClick={() =>
+                  void copyText(
+                    JSON.stringify(
+                      {
+                        provider: ready()?.provider,
+                        protocol: ready()?.protocol,
+                        model: ready()?.model,
+                        cwd: ready()?.cwd,
+                        contextMax: ready()?.contextMax,
+                        session: sessionPath(),
+                      },
+                      null,
+                      2,
+                    ),
+                  )
+                }
+              >
+                复制诊断信息
+              </button>
             </div>
           </div>
         </div>
