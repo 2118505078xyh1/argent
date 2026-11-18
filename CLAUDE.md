@@ -113,7 +113,7 @@ cli -> every crate except engine / native
 ## Release policy
 
 - Trigger: when cumulative Rust line changes since the latest release tag
-  (added + deleted, committed content only) exceed **10% of the current
+  (added + deleted, committed content only) exceed **5% of the current
   Rust line total**, a new release is due. `scripts/release-threshold.sh`
   measures it (exit 0 = release due).
 - Release procedure (same as v0.2.0): verify fmt/clippy/tests green →
