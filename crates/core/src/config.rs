@@ -54,6 +54,10 @@ pub struct Config {
     /// Backup model tried after the primary keeps returning empty streams.
     /// Same provider endpoint, different model id; unset disables the chain.
     pub fallback_model: Option<String>,
+    /// Model for delegate subagents: retrieval/summarizing children run on a
+    /// cheaper model than the main conversation. `None` keeps children on the
+    /// primary model. An explicit role or per-request model still wins.
+    pub secondary_model: Option<String>,
     /// Models shown in the picker and allowed by model cycling. Empty means
     /// every model from the provider catalog (Pi's `enabledModels`).
     pub enabled_models: Vec<String>,
@@ -137,6 +141,7 @@ impl Default for Config {
             background_model: None,
             compact_threshold_tokens: None,
             fallback_model: None,
+            secondary_model: None,
             enabled_models: Vec::new(),
             plugins: Vec::new(),
             allowed_tools: Vec::new(),
@@ -423,6 +428,11 @@ pub fn merge_into(config: &mut Config, text: &str, source: &Path) -> Result<()> 
                     config.fallback_model = Some(m.to_string());
                 }
             }
+            "secondaryModel" | "secondary_model" => {
+                if let Some(m) = val.as_str() {
+                    config.secondary_model = Some(m.to_string());
+                }
+            }
             "autoApproveBash" | "auto_approve_bash" => {
                 if let Some(b) = val.as_bool() {
                     config.auto_approve_bash = b;
@@ -706,6 +716,26 @@ mod tests {
         assert_eq!(suggest_setting("themes"), Some("theme"));
         assert_eq!(suggest_setting("zzz"), None);
         assert_eq!(suggest_setting("ab"), None, "too short to guess");
+    }
+
+    #[test]
+    fn secondary_model_parses_from_camel_and_snake() {
+        let mut config = Config::default();
+        merge_into(
+            &mut config,
+            r#"{"secondaryModel":"cheap-model"}"#,
+            Path::new("test.json"),
+        )
+        .unwrap();
+        assert_eq!(config.secondary_model.as_deref(), Some("cheap-model"));
+        let mut config = Config::default();
+        merge_into(
+            &mut config,
+            r#"{"secondary_model":"cheap-2"}"#,
+            Path::new("test.json"),
+        )
+        .unwrap();
+        assert_eq!(config.secondary_model.as_deref(), Some("cheap-2"));
     }
 
     #[test]

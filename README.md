@@ -328,6 +328,7 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 - 后台小模型助手（opt-in）：`backgroundIntelligence: true` 后，会话标题、压缩摘要、分支切换摘要由 `backgroundModel`（默认主模型）生成，失败自动回退到原有启发式，任何后台调用失败都不会影响运行
 - 模型范围：`enabledModels` 限制模型选择器与循环范围（支持 `*` 通配，匹配可含 `provider/` 前缀）；为空表示全部
 - 备用模型：`fallbackModel`（或 CLI 参数 `--fallback-model`）在主模型连续瞬时失败（429/5xx/超时，空流重试耗尽）时自动换用该模型重跑本轮；400/密钥错误不切换。对所有运行路径生效，默认关闭
+- 子代理模型：`secondaryModel`（或 CLI 参数 `--secondary-model`）让 delegate 子代理（检索/归纳类任务）默认跑更便宜的模型，省主模型 token；角色或单次请求显式指定的模型优先，未设置时子代理跟随主模型
 - MCP 服务器：`mcpServers` 配置外部工具，形状与 Claude Code / Codex CLI 相同，直接复制过来就能用。每个服务器启动一个 stdio 进程，其工具以 `mcp__<server>__<tool>` 注册进注册表，`tool_search` 按需提升；某台服务器起不来只打一行提示，不影响运行
   ```json
   {

@@ -1071,6 +1071,7 @@ fn build_agent(
         api_key: config.api_key.clone(),
         protocol: config.protocol.clone(),
         model: config.model.clone(),
+        secondary_model: config.secondary_model.clone(),
         thinking: config.thinking_level.clone(),
         models: vec![model_info(config)],
         roles: std::sync::Arc::clone(&roles),

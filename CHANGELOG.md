@@ -5,6 +5,12 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
 ## Unreleased
 
+- **Subagents run on a cheaper model (`secondaryModel`)**. Delegate
+  children default to a configured secondary model (config key or
+  `--secondary-model`) instead of the primary conversation model;
+  a role or per-request model choice still wins, and unset keeps the
+  old behavior. Retrieval and summarizing scouts stop burning the
+  main model's tokens.
 - **Mouse caret placement in the input area.** A press inside the input
   rows moves the cursor to the clicked cell (CJK cells included); release
   no longer leaks into transcript selection, copy or thinking toggles.

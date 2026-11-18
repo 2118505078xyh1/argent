@@ -52,6 +52,9 @@ pub struct Cli {
     pub price_output: Option<f64>,
     /// 备用模型：主模型限流、过载或返回 5xx 时切换并重试一次。
     pub fallback_model: Option<String>,
+    /// 子代理默认模型：检索/归纳类 delegate 任务跑更便宜的模型；
+    /// 角色或请求显式指定的模型优先。未设置时子代理跟随主模型。
+    pub secondary_model: Option<String>,
     /// 额外的工作目录，可重复；与 cwd 一起构成模型可见的工作区。
     pub add_dirs: Vec<PathBuf>,
     /// `-c key=value` / `--config key=value` 形式的配置覆盖，可重复。
@@ -144,6 +147,7 @@ impl Default for Cli {
             price_input: None,
             price_output: None,
             fallback_model: None,
+            secondary_model: None,
             add_dirs: Vec::new(),
             config_overrides: Vec::new(),
             output_schema: None,
@@ -250,6 +254,8 @@ OPTIONS:
     -a, --add-dir <DIR>     Grant the agent another working directory (repeatable)
         --fallback-model <ID>  When the primary model keeps failing transiently
                             (429/5xx/timeout), retry the turn on this model
+        --secondary-model <ID>  Model for delegate subagents (retrieval or
+                            summarizing tasks); role or request choice wins
         --output-schema <F> Force the final answer to be JSON matching this schema
                             (a file path, or inline JSON beginning with '{')
         --bg                Run in the background; prints an id, then `logs <id>`
@@ -372,6 +378,8 @@ pub const HELP_ZH: &str = r#"argent — Rust 编写的 coding agent
     -r, --resume <FILE>     恢复指定会话
     -a, --add-dir <DIR>     再授权一个工作目录（可重复）
         --fallback-model <ID>  主模型连续瞬时失败（429/5xx/超时）时，换用该模型
+        --secondary-model <ID>  delegate 子代理的默认模型（检索/归纳类任务）；
+                            角色或请求显式指定的模型优先
                             重跑；对所有运行路径生效
         --output-schema <F> 要求最终回答是符合该 schema 的 JSON
                             （文件路径，或以 '{' 开头的内联 JSON）
@@ -478,6 +486,9 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             }
             "--fallback-model" => {
                 cli.fallback_model = Some(next_value(args, &mut index, "--fallback-model")?);
+            }
+            "--secondary-model" => {
+                cli.secondary_model = Some(next_value(args, &mut index, "--secondary-model")?);
             }
             "--output-schema" | "--json-schema" => {
                 cli.output_schema = Some(next_value(args, &mut index, "--output-schema")?);
@@ -915,6 +926,13 @@ mod tests {
             vec![PathBuf::from("/work/lib"), PathBuf::from("/work/docs")]
         );
         assert_eq!(cli.fallback_model.as_deref(), Some("backup"));
+    }
+
+    #[test]
+    fn parses_the_secondary_model_flag() {
+        let cli = parse(&args(&["--secondary-model", "cheap", "hi"])).expect("parse");
+        assert_eq!(cli.secondary_model.as_deref(), Some("cheap"));
+        assert_eq!(cli.prompt.as_deref(), Some("hi"));
     }
 
     #[test]

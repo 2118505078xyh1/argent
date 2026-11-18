@@ -126,13 +126,14 @@ Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，DSH 
 
 ### P0
 
-- [ ] **delegate 子代理用便宜模型（`secondaryModel`）**
+- [x] **delegate 子代理用便宜模型（`secondaryModel`）**
   - Kimi `/secondary-model` 已验证此路径。argent 的 delegate 目前用主模型跑子代理，
     而背景小模型已有 `backgroundModel` 先例——配置加 `secondaryModel`（config +
     `--secondary-model`），delegate 与 backgroundIntelligence 共用同一解析逻辑。
   - 直接省 token：子代理干的多是检索/归纳，4B 档模型够用。
-  - 验收：`delegate` 请求的 model 换成 secondary；usage 账本按模型分开可见；无
-    secondary 时回退主模型。
+  - 已完成：config/CLI/ChildFactory 三层接线，解析链 request > role > secondary >
+    primary（`resolve_model`，3 个新测试）；usage 按模型分开可见仍在（子代理用量
+    本来就不进账本，是既有缺口，后续单独补）。
 
 ### P1
 

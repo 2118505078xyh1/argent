@@ -14,6 +14,7 @@ fn main() {
         api_key: None,
         protocol: "openai-chat-completions".to_string(),
         model: "auto/deepseek-v4.1-flash".to_string(),
+        secondary_model: None,
         thinking: "low".to_string(),
         models: Vec::new(),
         roles: Arc::new(Mutex::new(roles)),

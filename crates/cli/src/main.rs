@@ -551,6 +551,12 @@ pub fn run(raw: &[String]) -> Result<i32> {
     // 内部在主模型空流重试耗尽且错误可临时（429/5xx/超时）时自动切换，
     // 全路径（one-shot/REPL/TUI/engine）一个机制兜底。
     agent_config.fallback_model = cli.fallback_model.clone().or(config.fallback_model.clone());
+    // `--secondary-model` 优先于 settings 的 `secondaryModel`；delegate
+    // 子代理（请求/角色未显式指定模型时）跑在它上面，省主模型 token。
+    let secondary_model = cli
+        .secondary_model
+        .clone()
+        .or(config.secondary_model.clone());
     let background = crate::mainx::background::BackgroundAssistant::from_config(&config);
     if let Some(turns) = cli
         .max_turns
@@ -868,6 +874,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
         api_key: config.api_key.clone(),
         protocol: config.protocol.clone(),
         model: config.model.clone(),
+        secondary_model: secondary_model.clone(),
         thinking: config.thinking_level.clone(),
         models: vec![model_info(&config)],
         roles: roles.clone(),
@@ -896,6 +903,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
         api_key: config.api_key.clone(),
         protocol: config.protocol.clone(),
         model: config.model.clone(),
+        secondary_model: secondary_model.clone(),
         thinking: config.thinking_level.clone(),
         models: vec![model_info(&config)],
         roles: Arc::clone(&roles),

@@ -37,6 +37,9 @@ pub struct ChildFactory {
     pub protocol: String,
     /// Model the parent uses, unless a role overrides it.
     pub model: String,
+    /// Default model for children: cheaper than the parent's, used when no
+    /// role or request pins one. `None` keeps children on the primary model.
+    pub secondary_model: Option<String>,
     /// Thinking level the parent uses, unless a role overrides it.
     pub thinking: String,
     /// 模型目录，子代理据此裁剪图片与 thinking。
@@ -160,6 +163,7 @@ impl ChildFactory {
             api_key: self.api_key.clone(),
             protocol: self.protocol.clone(),
             model: self.model.clone(),
+            secondary_model: self.secondary_model.clone(),
             thinking: self.thinking.clone(),
             models: self.models.clone(),
             roles: Arc::clone(&self.roles),
@@ -217,6 +221,18 @@ impl ChildFactory {
         outcome
     }
 
+    /// 子代理的模型解析链：请求显式指定 > 角色指定 > secondary > 主模型。
+    ///
+    /// secondary 是"默认便宜模型"：角色想用强模型时显式声明即可覆盖。
+    fn resolve_model(&self, request: &DelegateRequest, role: &crate::roles::Role) -> String {
+        request
+            .model
+            .clone()
+            .or_else(|| role.model.clone())
+            .or_else(|| self.secondary_model.clone())
+            .unwrap_or_else(|| self.model.clone())
+    }
+
     /// Build and run one child.
     pub fn run(&self, request: DelegateRequest, started: Instant) -> Result<String> {
         let role = {
@@ -248,11 +264,7 @@ impl ChildFactory {
             }
         };
 
-        let model = request
-            .model
-            .clone()
-            .or_else(|| role.model.clone())
-            .unwrap_or_else(|| self.model.clone());
+        let model = self.resolve_model(&request, &role);
         let thinking = request
             .thinking
             .clone()
@@ -474,6 +486,7 @@ mod tests {
             api_key: None,
             protocol: "openai-chat-completions".to_string(),
             model: "test-model".to_string(),
+            secondary_model: None,
             thinking: "low".to_string(),
             models: Vec::new(),
             roles: Arc::new(Mutex::new(roles)),
@@ -515,6 +528,37 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert!(outcomes[0].is_error);
         assert!(outcomes[0].output.contains("unknown role"));
+    }
+
+    #[test]
+    fn children_default_to_the_secondary_model_when_set() {
+        let mut factory = factory(role_registry());
+        factory.secondary_model = Some("cheap-model".to_string());
+        let roles = factory.roles.lock().expect("lock");
+        let scout = roles.get("scout").expect("scout role");
+        let request = DelegateRequest {
+            role: "scout".to_string(),
+            task: "x".to_string(),
+            model: None,
+            thinking: None,
+        };
+        // scout 角色未指定模型 → 落到 secondary。
+        assert_eq!(factory.resolve_model(&request, scout), "cheap-model");
+        // 角色显式指定的模型压过 secondary。
+        let pinned = crate::roles::Role {
+            model: Some("role-model".to_string()),
+            ..scout.clone()
+        };
+        assert_eq!(factory.resolve_model(&request, &pinned), "role-model");
+        // 请求显式指定的模型压过一切。
+        let explicit = DelegateRequest {
+            model: Some("req-model".to_string()),
+            ..request.clone()
+        };
+        assert_eq!(factory.resolve_model(&explicit, &pinned), "req-model");
+        // 没配 secondary 时保持旧行为：跟随主模型。
+        factory.secondary_model = None;
+        assert_eq!(factory.resolve_model(&request, scout), "test-model");
     }
 
     #[test]
