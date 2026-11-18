@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -22,6 +22,24 @@ export default function Automations() {
   const [status, setStatus] = createSignal("");
   const [error, setError] = createSignal("");
   const [log, setLog] = createSignal<{ title: string; body: string } | null>(null);
+  const [preview, setPreview] = createSignal("");
+
+  createEffect(() => {
+    const value = schedule().trim();
+    if (!value) {
+      setPreview("");
+      return;
+    }
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
+    void invoke<string>("preview_schedule", { schedule: value })
+      .then((next) => {
+        if (!cancelled) setPreview(next);
+      })
+      .catch(() => setPreview("无效日程"));
+  });
 
   const refresh = async () => {
     try {
@@ -125,6 +143,7 @@ export default function Automations() {
             onInput={(e) => setSchedule(e.currentTarget.value)}
             placeholder="every 30m · daily 09:00 · weekly mon 09:00"
           />
+          <span class="auto-preview">下次运行：{preview() || "—"}</span>
         </label>
         <label class="wide">
           提示词

@@ -1002,6 +1002,11 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
+.auto-preview {
+  color: var(--dim);
+  font-size: 10px;
+}
+
 .auto-form label.wide {
   grid-column: 1 / -1;
 }

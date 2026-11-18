@@ -85,6 +85,7 @@ fn main() {
             backend::compact,
             backend::set_model,
             backend::set_thinking,
+            backend::preview_schedule,
             backend::list_automations,
             backend::create_automation,
             backend::toggle_automation,

@@ -1011,6 +1011,14 @@ fn automation_json(task: &argent_automation::Automation) -> Value {
 }
 
 #[tauri::command]
+pub fn preview_schedule(schedule: String) -> Result<String, String> {
+    let parsed = Schedule::parse(schedule.trim()).map_err(|error| error.to_string())?;
+    Ok(argent_automation::format_iso(
+        parsed.next_run(None, argent_automation::now()),
+    ))
+}
+
+#[tauri::command]
 pub fn list_automations() -> Result<Value, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let store = AutomationStore::for_workspace(&cwd).map_err(|error| error.to_string())?;
