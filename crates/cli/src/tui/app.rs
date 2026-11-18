@@ -376,6 +376,9 @@ impl App {
             UiEvent::BtwDelta(text) => {
                 self.transcript.append_btw(&text);
             }
+            UiEvent::BtwDelta(text) => {
+                self.transcript.append_btw(&text);
+            }
             UiEvent::BtwDone => {}
             UiEvent::Error(text) => {
                 self.transcript.push_notice(NoticeKind::Error, text);

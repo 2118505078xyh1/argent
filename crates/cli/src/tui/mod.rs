@@ -18,6 +18,9 @@ pub(crate) use keys::{spawn_input, Key};
 /// 中文字体里缩成一个难辨认的墨点。
 pub(crate) const ASSISTANT_MARK: &str = "◆ ";
 pub(crate) const TOOL_MARK: &str = "● ";
+pub(crate) const USER_MARK: &str = "› ";
+/// 输入行左右边框各占 2 格（`│ ` / ` │`）。
+pub(crate) const INPUT_PAD: usize = 2;
 
 mod app;
 mod events;

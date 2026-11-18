@@ -7,40 +7,6 @@
 //! [`Rgb`] is what the GUI frontends use directly; the terminal one ignores it
 //! and keeps its own ANSI mapping.
 
-    fn contrast(a: Rgb, b: Rgb) -> f32 {
-        fn channel(value: u8) -> f32 {
-            let value = value as f32 / 255.0;
-            if value <= 0.04045 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }
-        }
-        fn relative(rgb: Rgb) -> f32 {
-            0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
-        }
-        let a = relative(a);
-        let b = relative(b);
-        let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
-        (hi + 0.05) / (lo + 0.05)
-    }
-
-    #[test]
-    fn text_and_accent_clear_the_background() {
-        for palette in [Palette::dark(), Palette::titanium(), Palette::light()] {
-            assert!(
-                contrast(palette.text, palette.background) >= 7.0,
-                "{} body text",
-                palette.name
-            );
-            assert!(
-                contrast(palette.accent, palette.background) >= 4.5,
-                "{} accent",
-                palette.name
-            );
-        }
-    }
-
 /// An 8-bit-per-channel colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb {
@@ -127,9 +93,10 @@ impl Palette {
         }
     }
 
-    pub fn all() -> [Palette; 4] {
+    pub fn all() -> [Palette; 5] {
         [
             Palette::dark(),
+            Palette::titanium(),
             Palette::light(),
             Palette::contrast(),
             Palette::mono(),
@@ -149,23 +116,31 @@ impl Palette {
             .unwrap_or_else(Palette::dark)
     }
 
-    /// The default: soft tones on a dark background.
+    /// The default: soft blue-grey tones on a dark canvas.
     pub fn dark() -> Palette {
         Palette {
             name: "dark",
-            description: "near-black canvas, one mint accent",
-            background: Rgb::new(0x0a, 0x0a, 0x0a),
-            surface: Rgb::new(0x11, 0x11, 0x11),
-            element: Rgb::new(0x1a, 0x1a, 0x1a),
-            border: Rgb::new(0x2a, 0x2a, 0x2a),
-            border_subtle: Rgb::new(0x1e, 0x1e, 0x1e),
-            text: Rgb::new(0xe6, 0xe6, 0xe6),
-            dim: Rgb::new(0x8a, 0x8a, 0x8a),
-            accent: Rgb::new(0x00, 0xd9, 0x92),
-            ok: Rgb::new(0x5f, 0xd3, 0x9a),
-            error: Rgb::new(0xe5, 0x54, 0x4b),
-            warn: Rgb::new(0xd8, 0xa6, 0x57),
-            strong: Rgb::new(0xff, 0xff, 0xff),
+            description: "soft blue-grey canvas, periwinkle accent",
+            background: Rgb::new(0x0b, 0x0e, 0x14),
+            surface: Rgb::new(0x11, 0x15, 0x1c),
+            element: Rgb::new(0x18, 0x20, 0x2b),
+            border: Rgb::new(0x2a, 0x34, 0x45),
+            border_subtle: Rgb::new(0x1d, 0x26, 0x34),
+            text: Rgb::new(0xd7, 0xde, 0xe9),
+            dim: Rgb::new(0x7f, 0x8b, 0x9f),
+            accent: Rgb::new(0x7a, 0xa2, 0xf7),
+            ok: Rgb::new(0x9e, 0xce, 0x6a),
+            error: Rgb::new(0xf7, 0x76, 0x8e),
+            warn: Rgb::new(0xe0, 0xaf, 0x68),
+            strong: Rgb::new(0xf4, 0xf7, 0xfb),
+        }
+    }
+
+    /// Titanium: the OMP-style neutral surface with a cool accent.
+    pub fn titanium() -> Palette {
+        Palette {
+            name: "titanium",
+            ..Palette::dark()
         }
     }
 
@@ -313,5 +288,39 @@ mod tests {
         let palette = Palette::mono();
         assert_eq!(palette.get(Role::Ok), palette.get(Role::Error));
         assert_eq!(palette.get(Role::Accent), palette.get(Role::Text));
+    }
+
+    fn contrast(a: Rgb, b: Rgb) -> f32 {
+        fn channel(value: u8) -> f32 {
+            let value = value as f32 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        fn relative(rgb: Rgb) -> f32 {
+            0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+        }
+        let a = relative(a);
+        let b = relative(b);
+        let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn text_and_accent_clear_the_background() {
+        for palette in [Palette::dark(), Palette::titanium(), Palette::light()] {
+            assert!(
+                contrast(palette.text, palette.background) >= 7.0,
+                "{} body text",
+                palette.name
+            );
+            assert!(
+                contrast(palette.accent, palette.background) >= 4.5,
+                "{} accent",
+                palette.name
+            );
+        }
     }
 }

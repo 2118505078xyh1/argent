@@ -456,7 +456,6 @@ fn thought_duration_format_is_human_readable() {
     assert_eq!(format_thought_duration(Duration::from_secs(12)), "12s");
     assert_eq!(format_thought_duration(Duration::from_secs(65)), "1m 5s");
 }
-
 #[test]
 fn the_thinking_header_shows_the_stream_duration() {
     let mut app = app();
@@ -511,7 +510,6 @@ fn the_first_message_survives_the_auto_rename() {
         "transcript keeps the user entry"
     );
 }
-
 #[test]
 fn the_ready_event_keeps_the_context_window() {
     let mut app = app();

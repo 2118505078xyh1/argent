@@ -673,12 +673,12 @@ fn top_bar(app: &App) -> Element<'_, Message> {
     let locale = app.locale;
 
     let heading = column![
-        text(app.title()).size(13),
+        text(app.title()).size(15),
         text(short_path(&app.cwd))
-            .size(10)
+            .size(12)
             .color(style::color(p.dim)),
     ]
-    .spacing(1);
+    .spacing(2);
 
     let selected_model = if app.models.iter().any(|id| id == &app.model) {
         Some(app.model.clone())
@@ -687,7 +687,7 @@ fn top_bar(app: &App) -> Element<'_, Message> {
     };
     let model = pick_list(app.models.clone(), selected_model, Message::Model)
         .width(176)
-        .text_size(11)
+        .text_size(12)
         .padding([5, 9])
         .style(style::picker(p))
         .menu_style(style::menu(p));
@@ -698,7 +698,7 @@ fn top_bar(app: &App) -> Element<'_, Message> {
     };
     let level = pick_list(app.levels.clone(), selected_level, Message::Thinking)
         .width(96)
-        .text_size(11)
+        .text_size(12)
         .padding([5, 9])
         .style(style::picker(p))
         .menu_style(style::menu(p));
@@ -707,11 +707,11 @@ fn top_bar(app: &App) -> Element<'_, Message> {
         heading,
         space().width(Length::Fill),
         text(t(locale, "tui.models.title"))
-            .size(9)
+            .size(11)
             .color(style::color(p.dim)),
         model,
         text(t(locale, "tui.thinking.title"))
-            .size(9)
+            .size(11)
             .color(style::color(p.dim)),
         level,
     ]
@@ -744,7 +744,14 @@ fn short_path(path: &std::path::Path) -> String {
 fn transcript_area(app: &App) -> Element<'_, Message> {
     let p = app.palette;
     if app.transcript.is_empty() {
-        return empty_state(app);
+        return container(empty_state(app))
+            .width(Length::Fill)
+            .height(Length::Shrink)
+            .padding([32, 0])
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .style(style::plain(p))
+            .into();
     }
 
     let mut list = Column::new().spacing(12).width(Length::Fill);
@@ -775,25 +782,55 @@ fn at_end(viewport: &iced::widget::scrollable::Viewport) -> bool {
 fn empty_state(app: &App) -> Element<'_, Message> {
     let p = app.palette;
     let locale = app.locale;
-    let body = column![
-        text("argent").size(30).color(style::color(p.accent)),
-        text(t(locale, "tui.empty"))
-            .size(13)
-            .color(style::color(p.text)),
-        text(t(locale, "ui.placeholder"))
-            .size(11)
-            .color(style::color(p.dim)),
+    let shortcut = |label: &'static str, prompt: &'static str| {
+        button(text(label).size(12))
+            .padding([7, 12])
+            .style(style::ghost_button(p))
+            .on_press(Message::SetPrompt(prompt.to_string()))
+    };
+    let shortcuts = row![
+        shortcut(
+            t(locale, "ui.quick_read"),
+            "Read the repository structure and summarize the main modules."
+        ),
+        shortcut(
+            t(locale, "ui.quick_fix"),
+            "Find one likely bug in this repository and explain how to fix it."
+        ),
+        shortcut(
+            t(locale, "ui.quick_explain"),
+            "Explain the architecture of this repository."
+        ),
     ]
-    .spacing(6)
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    let body = column![
+        text("argent").size(36).color(style::color(p.accent)),
+        text(t(locale, "ui.empty_hint"))
+            .size(15)
+            .color(style::color(p.text)),
+        text(short_path(&app.cwd))
+            .size(12)
+            .color(style::color(p.dim)),
+        shortcuts,
+    ]
+    .spacing(12)
     .align_x(Alignment::Center);
 
-    container(body)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(style::plain(p))
-        .into()
+    container(
+        container(body)
+            .padding([26, 30])
+            .width(Length::Fill)
+            .max_width(560.0)
+            .style(style::welcome_card(p)),
+    )
+    .width(Length::Fill)
+    .height(Length::Shrink)
+    .align_x(Alignment::Center)
+    .align_y(Alignment::Center)
+    .style(style::plain(p))
+    .into()
 }
 
 fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, Message> {
@@ -801,12 +838,14 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
         Entry::User(message) => {
             let bubble = container(
                 column![
-                    text(t(locale, "ui.you")).size(9).color(style::color(p.dim)),
-                    text(message.clone()).size(13),
+                    text(t(locale, "ui.you"))
+                        .size(11)
+                        .color(style::color(p.dim)),
+                    text(message.clone()).size(14),
                 ]
-                .spacing(2),
+                .spacing(3),
             )
-            .padding([7, 11])
+            .padding([8, 12])
             .style(style::user_bubble(p));
 
             row![
@@ -818,10 +857,10 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
         }
         Entry::Assistant(message) => container(
             column![
-                text("argent").size(9).color(style::color(p.accent)),
-                text(message.clone()).size(13),
+                text("argent").size(11).color(style::color(p.accent)),
+                text(message.clone()).size(14),
             ]
-            .spacing(2),
+            .spacing(3),
         )
         .width(Length::Fill)
         .style(style::plain(p))
@@ -829,13 +868,13 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
         Entry::Thinking(message) => container(
             column![
                 text(t(locale, "ui.thinking"))
-                    .size(9)
+                    .size(11)
                     .color(style::color(p.dim)),
-                text(message.clone()).size(12).color(style::color(p.dim)),
+                text(message.clone()).size(13).color(style::color(p.dim)),
             ]
-            .spacing(2),
+            .spacing(3),
         )
-        .padding([1, 2])
+        .padding([2, 3])
         .style(style::plain(p))
         .into(),
         Entry::Tool(run) => {
@@ -844,13 +883,13 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
                 ToolState::Ok { .. } => ("✓", p.ok),
                 ToolState::Failed { .. } => ("✗", p.error),
             };
-            let mut body = Column::new().spacing(4);
+            let mut body = Column::new().spacing(5);
             body = body.push(
                 row![
-                    text(glyph).size(12).color(style::color(tint)),
-                    text(run.name.clone()).size(11).font(style::mono_font()),
+                    text(glyph).size(13).color(style::color(tint)),
+                    text(run.name.clone()).size(12).font(style::mono_font()),
                     text(run.summary())
-                        .size(10)
+                        .size(11)
                         .color(style::color(p.dim))
                         .width(Length::Fill)
                         .align_x(Alignment::End),
@@ -861,7 +900,7 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
             if !run.arguments.trim().is_empty() {
                 body = body.push(
                     text(clip(run.arguments.trim(), 240))
-                        .size(10)
+                        .size(11)
                         .font(style::mono_font())
                         .color(style::color(p.dim)),
                 );
@@ -869,13 +908,13 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
             if !run.output.trim().is_empty() {
                 body = body.push(
                     text(clip(&clean(&run.output), 6000))
-                        .size(11)
+                        .size(12)
                         .font(style::mono_font()),
                 );
             }
             container(body)
                 .width(Length::Fill)
-                .padding(9)
+                .padding(10)
                 .style(style::tool_card(p))
                 .into()
         }
@@ -886,8 +925,8 @@ fn entry_view<'a>(entry: &'a Entry, p: Palette, locale: Locale) -> Element<'a, M
                 NoticeKind::Error => ("✗", p.error),
             };
             row![
-                text(glyph).size(11).color(style::color(tint)),
-                text(message.clone()).size(11).color(style::color(tint)),
+                text(glyph).size(12).color(style::color(tint)),
+                text(message.clone()).size(12).color(style::color(tint)),
             ]
             .spacing(5)
             .align_y(Alignment::Center)
@@ -915,12 +954,12 @@ fn approval_card(app: &App) -> Element<'_, Message> {
     };
 
     let actions = row![
-        button(text(t(locale, "ui.allow")).size(11))
-            .padding([4, 12])
+        button(text(t(locale, "ui.allow")).size(12))
+            .padding([5, 13])
             .style(style::accent_button(p))
             .on_press(Message::Allow(pending.id)),
-        button(text(t(locale, "ui.reject")).size(11))
-            .padding([4, 12])
+        button(text(t(locale, "ui.reject")).size(12))
+            .padding([5, 13])
             .style(style::ghost_button(p))
             .on_press(Message::Deny(pending.id)),
     ]
@@ -933,9 +972,9 @@ fn approval_card(app: &App) -> Element<'_, Message> {
             more,
             pending.name
         ))
-        .size(11)
+        .size(12)
         .color(style::color(p.warn)),
-        text(pending.detail.clone()).size(11),
+        text(pending.detail.clone()).size(12),
         actions,
     ]
     .spacing(6);
@@ -983,7 +1022,7 @@ fn composer(app: &App) -> Element<'_, Message> {
         .id(INPUT_ID)
         .placeholder(t(locale, "ui.placeholder"))
         .font(style::ui_font())
-        .size(13)
+        .size(14)
         .on_action(Message::Edit)
         .key_binding(|press| {
             let enter = matches!(
@@ -995,19 +1034,19 @@ fn composer(app: &App) -> Element<'_, Message> {
             }
             Binding::from_key_press(press)
         })
-        .padding(9)
-        .height(Length::Fixed(68.0))
+        .padding(11)
+        .height(Length::Fixed(78.0))
         .style(style::editor(p));
 
     let action: Element<'_, Message> = if app.working {
-        button(text(t(locale, "ui.stop")).size(11))
-            .padding([5, 13])
+        button(text(t(locale, "ui.stop")).size(12))
+            .padding([6, 14])
             .style(style::danger_button(p))
             .on_press(Message::Abort)
             .into()
     } else {
-        button(text(t(locale, "ui.send")).size(11))
-            .padding([5, 13])
+        button(text(t(locale, "ui.send")).size(12))
+            .padding([6, 14])
             .style(style::accent_button(p))
             .on_press_maybe(can_send.then_some(Message::Send))
             .into()
@@ -1018,13 +1057,13 @@ fn composer(app: &App) -> Element<'_, Message> {
         Locale::Zh => "Enter 发送 · Shift+Enter 换行",
     };
 
-    let rewind = button(text(t(locale, "ui.rewind")).size(10))
+    let rewind = button(text(t(locale, "ui.rewind")).size(11))
         .padding([5, 10])
         .style(style::ghost_button(p))
         .on_press_maybe((!app.working).then_some(Message::Rewind));
 
     let footer = row![
-        text(hint).size(9).color(style::color(p.dim)),
+        text(hint).size(10).color(style::color(p.dim)),
         space().width(Length::Fill),
         rewind,
         action,
@@ -1049,9 +1088,9 @@ fn status_bar(app: &App) -> Element<'_, Message> {
     let p = app.palette;
     let locale = app.locale;
     let dot = if app.working {
-        text("●").size(9).color(style::color(p.warn))
+        text("●").size(10).color(style::color(p.warn))
     } else {
-        text("●").size(9).color(style::color(p.ok))
+        text("●").size(10).color(style::color(p.ok))
     };
     let state = if app.working {
         t(locale, "tui.working")

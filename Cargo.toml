@@ -60,28 +60,3 @@ strip = true
 # gain.
 [profile.dev.package."*"]
 opt-level = 2
-
-[workspace.package]
-version = "0.3.2"
-edition = "2021"
-rust-version = "1.85"
-license = "MIT"
-
-[workspace.lints.clippy]
-# 各前端的入口函数一次性接住整套上下文：tui::spawn、tui::run、run_repl、
-# repl_command、acp::worker、engine::build_agent。拆成上下文结构体是一次
-# 重构任务，不是 lint 修复；需要时在那一处单独 allow。
-too_many_arguments = "allow"
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-
-# The webview and its windowing stack are large; compiling them with the same
-# LTO settings as the core makes a window build take minutes for no runtime
-# gain.
-[profile.dev.package."*"]
-opt-level = 2

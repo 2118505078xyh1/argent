@@ -9,6 +9,10 @@
                 self.input = text_editor::Content::with_text(&value);
                 return iced::widget::operation::focus(INPUT_ID);
             }
+            Message::SetPrompt(value) => {
+                self.input = text_editor::Content::with_text(&value);
+                return iced::widget::operation::focus(INPUT_ID);
+            }
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
