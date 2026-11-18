@@ -21,12 +21,15 @@ JS、图标或其他专有资产。
 CLI/TUI 路径完全不启动浏览器引擎；原生 iced 前端（`argent-native`）同样
 不依赖 WebView。整个产品只有一个 Rust 运行时。
 
-实测（release 构建）：
+实测（0.3.1 release 构建，Windows x64）：
 
 | 进程 | 二进制 | 工作集 |
-|---|---:|---:|
-| `argent tui`（全屏） | 5.46 MB | 8.6 MB |
-| `argent-native`（iced + tiny-skia） | 6.96 MB | 约 32 MB |
+|---|---|---|
+| `argent tui`（全屏） | 5.52 MB | 约 8.6 MB |
+| `argent-native`（iced + tiny-skia） | 6.98 MB | 约 32 MB |
+
+发布 zip 约 6.1 MB，内置 CLI、native、README、docs 和 examples。  
+`argent --version` 冷/热混合 7 次：中位数 35 ms，最小 33 ms，最大 146 ms（Windows x64）。
 
 ## argent 独有的七个能力
 
