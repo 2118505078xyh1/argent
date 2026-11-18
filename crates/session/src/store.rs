@@ -1203,7 +1203,10 @@ mod tests {
         let a = index
             .create(std::path::Path::new("/tmp/a"), "task a")
             .expect("create");
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // The sort is mtime (second-granular) with the millisecond file-name
+        // slug breaking ties, so a short pause is enough to guarantee order
+        // without relying on wall-clock seconds advancing.
+        std::thread::sleep(std::time::Duration::from_millis(20));
         let b = index
             .create(std::path::Path::new("/tmp/b"), "task b")
             .expect("create");

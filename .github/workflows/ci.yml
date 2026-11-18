@@ -51,6 +51,58 @@ jobs:
       - name: test
         run: cargo test --workspace --all-features --locked
 
+  # Race-hunting: one thread at a time surfaces order-dependent tests and
+  # shared-temp-dir collisions that parallel runs hide. The portable crates
+  # are the same set the Linux job runs.
+  stability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test portable crates single-threaded
+        run: >-
+          cargo test --locked
+          -p argent-core
+          -p argent-config
+          -p argent-security
+          -p argent-session
+          -p argent-ai
+          -p argent-provider
+          -p argent-tools
+          -p argent-agent
+          -p argent-plugins
+          -p argent-mcp
+          -p argent-commands
+          -p argent-hooks
+          -p argent-eval
+          -- --test-threads=1
+
+  # macOS exercises the third path family: keyring, Homebrew curl TLS and
+  # POSIX path handling, with none of the Windows-only crates.
+  macos-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test portable crates
+        run: >-
+          cargo test --locked
+          -p argent-core
+          -p argent-config
+          -p argent-security
+          -p argent-session
+          -p argent-ai
+          -p argent-provider
+          -p argent-tools
+          -p argent-agent
+          -p argent-plugins
+          -p argent-mcp
+          -p argent-commands
+          -p argent-hooks
+          -p argent-eval
+
   # iced 0.14 needs Rust 1.88, so the CLI/core MSRV excludes the GUI crate.
   msrv:
     runs-on: ubuntu-latest

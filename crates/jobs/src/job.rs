@@ -362,7 +362,13 @@ mod tests {
             1024 * 1024,
         )
         .expect("start");
-        thread::sleep(Duration::from_millis(200));
+        // Wait until the child is actually running instead of sleeping a
+        // fixed 200ms: on a slow machine the process may not have spawned
+        // yet, and killing too early can race the spawn.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && !matches!(job.status(), JobStatus::Running) {
+            thread::sleep(Duration::from_millis(50));
+        }
         job.kill().expect("kill");
         assert_eq!(job.status(), JobStatus::Killed);
     }
