@@ -31,7 +31,7 @@ type TextItem = {
 type ToolItem = { id: number; kind: "tool"; tool: Tool };
 type Item = TextItem | ToolItem;
 
-type Approval = { id: number; name: string; arguments: string };
+type Approval = { id: number; name: string; arguments: string; sid?: string };
 
 type SessionRow = {
   path: string;
@@ -100,7 +100,7 @@ type AgentEvent =
   | { type: "notice"; text: string }
   | { type: "aborted" };
 
-type Incoming =
+type Incoming = (
   | ({ kind: "ready" } & Ready)
   | { kind: "agent"; event: AgentEvent }
   | {
@@ -119,7 +119,8 @@ type Incoming =
   | { kind: "session_cleared" }
   | { kind: "sessions"; sessions: SessionRow[] }
   | { kind: "loaded"; entries: LoadedEntry[] }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+) & { sid?: string };
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -368,14 +369,49 @@ function parseIncoming(raw: unknown): Incoming | null {
 let nextId = 1;
 
 function App() {
-  const [items, setItems] = createSignal<Item[]>([]);
+  type Tab = { id: string; title: string; path: string };
+  const [tabs, setTabs] = createSignal<Tab[]>([{ id: "1", title: "新任务", path: "" }]);
+  const [active, setActive] = createSignal("1");
+  const [tabItems, setTabItems] = createSignal<Record<string, Item[]>>({});
+  const [tabReady, setTabReady] = createSignal<Record<string, Ready>>({});
+  const [tabBusy, setTabBusy] = createSignal<Record<string, boolean>>({});
+  const [tabStatus, setTabStatus] = createSignal<Record<string, string>>({ "1": "starting" });
+  const [tabPath, setTabPath] = createSignal<Record<string, string>>({});
   const [input, setInput] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
-  const [status, setStatus] = createSignal("starting");
-  const [ready, setReady] = createSignal<Ready | null>(null);
   const [approval, setApproval] = createSignal<Approval | null>(null);
   const [error, setError] = createSignal<string | null>(null);
-  const [sessionPath, setSessionPath] = createSignal("");
+
+  const items = () => tabItems()[active()] ?? [];
+  const setItemsFor = (sid: string, value: Item[] | ((prev: Item[]) => Item[])) =>
+    setTabItems((prev) => ({
+      ...prev,
+      [sid]: typeof value === "function" ? value(prev[sid] ?? []) : value,
+    }));
+  const setItems = (value: Item[] | ((prev: Item[]) => Item[])) => setItemsFor(active(), value);
+
+  const ready = () => tabReady()[active()] ?? null;
+  const setReadyFor = (sid: string, value: Ready) =>
+    setTabReady((prev) => ({ ...prev, [sid]: value }));
+  const setReady = (value: Ready | ((prev: Ready | undefined) => Ready | undefined)) =>
+    setTabReady((prev) => {
+      const next = typeof value === "function" ? value(prev[active()]) : value;
+      return next ? { ...prev, [active()]: next } : prev;
+    });
+
+  const busy = () => tabBusy()[active()] ?? false;
+  const setBusyFor = (sid: string, value: boolean) =>
+    setTabBusy((prev) => ({ ...prev, [sid]: value }));
+  const setBusy = (value: boolean) => setBusyFor(active(), value);
+
+  const status = () => tabStatus()[active()] ?? "ready";
+  const setStatusFor = (sid: string, value: string) =>
+    setTabStatus((prev) => ({ ...prev, [sid]: value }));
+  const setStatus = (value: string) => setStatusFor(active(), value);
+
+  const sessionPath = () => tabPath()[active()] ?? "";
+  const setSessionPathFor = (sid: string, value: string) =>
+    setTabPath((prev) => ({ ...prev, [sid]: value }));
+  const setSessionPath = (value: string) => setSessionPathFor(active(), value);
   const [sessions, setSessions] = createSignal<SessionRow[]>([]);
   const [sessionQuery, setSessionQuery] = createSignal("");
   const [theme, setTheme] = createSignal<"dark" | "light">(
@@ -416,8 +452,8 @@ function App() {
   let viewport!: HTMLDivElement;
   let composer!: HTMLTextAreaElement;
 
-  const append = (kind: TextItem["kind"], text: string, stream = false) => {
-    setItems((prev) => {
+  const append = (kind: TextItem["kind"], text: string, stream = false, sid = active()) => {
+    setItemsFor(sid, (prev) => {
       const last = prev[prev.length - 1];
       if (stream && last && last.kind === kind) {
         return [...prev.slice(0, -1), { ...last, text: last.text + text }];
@@ -426,9 +462,9 @@ function App() {
     });
   };
 
-  const applyReady = (value: Ready) => {
-    setReady(value);
-    setStatus("ready");
+  const applyReady = (value: Ready, sid = active()) => {
+    setReadyFor(sid, value);
+    setStatusFor(sid, "ready");
   };
 
   const resetMetrics = () => {
@@ -441,19 +477,19 @@ function App() {
     setPriced(false);
   };
 
-  const handleAgent = (event: AgentEvent) => {
+  const handleAgent = (event: AgentEvent, sid = active()) => {
     switch (event.type) {
       case "turn_start":
-        setStatus("thinking");
+        setStatusFor(sid, "thinking");
         break;
       case "assistant_text":
-        append("assistant", event.text, true);
+        append("assistant", event.text, true, sid);
         break;
       case "thinking":
-        append("thinking", event.text, true);
+        append("thinking", event.text, true, sid);
         break;
       case "tool_requested":
-        setItems((prev) => [
+        setItemsFor(sid, (prev) => [
           ...prev,
           {
             id: nextId++,
@@ -469,7 +505,7 @@ function App() {
         ]);
         break;
       case "tool_finished":
-        setItems((prev) =>
+        setItemsFor(sid, (prev) =>
           prev.map((item) => {
             if (item.kind !== "tool" || item.tool.id !== event.id) return item;
             return {
@@ -485,15 +521,15 @@ function App() {
         );
         break;
       case "finished":
-        setBusy(false);
-        setStatus(event.reason);
+        setBusyFor(sid, false);
+        setStatusFor(sid, event.reason);
         break;
       case "aborted":
-        setBusy(false);
-        setStatus("aborted");
+        setBusyFor(sid, false);
+        setStatusFor(sid, "aborted");
         break;
       case "notice":
-        append("notice", event.text);
+        append("notice", event.text, false, sid);
         break;
       default:
         break;
@@ -501,49 +537,73 @@ function App() {
   };
 
   const handle = (payload: Incoming) => {
+    const sid = payload.sid || active();
+    const isActive = sid === active();
     switch (payload.kind) {
       case "ready":
-        applyReady(payload);
+        applyReady(payload, sid);
         break;
       case "agent":
-        handleAgent(payload.event);
+        handleAgent(payload.event, sid);
         break;
       case "turn_done":
-        setBusy(false);
-        setStatus(payload.reason);
-        if (payload.promptTokens !== undefined) setPromptTokens(payload.promptTokens);
-        if (payload.completionTokens !== undefined)
-          setCompletionTokens(payload.completionTokens);
-        if (payload.totalTokens !== undefined) setTotalTokens(payload.totalTokens);
-        if (payload.cachedTokens !== undefined) setCachedTokens(payload.cachedTokens);
-        if (payload.requests !== undefined) setRequests(payload.requests);
-        if (payload.cost !== undefined) setCost(payload.cost);
-        if (payload.priced !== undefined) setPriced(payload.priced);
+        setBusyFor(sid, false);
+        setStatusFor(sid, payload.reason);
+        if (isActive) {
+          if (payload.promptTokens !== undefined) setPromptTokens(payload.promptTokens);
+          if (payload.completionTokens !== undefined)
+            setCompletionTokens(payload.completionTokens);
+          if (payload.totalTokens !== undefined) setTotalTokens(payload.totalTokens);
+          if (payload.cachedTokens !== undefined) setCachedTokens(payload.cachedTokens);
+          if (payload.requests !== undefined) setRequests(payload.requests);
+          if (payload.cost !== undefined) setCost(payload.cost);
+          if (payload.priced !== undefined) setPriced(payload.priced);
+        }
         break;
       case "approval":
-        setApproval(payload);
+        if (isActive) setApproval({ ...payload, sid });
         break;
       case "session":
-        setSessionPath(payload.path);
+        setSessionPathFor(sid, payload.path);
+        setTabs((prev) =>
+          prev.map((tab) =>
+            tab.id === sid
+              ? {
+                  ...tab,
+                  path: payload.path,
+                  title: sessions().find((row) => row.path === payload.path)?.title || tab.title,
+                }
+              : tab,
+          ),
+        );
         break;
       case "session_cleared":
-        setItems([]);
-        setSessionPath("");
-        resetMetrics();
+        setItemsFor(sid, []);
+        setSessionPathFor(sid, "");
+        setTabs((prev) =>
+          prev.map((tab) =>
+            tab.id === sid ? { ...tab, path: "", title: "新任务" } : tab,
+          ),
+        );
+        if (isActive) resetMetrics();
         break;
       case "sessions":
         setSessions(payload.sessions);
         break;
       case "loaded":
-        setItems(loadedItems(payload.entries));
-        setError(null);
-        setStatus("ready");
-        setFollow(true);
+        setItemsFor(sid, loadedItems(payload.entries));
+        if (isActive) {
+          setError(null);
+          setStatus("ready");
+          setFollow(true);
+        }
         break;
       case "error":
-        setError(payload.message);
-        setBusy(false);
-        setStatus("error");
+        if (isActive) {
+          setError(payload.message);
+          setBusy(false);
+          setStatus("error");
+        }
         break;
     }
   };
@@ -553,10 +613,14 @@ function App() {
     try {
       unlisten = await listen<unknown>("argent://event", (event) => {
         const payload = parseIncoming(event.payload);
-        if (payload) handle(payload);
+        if (payload) {
+          handle({ ...payload, sid: asString(asRecord(event.payload)?.sid) });
+        }
       });
       const state = await invoke<unknown>("get_state");
       const stateRecord = asRecord(state);
+      const initialSid = asString(stateRecord?.sid, "1");
+      if (initialSid) setActive(initialSid);
       const readyRecord = stateRecord ? asRecord(stateRecord.ready) : null;
       if (readyRecord) {
         const parsed = parseReady(readyRecord);
@@ -564,7 +628,7 @@ function App() {
         const savedModel = storageGet("argent.model");
         if (savedModel && savedModel !== parsed.model) {
           try {
-            await invoke("set_model", { model: savedModel });
+            await invoke("set_model", { sid: initialSid, model: savedModel });
             const info = parsed.models.find((entry) => entry.id === savedModel);
             setReady((prev) =>
               prev
@@ -587,7 +651,7 @@ function App() {
           savedThinking !== parsed.level
         ) {
           try {
-            await invoke("set_thinking", { level: savedThinking });
+            await invoke("set_thinking", { sid: initialSid, level: savedThinking });
             setReady((prev) => (prev ? { ...prev, level: savedThinking } : prev));
           } catch (err) {
             setError(String(err));
@@ -648,7 +712,7 @@ function App() {
     // second prompt. The agent drains it at the next tool boundary.
     if (busy()) {
       try {
-        await invoke("steer", { text });
+        await invoke("steer", { sid: active(), text });
         append("notice", "插话已排队，将在下一个工具边界注入");
       } catch (err) {
         setError(String(err));
@@ -660,7 +724,7 @@ function App() {
     setBusy(true);
     setStatus("working");
     try {
-      await invoke("send_prompt", { text });
+      await invoke("send_prompt", { sid: active(), text });
     } catch (err) {
       setError(String(err));
       setBusy(false);
@@ -683,7 +747,53 @@ function App() {
 
   const abort = async () => {
     try {
-      await invoke("abort");
+      await invoke("abort", { sid: active() });
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const addTab = async () => {
+    try {
+      const sid = await invoke<string>("new_tab");
+      setTabs((prev) => [...prev, { id: sid, title: "新任务", path: "" }]);
+      setActive(sid);
+      setBusyFor(sid, false);
+      setStatusFor(sid, "starting");
+      setItemsFor(sid, []);
+      setApproval(null);
+      setError(null);
+      resetMetrics();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const switchTab = async (sid: string) => {
+    if (sid === active()) return;
+    try {
+      await invoke("activate_tab", { sid });
+      setActive(sid);
+      setApproval(null);
+      setError(null);
+      setFollow(true);
+      resetMetrics();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const closeTab = async (sid: string) => {
+    if (tabs().length <= 1) return;
+    try {
+      await invoke("close_tab", { sid });
+      const remaining = tabs().filter((tab) => tab.id !== sid);
+      setTabs(remaining);
+      if (active() === sid && remaining.length > 0) {
+        setActive(remaining[0].id);
+        setApproval(null);
+        resetMetrics();
+      }
     } catch (err) {
       setError(String(err));
     }
@@ -692,7 +802,7 @@ function App() {
   const newSession = async () => {
     if (busy()) return;
     try {
-      await invoke("new_session");
+      await invoke("new_session", { sid: active() });
       setItems([]);
       setSessionPath("");
       resetMetrics();
@@ -705,7 +815,7 @@ function App() {
     if (busy()) return;
     if (!window.confirm(`撤销最近 ${steps} 轮的文件改动？`)) return;
     try {
-      await invoke("rewind", { steps });
+      await invoke("rewind", { sid: active(), steps });
     } catch (err) {
       setError(String(err));
     }
@@ -713,7 +823,7 @@ function App() {
 
   const chooseModel = async (model: string) => {
     try {
-      await invoke("set_model", { model });
+      await invoke("set_model", { sid: active(), model });
       const info = ready()?.models.find((entry) => entry.id === model);
       setReady((prev) =>
         prev
@@ -739,7 +849,7 @@ function App() {
 
   const chooseThinking = async (level: string) => {
     try {
-      await invoke("set_thinking", { level });
+      await invoke("set_thinking", { sid: active(), level });
       setReady((prev) => (prev ? { ...prev, level } : prev));
       storageSet("argent.thinking", level);
     } catch (err) {
@@ -750,7 +860,7 @@ function App() {
   const openSession = async (path: string) => {
     if (busy()) return;
     try {
-      await invoke("open_session", { path });
+      await invoke("open_session", { sid: active(), path });
       setItems([]);
       setSessionPath(path);
       resetMetrics();
@@ -763,7 +873,7 @@ function App() {
     const title = window.prompt("会话名称", row.title);
     if (!title || !title.trim()) return;
     try {
-      await invoke("rename_session", { path: row.path, title: title.trim() });
+      await invoke("rename_session", { sid: active(), path: row.path, title: title.trim() });
       setSessions((prev) =>
         prev.map((item) =>
           item.path === row.path ? { ...item, title: title.trim() } : item,
@@ -777,7 +887,7 @@ function App() {
   const deleteSession = async (row: SessionRow) => {
     if (!window.confirm(`删除会话「${row.title || "未命名"}」？`)) return;
     try {
-      await invoke("delete_session", { path: row.path });
+      await invoke("delete_session", { sid: active(), path: row.path });
       setSessions((prev) => prev.filter((item) => item.path !== row.path));
       if (sessionPath() === row.path) setSessionPath("");
     } catch (err) {
@@ -795,7 +905,11 @@ function App() {
     if (!pending) return;
     setApproval(null);
     try {
-      await invoke("answer_approval", { id: pending.id, allow });
+      await invoke("answer_approval", {
+        sid: pending.sid || active(),
+        id: pending.id,
+        allow,
+      });
     } catch (err) {
       setError(String(err));
     }
@@ -813,7 +927,7 @@ function App() {
     const title = titleArg.trim() || window.prompt("会话名称", currentRow()?.title ?? "")?.trim();
     if (!title) return;
     try {
-      await invoke("rename_session", { path, title });
+      await invoke("rename_session", { sid: active(), path, title });
       setSessions((prev) =>
         prev.map((item) => (item.path === path ? { ...item, title } : item)),
       );
@@ -917,7 +1031,7 @@ function App() {
           return;
         }
         try {
-          await invoke("compact");
+          await invoke("compact", { sid: active() });
         } catch (err) {
           setError(String(err));
         }
@@ -1066,6 +1180,30 @@ function App() {
 
       <main class="main">
         <Show when={screen() === "chat"}>
+        <div class="chat-tabs">
+          <For each={tabs()}>
+            {(tab) => (
+              <div class="chat-tab" classList={{ active: tab.id === active() }}>
+                <button class="tab-label" onClick={() => void switchTab(tab.id)}>
+                  <span class="tab-dot" classList={{ live: tab.id === active() && busy() }} />
+                  {tab.title}
+                </button>
+                <Show when={tabs().length > 1}>
+                  <button
+                    class="tab-close"
+                    title="关闭标签"
+                    onClick={() => void closeTab(tab.id)}
+                  >
+                    ×
+                  </button>
+                </Show>
+              </div>
+            )}
+          </For>
+          <button class="icon" title="新建会话标签" onClick={() => void addTab()}>
+            ＋
+          </button>
+        </div>
         <header class="topbar">
           <div class="title-block">
             <div class="title">Argent</div>

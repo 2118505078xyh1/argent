@@ -14,6 +14,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             backend::get_state,
+            backend::new_tab,
+            backend::activate_tab,
+            backend::close_tab,
             backend::send_prompt,
             backend::steer,
             backend::abort,

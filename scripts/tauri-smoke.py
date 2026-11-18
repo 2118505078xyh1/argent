@@ -172,6 +172,31 @@ async def run(args):
                     label="replayed transcript",
                 )
 
+                # A second tab gets its own worker; switching back keeps the
+                # first tab's transcript (T0.13).
+                await cdp.eval(
+                    "document.querySelector('button[title=\"新建会话标签\"]').click()"
+                )
+                await cdp.wait_for(
+                    "document.querySelectorAll('.chat-tab').length === 2", label="second tab"
+                )
+                await send_prompt(cdp, "second tab prompt")
+                await cdp.wait_for(
+                    "Array.from(document.querySelectorAll('.assistant'))"
+                    ".some((el) => el.textContent.includes('smoke complete'))",
+                    label="second tab answer",
+                )
+                await cdp.eval("document.querySelectorAll('.tab-label')[0].click()")
+                await cdp.wait_for(
+                    "Array.from(document.querySelectorAll('.assistant'))"
+                    ".some((el) => el.textContent.includes('smoke complete'))",
+                    label="first tab transcript after switch",
+                )
+                await cdp.eval("document.querySelectorAll('.tab-close')[1].click()")
+                await cdp.wait_for(
+                    "document.querySelectorAll('.chat-tab').length === 1", label="tab closed"
+                )
+
                 shot = await cdp.call("Page.captureScreenshot", {"format": "png"})
                 args.out.parent.mkdir(parents=True, exist_ok=True)
                 args.out.write_bytes(base64.b64decode(shot["data"]))

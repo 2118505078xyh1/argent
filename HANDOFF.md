@@ -123,7 +123,12 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
    Automations 页（后端 7 个 command + `argent-automation`）与 Documents 页
    （`argent-tools::office::extract_text` + 工作区路径校验）。`cargo test --bin
    argent-tauri` 7 passed、`bun run typecheck` + `bun run build` 通过。
-9. **真端到端冒烟 ✅（2026-11-19）**：新增 `tests/fixtures/tauri_smoke_provider.py`
+9. **多会话标签 ✅（2026-11-19）**：backend 改为每 tab 一个 Engine + worker，
+   事件/审批带 `sid` 路由；新增 `new_tab/activate_tab/close_tab`，其余命令全部带 `sid`；
+   前端按 tab 保存 transcript/busy/status/sessionPath，`App.tsx` 顶部标签条支持
+   新建/切换/关闭。`scripts/tauri-smoke.py` 已加入第二 tab 发消息、切回、关闭的断言，
+   实测通过（3 requests）。
+10. **真端到端冒烟 ✅（2026-11-19）**：新增 `tests/fixtures/tauri_smoke_provider.py`
    （本地假 OpenAI provider，首请求发 write 工具调用）与 `scripts/tauri-smoke.py`
    （CDP asyncio 驱动）。实测：prompt → 审批卡点允许 → 工具卡 → 助手回答 →
    点会话重放历史，全部通过；截图 `dist/tauri-smoke.png`。

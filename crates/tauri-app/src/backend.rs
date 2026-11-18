@@ -1,7 +1,7 @@
 //! Tauri commands and the one worker that owns the Rust agent.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -50,61 +50,112 @@ impl ApprovalBridge {
     }
 }
 
-struct Shared {
+/// One tab: its own agent worker, approval bridge and transcript state.
+struct SessionHandle {
     engine: Mutex<Engine>,
     approvals: ApprovalBridge,
-    ready: Mutex<Option<Value>>,
 }
 
-/// Tauri-managed handle to the agent worker.
+struct Shared {
+    sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
+    active: Mutex<String>,
+    ready: Mutex<HashMap<String, Value>>,
+    /// Shared across tabs so approval ids stay unique.
+    approval_ids: Arc<AtomicU64>,
+    next_tab: AtomicU64,
+}
+
+/// Tauri-managed handle to all agent workers.
 pub struct Backend {
     shared: Arc<Shared>,
+}
+
+/// Poll one session's channels and tag every event with its tab id so the UI
+/// can route background turns to the right tab.
+fn spawn_session(app: AppHandle, shared: Arc<Shared>, sid: String, handle: Arc<SessionHandle>) {
+    thread::spawn(move || loop {
+        let mut events = Vec::new();
+        {
+            let engine = handle.engine.lock().expect("engine poisoned");
+            while let Ok(event) = engine.events.try_recv() {
+                events.push(event);
+            }
+            while let Ok(approval) = engine.approvals.try_recv() {
+                let id = approval.id;
+                handle.approvals.insert(id, approval.reply);
+                let _ = app.emit(
+                    "argent://event",
+                    json!({
+                        "kind": "approval",
+                        "sid": sid,
+                        "id": id,
+                        "name": approval.name,
+                        "arguments": approval.arguments,
+                    }),
+                );
+            }
+        }
+        for event in events {
+            let mut payload = map_event(event);
+            if payload["kind"] == "ready" {
+                shared
+                    .ready
+                    .lock()
+                    .expect("ready poisoned")
+                    .insert(sid.clone(), payload.clone());
+            }
+            payload["sid"] = json!(sid);
+            let _ = app.emit("argent://event", payload);
+        }
+        thread::sleep(Duration::from_millis(30));
+    });
 }
 
 impl Backend {
     pub fn start(app: AppHandle) -> Result<Self, String> {
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
         let config = prepare_config(&cwd)?;
-        let engine = start_session(config, cwd, None, Arc::new(AtomicU64::new(1)));
         let shared = Arc::new(Shared {
+            sessions: Mutex::new(HashMap::new()),
+            active: Mutex::new("1".to_string()),
+            ready: Mutex::new(HashMap::new()),
+            approval_ids: Arc::new(AtomicU64::new(1)),
+            next_tab: AtomicU64::new(2),
+        });
+        let engine = start_session(config, cwd, None, Arc::clone(&shared.approval_ids));
+        let handle = Arc::new(SessionHandle {
             engine: Mutex::new(engine),
             approvals: ApprovalBridge::new(),
-            ready: Mutex::new(None),
         });
-        let worker = Arc::clone(&shared);
-        let app = app.clone();
-        thread::spawn(move || loop {
-            let mut events = Vec::new();
-            {
-                let engine = worker.engine.lock().expect("engine poisoned");
-                while let Ok(event) = engine.events.try_recv() {
-                    events.push(event);
-                }
-                while let Ok(approval) = engine.approvals.try_recv() {
-                    let id = approval.id;
-                    worker.approvals.insert(id, approval.reply);
-                    let _ = app.emit(
-                        "argent://event",
-                        json!({
-                            "kind": "approval",
-                            "id": id,
-                            "name": approval.name,
-                            "arguments": approval.arguments,
-                        }),
-                    );
-                }
-            }
-            for event in events {
-                let payload = map_event(event);
-                if payload["kind"] == "ready" {
-                    *worker.ready.lock().expect("ready poisoned") = Some(payload.clone());
-                }
-                let _ = app.emit("argent://event", payload);
-            }
-            thread::sleep(Duration::from_millis(30));
-        });
+        shared
+            .sessions
+            .lock()
+            .expect("sessions poisoned")
+            .insert("1".to_string(), Arc::clone(&handle));
+        spawn_session(app, Arc::clone(&shared), "1".to_string(), handle);
         Ok(Self { shared })
     }
+}
+
+fn handle_for(state: &State<'_, Backend>, sid: &str) -> Result<Arc<SessionHandle>, String> {
+    let id = if sid.is_empty() {
+        state
+            .shared
+            .active
+            .lock()
+            .map_err(|_| "active lock poisoned".to_string())?
+            .clone()
+    } else {
+        sid.to_string()
+    };
+    state
+        .shared
+        .sessions
+        .lock()
+        .map_err(|_| "sessions lock poisoned".to_string())?
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("session {} not found", id))
 }
 
 fn map_event(event: UiEvent) -> Value {
@@ -251,14 +302,111 @@ fn map_agent_event(event: argent_agent::AgentEvent) -> Value {
 
 #[tauri::command]
 pub fn get_state(state: State<'_, Backend>) -> Value {
-    let ready = state.shared.ready.lock().expect("ready poisoned").clone();
-    json!({ "ready": ready })
+    let sid = state.shared.active.lock().expect("active poisoned").clone();
+    let ready = state
+        .shared
+        .ready
+        .lock()
+        .expect("ready poisoned")
+        .get(&sid)
+        .cloned();
+    json!({ "sid": sid, "ready": ready })
 }
 
 #[tauri::command]
-pub fn send_prompt(state: State<'_, Backend>, text: String) -> Result<(), String> {
+pub fn new_tab(state: State<'_, Backend>, app: AppHandle) -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let config = prepare_config(&cwd)?;
+    let sid = state.shared.next_tab.fetch_add(1, Ordering::Relaxed).to_string();
+    let engine = start_session(config, cwd, None, Arc::clone(&state.shared.approval_ids));
+    let handle = Arc::new(SessionHandle {
+        engine: Mutex::new(engine),
+        approvals: ApprovalBridge::new(),
+    });
     state
         .shared
+        .sessions
+        .lock()
+        .map_err(|_| "sessions lock poisoned".to_string())?
+        .insert(sid.clone(), Arc::clone(&handle));
+    *state
+        .shared
+        .active
+        .lock()
+        .map_err(|_| "active lock poisoned".to_string())? = sid.clone();
+    spawn_session(app, Arc::clone(&state.shared), sid.clone(), handle);
+    Ok(sid)
+}
+
+#[tauri::command]
+pub fn activate_tab(state: State<'_, Backend>, sid: String) -> Result<(), String> {
+    let exists = state
+        .shared
+        .sessions
+        .lock()
+        .map_err(|_| "sessions lock poisoned".to_string())?
+        .contains_key(&sid);
+    if !exists {
+        return Err(format!("session {} not found", sid));
+    }
+    *state
+        .shared
+        .active
+        .lock()
+        .map_err(|_| "active lock poisoned".to_string())? = sid;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn close_tab(state: State<'_, Backend>, sid: String) -> Result<(), String> {
+    let handle = {
+        let mut sessions = state
+            .shared
+            .sessions
+            .lock()
+            .map_err(|_| "sessions lock poisoned".to_string())?;
+        if sessions.len() == 1 {
+            return Err("cannot close the last tab".to_string());
+        }
+        sessions
+            .remove(&sid)
+            .ok_or_else(|| format!("session {} not found", sid))?
+    };
+    let _ = handle
+        .engine
+        .lock()
+        .map_err(|_| "engine lock poisoned".to_string())?
+        .commands
+        .send(Command::Shutdown);
+    let mut active = state
+        .shared
+        .active
+        .lock()
+        .map_err(|_| "active lock poisoned".to_string())?;
+    if *active == sid {
+        *active = state
+            .shared
+            .sessions
+            .lock()
+            .map_err(|_| "sessions lock poisoned".to_string())?
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_default();
+    }
+    drop(active);
+    state
+        .shared
+        .ready
+        .lock()
+        .map_err(|_| "ready lock poisoned".to_string())?
+        .remove(&sid);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn send_prompt(state: State<'_, Backend>, sid: String, text: String) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -278,12 +426,12 @@ fn enqueue_steering(queue: &Mutex<VecDeque<String>>, text: String) -> Result<(),
 }
 
 #[tauri::command]
-pub fn steer(state: State<'_, Backend>, text: String) -> Result<(), String> {
+pub fn steer(state: State<'_, Backend>, sid: String, text: String) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("steering text is empty".to_string());
     }
-    let engine = state
-        .shared
+    let handle = handle_for(&state, &sid)?;
+    let engine = handle
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?;
@@ -291,9 +439,8 @@ pub fn steer(state: State<'_, Backend>, text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn abort(state: State<'_, Backend>) -> Result<(), String> {
-    state
-        .shared
+pub fn abort(state: State<'_, Backend>, sid: String) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -303,9 +450,8 @@ pub fn abort(state: State<'_, Backend>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn new_session(state: State<'_, Backend>) -> Result<(), String> {
-    state
-        .shared
+pub fn new_session(state: State<'_, Backend>, sid: String) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -315,14 +461,18 @@ pub fn new_session(state: State<'_, Backend>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn answer_approval(state: State<'_, Backend>, id: u64, allow: bool) -> Result<(), String> {
-    state.shared.approvals.answer(id, allow)
+pub fn answer_approval(
+    state: State<'_, Backend>,
+    sid: String,
+    id: u64,
+    allow: bool,
+) -> Result<(), String> {
+    handle_for(&state, &sid)?.approvals.answer(id, allow)
 }
 
 #[tauri::command]
-pub fn open_session(state: State<'_, Backend>, path: String) -> Result<(), String> {
-    state
-        .shared
+pub fn open_session(state: State<'_, Backend>, sid: String, path: String) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -334,11 +484,11 @@ pub fn open_session(state: State<'_, Backend>, path: String) -> Result<(), Strin
 #[tauri::command]
 pub fn rename_session(
     state: State<'_, Backend>,
+    sid: String,
     path: String,
     title: String,
 ) -> Result<(), String> {
-    state
-        .shared
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -351,9 +501,8 @@ pub fn rename_session(
 }
 
 #[tauri::command]
-pub fn compact(state: State<'_, Backend>) -> Result<(), String> {
-    state
-        .shared
+pub fn compact(state: State<'_, Backend>, sid: String) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -363,9 +512,8 @@ pub fn compact(state: State<'_, Backend>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn rewind(state: State<'_, Backend>, steps: u64) -> Result<(), String> {
-    state
-        .shared
+pub fn rewind(state: State<'_, Backend>, sid: String, steps: u64) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -375,9 +523,8 @@ pub fn rewind(state: State<'_, Backend>, steps: u64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_model(state: State<'_, Backend>, model: String) -> Result<(), String> {
-    state
-        .shared
+pub fn set_model(state: State<'_, Backend>, sid: String, model: String) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -387,9 +534,8 @@ pub fn set_model(state: State<'_, Backend>, model: String) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn set_thinking(state: State<'_, Backend>, level: String) -> Result<(), String> {
-    state
-        .shared
+pub fn set_thinking(state: State<'_, Backend>, sid: String, level: String) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
@@ -399,9 +545,8 @@ pub fn set_thinking(state: State<'_, Backend>, level: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn delete_session(state: State<'_, Backend>, path: String) -> Result<(), String> {
-    state
-        .shared
+pub fn delete_session(state: State<'_, Backend>, sid: String, path: String) -> Result<(), String> {
+    handle_for(&state, &sid)?
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
