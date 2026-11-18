@@ -146,6 +146,10 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
 13. **P1 第四轮 ✅（2026-11-19）**：流式 token 按帧合并、消息复制/回滚到此、
     aria-live 与 focus-visible、窄屏侧栏改顶栏、帮助面板内诊断信息。
     `bun run typecheck/test/build` 与 CDP 冒烟均通过。
+14. **P1/P2 第五轮 ✅（2026-11-19）**：审批队列（不再互相覆盖）、@文件补全、
+    文本附件拖放、系统托盘（关闭隐藏到托盘，菜单显示/退出）、前端 zh/en 切换、
+    事件轮询改 `recv_timeout(25ms)`、worker 锁不再 `expect` panic。
+    clippy 与 CDP 冒烟通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

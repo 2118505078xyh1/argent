@@ -703,6 +703,11 @@ textarea:focus-visible {
   color: var(--error);
 }
 
+.queue-count {
+  color: var(--warn);
+  font-size: 11px;
+}
+
 .approval pre {
   max-height: 150px;
   margin: 8px 0 10px;
@@ -747,6 +752,11 @@ textarea:focus-visible {
   flex: none;
   padding: 8px 16px 0;
   background: var(--bg);
+}
+
+.composer-wrap.dragging .composer {
+  border-color: var(--accent);
+  background: rgb(122 162 247 / 8%);
 }
 
 .slash-menu {

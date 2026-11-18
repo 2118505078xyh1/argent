@@ -3,6 +3,8 @@
 
 mod backend;
 
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
 
 fn main() {
@@ -18,12 +20,52 @@ fn main() {
             let backend = backend::Backend::start(app.handle().clone())?;
             if let Some(window) = app.get_webview_window("main") {
                 let shutdown = backend.clone();
+                let hide_on_close = window.clone();
                 window.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { .. } = event {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
                         shutdown.shutdown_all();
+                        api.prevent_close();
+                        let _ = hide_on_close.hide();
                     }
                 });
             }
+
+            let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let icon = app
+                .default_window_icon()
+                .cloned()
+                .ok_or("missing default window icon")?;
+            let _tray = TrayIconBuilder::with_id("main")
+                .icon(icon)
+                .menu(&menu)
+                .tooltip("Argent")
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "quit" => app.exit(0),
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
             app.manage(backend);
             Ok(())
         })
@@ -49,6 +91,7 @@ fn main() {
             backend::delete_automation,
             backend::run_automation,
             backend::automation_log,
+            backend::list_files,
             backend::list_documents,
             backend::read_document,
             backend::answer_approval,

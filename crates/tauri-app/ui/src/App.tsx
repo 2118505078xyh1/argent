@@ -23,6 +23,7 @@ import {
   type UnknownRecord,
 } from "./ipc";
 import { formatCost, formatTokens, relativeStamp, sessionGroup } from "./format";
+import { detectLocale, t, type Locale } from "./i18n";
 
 type Tool = {
   id: string;
@@ -305,7 +306,9 @@ function App() {
   const [tabPath, setTabPath] = createSignal<Record<string, string>>({});
   const [input, setInput] = createSignal("");
   const [lastPrompt, setLastPrompt] = createSignal("");
-  const [approval, setApproval] = createSignal<Approval | null>(null);
+  const [dragging, setDragging] = createSignal(false);
+  const [approvalQueue, setApprovalQueue] = createSignal<Approval[]>([]);
+  const approval = () => approvalQueue()[0] ?? null;
   const [error, setError] = createSignal<string | null>(null);
 
   const items = () => tabItems()[active()] ?? [];
@@ -346,6 +349,7 @@ function App() {
   );
   const [screen, setScreen] = createSignal<"chat" | "automations" | "documents">("chat");
   const [help, setHelp] = createSignal(false);
+  const [locale, setLocale] = createSignal<Locale>(detectLocale());
   const [promptTokens, setPromptTokens] = createSignal(0);
   const [cachedTokens, setCachedTokens] = createSignal(0);
   const [requests, setRequests] = createSignal(0);
@@ -386,6 +390,25 @@ function App() {
     if (!value.startsWith("/")) return [];
     const query = value.slice(1).split(/\s/)[0].toLowerCase();
     return SLASH_COMMANDS.filter((command) => command.slice(1).startsWith(query)).slice(0, 8);
+  });
+
+  const mentionQuery = createMemo(() => /@([^\s@]*)$/.exec(input())?.[1] ?? null);
+  const [fileOptions, setFileOptions] = createSignal<string[]>([]);
+  createEffect(() => {
+    const query = mentionQuery();
+    if (query === null) {
+      setFileOptions([]);
+      return;
+    }
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
+    void invoke<string[]>("list_files", { query })
+      .then((files) => {
+        if (!cancelled) setFileOptions(files.slice(0, 8));
+      })
+      .catch(() => setFileOptions([]));
   });
 
   let viewport!: HTMLDivElement;
@@ -538,7 +561,7 @@ function App() {
         }
         break;
       case "approval":
-        if (isActive) setApproval({ ...payload, sid });
+        if (isActive) setApprovalQueue((prev) => [...prev, { ...payload, sid }]);
         break;
       case "session":
         setSessionPathFor(sid, payload.path);
@@ -687,7 +710,9 @@ function App() {
 
   createEffect(() => {
     document.documentElement.dataset.theme = theme();
+    document.documentElement.lang = locale();
     storageSet("argent.theme", theme());
+    storageSet("argent.locale", locale());
   });
 
   createEffect(() => {
@@ -765,7 +790,7 @@ function App() {
       setBusyFor(sid, false);
       setStatusFor(sid, "starting");
       setItemsFor(sid, []);
-      setApproval(null);
+      setApprovalQueue([]);
       setError(null);
       resetMetrics();
     } catch (err) {
@@ -782,7 +807,7 @@ function App() {
       await invoke("activate_tab", { sid });
       setRestoring(true);
       setActive(sid);
-      setApproval(null);
+      setApprovalQueue([]);
       setError(null);
       resetMetrics();
       requestAnimationFrame(() => {
@@ -805,7 +830,7 @@ function App() {
       setTabs(remaining);
       if (active() === sid && remaining.length > 0) {
         setActive(remaining[0].id);
-        setApproval(null);
+        setApprovalQueue([]);
         resetMetrics();
       }
     } catch (err) {
@@ -918,7 +943,7 @@ function App() {
     const pending = approval();
     if (!pending) return;
     const sid = pending.sid || active();
-    setApproval(null);
+    setApprovalQueue((prev) => prev.slice(1));
     try {
       if (always) {
         await invoke("allow_tool", { sid, name: pending.name });
@@ -1090,6 +1115,24 @@ function App() {
     }
   };
 
+  const onDrop = async (event: DragEvent) => {
+    event.preventDefault();
+    setDragging(false);
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    const parts: string[] = [];
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        parts.push(`【${file.name}】\n${text.slice(0, 20_000)}`);
+      } catch (err) {
+        setError(`读取附件失败：${String(err)}`);
+      }
+    }
+    if (parts.length) {
+      setInput((prev) => `${prev}${prev ? "\n" : ""}${parts.join("\n\n")}`);
+    }
+  };
+
   const resizeComposer = (event: InputEvent) => {
     const target = event.currentTarget as HTMLTextAreaElement | null;
     if (!target) return;
@@ -1107,23 +1150,23 @@ function App() {
             classList={{ active: screen() === "chat" }}
             onClick={() => setScreen("chat")}
           >
-            聊天
+            {t(locale(), "chat")}
           </button>
           <button
             classList={{ active: screen() === "automations" }}
             onClick={() => setScreen("automations")}
           >
-            定时任务
+            {t(locale(), "automations")}
           </button>
           <button
             classList={{ active: screen() === "documents" }}
             onClick={() => setScreen("documents")}
           >
-            文档
+            {t(locale(), "documents")}
           </button>
         </div>
         <div class="side-head">
-          <span>任务</span>
+          <span>{t(locale(), "chat")}</span>
           <button class="icon" title="新任务" onClick={() => void newSession()}>
             ＋
           </button>
@@ -1131,7 +1174,7 @@ function App() {
         <div class="side-search-wrap">
           <input
             class="side-search"
-            placeholder="搜索会话…"
+            placeholder={t(locale(), "searchSessions")}
             value={sessionQuery()}
             onInput={(event) => setSessionQuery(event.currentTarget.value)}
           />
@@ -1141,7 +1184,7 @@ function App() {
             when={sessions().length > 0}
             fallback={
               <button class="side-item active">
-                <span class="side-title">当前会话</span>
+                <span class="side-title">{t(locale(), "newTask")}</span>
                 <span class="side-meta">{sessionPath() || ready()?.cwd || "新任务"}</span>
               </button>
             }
@@ -1201,7 +1244,7 @@ function App() {
         </nav>
         <div class="side-foot">
           <span class="dot" classList={{ live: busy() }} />
-          {busy() ? "运行中" : "就绪"}
+          {busy() ? t(locale(), "running") : t(locale(), "ready")}
         </div>
       </aside>
 
@@ -1227,7 +1270,11 @@ function App() {
               </div>
             )}
           </For>
-          <button class="icon" title="新建会话标签" onClick={() => void addTab()}>
+          <button
+            class="icon"
+            title={t(locale(), "newTab")}
+            onClick={() => void addTab()}
+          >
             ＋
           </button>
           <span class="spacer" />
@@ -1244,7 +1291,7 @@ function App() {
             <div class="path">{ready()?.cwd || "D:\\code\\mpi\\argent"}</div>
           </div>
           <div class="top-meta">
-            <span class="label">模型</span>
+            <span class="label">{t(locale(), "model")}</span>
             <select
               class="pill select"
               value={ready()?.model || ""}
@@ -1266,7 +1313,7 @@ function App() {
             >
               ＋
             </button>
-            <span class="label">思考</span>
+            <span class="label">{t(locale(), "thinking")}</span>
             <select
               class="pill select"
               value={ready()?.level || "auto"}
@@ -1282,7 +1329,7 @@ function App() {
               disabled={busy()}
               onClick={() => void rewind()}
             >
-              ↶ 撤销
+              ↶ {t(locale(), "rewind")}
             </button>
             <button
               class="icon"
@@ -1314,7 +1361,7 @@ function App() {
               <div class="welcome">
                 <div class="welcome-card">
                   <div class="welcome-mark">argent</div>
-                  <p>问点什么，或者输入 / 看命令。</p>
+                  <p>{t(locale(), "welcome")}</p>
                   <div class="path">{ready()?.cwd || "D:\\code\\mpi\\argent"}</div>
                   <p class="welcome-hint">
                     首次使用请在终端运行 <code>argent login</code> 配置模型凭据。
@@ -1458,27 +1505,30 @@ function App() {
             <div class="approval">
               <div class="approval-head">
                 <span class="approval-mark">!</span>
-                <strong>允许工具调用？</strong>
+                <strong>{t(locale(), "approvalTitle")}</strong>
                 <code>{pending().name}</code>
                 <span class="risk" classList={{ danger: approvalDanger() }}>
                   {approvalDanger() ? "会修改文件或执行命令" : "只读操作"}
                 </span>
+                <Show when={approvalQueue().length > 1}>
+                  <span class="queue-count">还有 {approvalQueue().length - 1} 个待审</span>
+                </Show>
               </div>
               <pre>{pending().arguments}</pre>
               <div class="approval-actions">
                 <span class="hint">Y 允许 · N/Esc 拒绝</span>
                 <button class="ghost" onClick={() => void answer(false)}>
-                  拒绝
+                  {t(locale(), "deny")}
                 </button>
                 <button
                   class="ghost"
                   title="本次会话不再询问此工具"
                   onClick={() => void answer(true, true)}
                 >
-                  总是允许
+                  {t(locale(), "alwaysAllow")}
                 </button>
                 <button class="primary" onClick={() => void answer(true)}>
-                  允许
+                  {t(locale(), "allow")}
                 </button>
               </div>
             </div>
@@ -1505,7 +1555,32 @@ function App() {
           </div>
         </Show>
 
-        <footer class="composer-wrap">
+        <footer
+          class="composer-wrap"
+          classList={{ dragging: dragging() }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => void onDrop(event)}
+        >
+          <Show when={mentionQuery() !== null && fileOptions().length > 0}>
+            <div class="slash-menu">
+              <For each={fileOptions()}>
+                {(file) => (
+                  <button
+                    onClick={() => {
+                      setInput((prev) => prev.replace(/@([^\s@]*)$/, `@${file} `));
+                      composer.focus();
+                    }}
+                  >
+                    {file}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
           <Show when={input().startsWith("/") && slashMatches().length > 0}>
             <div class="slash-menu">
               <For each={slashMatches()}>
@@ -1526,27 +1601,25 @@ function App() {
             <textarea
               ref={composer}
               value={input()}
-              placeholder={busy() ? "运行中，输入内容会插话…" : "给 argent 发消息…"}
+              placeholder={t(locale(), busy() ? "steerPlaceholder" : "composerPlaceholder")}
               rows={1}
               onInput={resizeComposer}
               onKeyDown={onComposerKey}
             />
             <div class="composer-actions">
               <span class="hint">
-                {busy()
-                  ? "Enter 插话 · 将在工具边界注入 · Shift+Enter 换行"
-                  : "Enter 发送 · Shift+Enter 换行"}
+                {t(locale(), busy() ? "steerHint" : "composerHint")}
               </span>
               <div class="buttons">
                 <button class="ghost" disabled={!busy()} onClick={() => void abort()}>
-                  停止
+                  {t(locale(), "stop")}
                 </button>
                 <button
                   class="primary"
                   disabled={!input().trim()}
                   onClick={() => void send()}
                 >
-                  {busy() ? "插话" : "发送"}
+                  {t(locale(), busy() ? "steer" : "send")}
                 </button>
               </div>
             </div>
@@ -1605,6 +1678,12 @@ function App() {
           <div class="help-panel" onClick={(event) => event.stopPropagation()}>
             <div class="log-head">
               <strong>快捷键与命令</strong>
+              <button
+                class="ghost"
+                onClick={() => setLocale(locale() === "zh" ? "en" : "zh")}
+              >
+                中文 / EN
+              </button>
               <button class="icon" onClick={() => setHelp(false)}>
                 ×
               </button>

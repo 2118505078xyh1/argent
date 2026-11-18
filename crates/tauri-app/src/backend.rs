@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -93,9 +93,18 @@ fn spawn_session(app: AppHandle, shared: Arc<Shared>, sid: String, handle: Arc<S
     thread::spawn(move || loop {
         let mut events = Vec::new();
         {
-            let engine = handle.engine.lock().expect("engine poisoned");
-            while let Ok(event) = engine.events.try_recv() {
-                events.push(event);
+            let Ok(engine) = handle.engine.lock() else {
+                return;
+            };
+            match engine.events.recv_timeout(Duration::from_millis(25)) {
+                Ok(first) => {
+                    events.push(first);
+                    while let Ok(event) = engine.events.try_recv() {
+                        events.push(event);
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
             }
             while let Ok(approval) = engine.approvals.try_recv() {
                 let id = approval.id;
@@ -119,16 +128,13 @@ fn spawn_session(app: AppHandle, shared: Arc<Shared>, sid: String, handle: Arc<S
         for event in events {
             let mut payload = map_event(event);
             if payload["kind"] == "ready" {
-                shared
-                    .ready
-                    .lock()
-                    .expect("ready poisoned")
-                    .insert(sid.clone(), payload.clone());
+                if let Ok(mut ready) = shared.ready.lock() {
+                    ready.insert(sid.clone(), payload.clone());
+                }
             }
             payload["sid"] = json!(sid);
             let _ = app.emit("argent://event", payload);
         }
-        thread::sleep(Duration::from_millis(30));
     });
 }
 
@@ -627,6 +633,45 @@ fn collect_documents(dir: &std::path::Path, depth: usize, out: &mut Vec<Value>) 
             "path": path.to_string_lossy(),
         }));
     }
+}
+
+fn collect_files(dir: &std::path::Path, depth: usize, query: &str, out: &mut Vec<String>) {
+    if depth > 3 || out.len() >= 200 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut children: Vec<std::path::PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    children.sort();
+    for path in children {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') || matches!(name, "target" | "node_modules" | "dist" | "build") {
+            continue;
+        }
+        if path.is_dir() {
+            collect_files(&path, depth + 1, query, out);
+            continue;
+        }
+        let relative = path
+            .strip_prefix(std::env::current_dir().unwrap_or_default())
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
+        if query.is_empty() || relative.to_ascii_lowercase().contains(&query.to_ascii_lowercase()) {
+            out.push(relative);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_files(query: String) -> Result<Vec<String>, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut found = Vec::new();
+    collect_files(&cwd, 0, &query, &mut found);
+    Ok(found)
 }
 
 #[tauri::command]
