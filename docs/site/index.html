@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>argent — Rust coding agent</title>
+    <meta
+      name="description"
+      content="argent: a single-binary Rust coding agent with TUI, native GUI, RPC, HTTP, ACP, MCP, LSP and workspace tools."
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="shell">
+      <nav>
+        <a class="brand" href="./">argent</a>
+        <div class="links">
+          <a href="#install">Install</a>
+          <a href="#run">Run</a>
+          <a href="https://github.com/2118505078xyh1/argent/blob/master/README.md">README</a>
+          <a href="https://github.com/2118505078xyh1/argent">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Rust · single binary · provider agnostic</p>
+        <h1>A coding agent that fits in one process.</h1>
+        <p class="lead">
+          TUI, native iced window, RPC, HTTP/SSE, ACP, MCP, LSP and workspace
+          tools. No Node, WebView or separate runtime.
+        </p>
+        <div class="actions">
+          <a class="button" href="#install">Build from source</a>
+          <a class="button ghost" href="https://github.com/2118505078xyh1/argent/releases">
+            Windows releases
+          </a>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article>
+          <h2>Small runtime</h2>
+          <p>
+            Release binaries are about 5.5 MB (CLI) and 7.0 MB (native).
+            The CLI path starts in tens of milliseconds; the GUI is iced +
+            tiny-skia, not Chromium.
+          </p>
+        </article>
+        <article>
+          <h2>Anchored edits</h2>
+          <p>
+            <code>read hash=true</code> emits <code>LINE#HASH</code> anchors.
+            <code>edit</code> accepts one range or a multi-file
+            <code>edits</code> batch, rejects stale anchors, and preserves
+            CRLF/BOM. An optional <code>apply_patch</code> plugin accepts
+            Codex/OpenCode envelopes.
+          </p>
+        </article>
+        <article>
+          <h2>Local by default</h2>
+          <p>
+            Anthropic, OpenAI-compatible and local providers; API keys,
+            OAuth, keyring, signed update manifests and local audit logs.
+            No hosted control plane required.
+          </p>
+        </article>
+        <article>
+          <h2>Built for automation</h2>
+          <p>
+            One-shot JSONL, RPC, SSE server, ACP, background jobs, workflow
+            DAGs, checkpoints and <code>/rewind</code>.
+          </p>
+        </article>
+      </section>
+
+      <section id="install">
+        <h2>Install</h2>
+        <p>From source (Rust 1.85+):</p>
+        <pre><code>git clone https://github.com/2118505078xyh1/argent
+cd argent
+cargo build --release -p argent-cli
+./target/release/argent --help</code></pre>
+        <p>
+          Or download the latest Windows bundle from
+          <a href="https://github.com/2118505078xyh1/argent/releases">GitHub Releases</a>.
+        </p>
+      </section>
+
+      <section id="run">
+        <h2>Run</h2>
+        <pre><code>argent doctor
+argent login
+argent "summarize this repository"
+argent --mode plan "add an integration test for session import"
+argent --serve --serve-port 8787</code></pre>
+        <p>
+          Press <code>Shift+Tab</code> in the TUI to toggle plan mode;
+          <code>/help</code> lists commands.
+        </p>
+      </section>
+
+      <section>
+        <h2>Documentation</h2>
+        <ul class="doc-list">
+          <li>
+            <a href="https://github.com/2118505078xyh1/argent/blob/master/docs/ARCHITECTURE.md">
+              Architecture
+            </a>
+            — request flow, sessions, tools, transports, permissions.
+          </li>
+          <li>
+            <a href="https://github.com/2118505078xyh1/argent/blob/master/docs/PARITY.md">
+              Parity
+            </a>
+            — component-by-component mapping to ZCode and Pi.
+          </li>
+          <li>
+            <a href="https://github.com/2118505078xyh1/argent/blob/master/docs/ROADMAP.md">
+              Roadmap
+            </a>
+            — shipped milestones and remaining work.
+          </li>
+          <li>
+            <a href="https://github.com/2118505078xyh1/argent/tree/master/docs/agents">
+              Agent notes
+            </a>
+            — pi, Codex, Claude Code, OpenCode, ZCode, Kimi and DSH.
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="shell">
+      <p>
+        argent is an independent Rust implementation. Built for local,
+        inspectable coding work.
+      </p>
+    </footer>
+  </body>
+</html>
