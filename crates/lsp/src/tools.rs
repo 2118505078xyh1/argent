@@ -317,11 +317,33 @@ pub fn diagnostics_if_running(
     let guard = slot.lock().ok()?;
     let manager = guard.as_ref()?;
     let items = manager.diagnostics_if_running(path, wait);
-    if items.is_empty() {
+    let filtered: Vec<crate::server::Diagnostic> = items
+        .into_iter()
+        .filter(|item| {
+            item.severity.eq_ignore_ascii_case("error")
+                || item.severity.eq_ignore_ascii_case("warning")
+        })
+        .collect();
+    if filtered.is_empty() {
         None
     } else {
-        Some(render_diagnostics(&items))
+        Some(render_post_edit_diagnostics(&filtered))
     }
+}
+
+fn render_post_edit_diagnostics(items: &[crate::server::Diagnostic]) -> String {
+    const LIMIT: usize = 20;
+    let mut out = String::new();
+    for item in items.iter().take(LIMIT) {
+        out.push_str(&format!(
+            "{}: {} {}\n",
+            item.location, item.severity, item.message
+        ));
+    }
+    if items.len() > LIMIT {
+        out.push_str(&format!("… {} more diagnostic(s)\n", items.len() - LIMIT));
+    }
+    out.trim_end().to_string()
 }
 
 fn render_diagnostics(items: &[crate::server::Diagnostic]) -> String {
@@ -374,5 +396,28 @@ mod tests {
     #[test]
     fn renders_an_empty_diagnostic_list() {
         assert_eq!(render_diagnostics(&[]), "no diagnostics");
+    }
+
+    #[test]
+    fn post_edit_diagnostics_keep_errors_and_warnings_and_cap_the_list() {
+        let diagnostic = |severity: &str, index: usize| crate::server::Diagnostic {
+            location: format!("f.rs:{}:1", index + 1),
+            severity: severity.to_string(),
+            message: format!("m{index}"),
+        };
+        let items: Vec<_> = (0..25).map(|index| diagnostic("error", index)).collect();
+        let text = render_post_edit_diagnostics(&items);
+        assert!(text.contains("error"));
+        assert!(text.contains("… 5 more diagnostic(s)"));
+
+        let only_hints = vec![diagnostic("information", 1), diagnostic("hint", 2)];
+        let filtered: Vec<_> = only_hints
+            .into_iter()
+            .filter(|item| {
+                item.severity.eq_ignore_ascii_case("error")
+                    || item.severity.eq_ignore_ascii_case("warning")
+            })
+            .collect();
+        assert!(filtered.is_empty());
     }
 }
