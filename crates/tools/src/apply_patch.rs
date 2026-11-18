@@ -1,12 +1,12 @@
 //! Codex/OpenCode-compatible `apply_patch` envelope.
 //!
 //! The parser deliberately supports the common, deterministic subset:
-//! `*** Update File`, `*** Add File`, `*** Delete File`, `@@` hunks and
-//! context/removed/added lines. Every file and hunk is validated before the
-//! first mutation; an I/O failure after that point reports how many files
-//! already landed.
+//! `*** Update File`, `*** Add File`, `*** Delete File`, `*** Move to`,
+//! `@@` hunks and context/removed/added lines. Every file and hunk is
+//! validated before the first mutation; an I/O failure after that point
+//! reports how many files already landed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use argent_core::error::{Error, Result};
@@ -32,6 +32,7 @@ struct Hunk {
 struct FilePlan {
     target: PathBuf,
     action: Action,
+    move_to: Option<PathBuf>,
 }
 
 impl Tool for ApplyPatchTool {
@@ -69,7 +70,8 @@ impl Tool for ApplyPatchTool {
         }
 
         let mut plans: BTreeMap<PathBuf, FilePlan> = BTreeMap::new();
-        for (path, action) in sections {
+        let mut destinations: BTreeSet<PathBuf> = BTreeSet::new();
+        for (path, action, move_to) in sections {
             let target = resolve(&ctx.cwd, Path::new(&expand_home(Path::new(&path))));
             if plans.contains_key(&target) {
                 return Ok(ToolResult::error(format!(
@@ -79,6 +81,25 @@ impl Tool for ApplyPatchTool {
             }
             if let Err(error) = ctx.check_write(&target) {
                 return Ok(ToolResult::error(error));
+            }
+            let move_to =
+                move_to.map(|dest| resolve(&ctx.cwd, Path::new(&expand_home(Path::new(&dest)))));
+            if let Some(dest) = &move_to {
+                if dest == &target {
+                    return Ok(ToolResult::error(format!(
+                        "move destination is the source: {}",
+                        target.display()
+                    )));
+                }
+                if let Err(error) = ctx.check_write(dest) {
+                    return Ok(ToolResult::error(error));
+                }
+                if !destinations.insert(dest.clone()) {
+                    return Ok(ToolResult::error(format!(
+                        "patch names move destination {} more than once",
+                        dest.display()
+                    )));
+                }
             }
             match &action {
                 Action::Update { .. } | Action::Delete if !target.is_file() => {
@@ -95,7 +116,24 @@ impl Tool for ApplyPatchTool {
                 }
                 _ => {}
             }
-            plans.insert(target.clone(), FilePlan { target, action });
+            plans.insert(
+                target.clone(),
+                FilePlan {
+                    target,
+                    action,
+                    move_to,
+                },
+            );
+        }
+        for plan in plans.values() {
+            if let Some(dest) = &plan.move_to {
+                if plans.contains_key(dest) {
+                    return Ok(ToolResult::error(format!(
+                        "move destination is also a patch source: {}",
+                        dest.display()
+                    )));
+                }
+            }
         }
 
         let mut updates: Vec<(PathBuf, String)> = Vec::new();
@@ -118,7 +156,11 @@ impl Tool for ApplyPatchTool {
                     if !updated.is_empty() && trailing {
                         body.push_str(ending);
                     }
-                    updates.push((plan.target.clone(), format!("{}{}", bom, body)));
+                    let write_target = plan.move_to.as_ref().unwrap_or(&plan.target);
+                    updates.push((write_target.clone(), format!("{}{}", bom, body)));
+                    if plan.move_to.is_some() {
+                        deletes.push(plan.target.clone());
+                    }
                 }
                 Action::Add { lines } => {
                     let mut body = lines.join("\n");
@@ -212,7 +254,7 @@ fn find_subslice(haystack: &[String], needle: &[String]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn parse(input: &str) -> std::result::Result<Vec<(String, Action)>, String> {
+fn parse(input: &str) -> std::result::Result<Vec<(String, Action, Option<String>)>, String> {
     let normalized = input.replace("\r\n", "\n");
     let lines: Vec<&str> = normalized.lines().collect();
     let mut index = 0usize;
@@ -230,8 +272,8 @@ fn parse(input: &str) -> std::result::Result<Vec<(String, Action)>, String> {
         }
         if let Some(path) = line.strip_prefix("*** Update File: ") {
             index += 1;
-            let (hunks, next) = parse_update(&lines, index)?;
-            sections.push((path.trim().to_string(), Action::Update { hunks }));
+            let (hunks, move_to, next) = parse_update(&lines, index)?;
+            sections.push((path.trim().to_string(), Action::Update { hunks }, move_to));
             index = next;
         } else if let Some(path) = line.strip_prefix("*** Add File: ") {
             index += 1;
@@ -245,11 +287,11 @@ fn parse(input: &str) -> std::result::Result<Vec<(String, Action)>, String> {
             if added.is_empty() {
                 return Err(format!("add section {} has no lines", path));
             }
-            sections.push((path.trim().to_string(), Action::Add { lines: added }));
+            sections.push((path.trim().to_string(), Action::Add { lines: added }, None));
         } else if line.trim() == "*** End of File" {
             index += 1;
         } else if let Some(path) = line.strip_prefix("*** Delete File: ") {
-            sections.push((path.trim().to_string(), Action::Delete));
+            sections.push((path.trim().to_string(), Action::Delete, None));
             index += 1;
         } else if line.trim().is_empty() {
             index += 1;
@@ -263,10 +305,11 @@ fn parse(input: &str) -> std::result::Result<Vec<(String, Action)>, String> {
 fn parse_update(
     lines: &[&str],
     mut index: usize,
-) -> std::result::Result<(Vec<Hunk>, usize), String> {
+) -> std::result::Result<(Vec<Hunk>, Option<String>, usize), String> {
     let mut hunks = Vec::new();
     let mut old = Vec::new();
     let mut new = Vec::new();
+    let mut move_to = None;
     while index < lines.len() {
         let line = lines[index];
         if line.starts_with("*** ") {
@@ -310,7 +353,13 @@ fn parse_update(
     if hunks.is_empty() {
         return Err("update section has no hunks".to_string());
     }
-    Ok((hunks, index))
+    if index < lines.len() {
+        if let Some(dest) = lines[index].strip_prefix("*** Move to: ") {
+            move_to = Some(dest.trim().to_string());
+            index += 1;
+        }
+    }
+    Ok((hunks, move_to, index))
 }
 
 #[cfg(test)]
@@ -375,6 +424,42 @@ mod tests {
         assert!(result.content.contains("did not match"));
         assert_eq!(fs::read_to_string(&first).unwrap(), "alpha\n");
         assert_eq!(fs::read_to_string(&second).unwrap(), "beta\n");
+    }
+
+    #[test]
+    fn moves_an_updated_file() {
+        let dir = temp_dir("move");
+        let ctx = ToolCtx::new(dir.clone());
+        let source = dir.join("source.txt");
+        let dest = dir.join("dest.txt");
+        fs::write(&source, "alpha\n").unwrap();
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n-alpha\n+ALPHA\n*** Move to: {}\n*** End Patch",
+            source.display(),
+            dest.display()
+        );
+        let result = run(&ctx, &patch);
+        assert!(!result.is_error, "{}", result.content);
+        assert!(!source.exists());
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "ALPHA\n");
+    }
+
+    #[test]
+    fn preserves_crlf_and_bom_on_update() {
+        let dir = temp_dir("crlf-bom");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("file.txt");
+        fs::write(&path, "\u{FEFF}alpha\r\nbeta\r\n").unwrap();
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n-beta\n+BETA\n*** End Patch",
+            path.display()
+        );
+        let result = run(&ctx, &patch);
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "\u{FEFF}alpha\r\nBETA\r\n"
+        );
     }
 
     #[test]

@@ -497,7 +497,7 @@ argent --sessions               列出已有会话
 - 批量编辑：`edit` 的 `edits` 接受多文件/多范围 JSON，先统一校验锚点、
   重叠和路径，再按稳定顺序写盘；任一锚点失效时整批不落盘。
 - `apply_patch` 插件：按需加载的 Codex/OpenCode 风格 `*** Begin Patch`
-  入口，支持 Update/Add/Delete 文件段，先校验全部 hunk 再写盘。
+  入口，支持 Update/Add/Delete/Move 文件段，先校验全部 hunk 再写盘。
 - 编辑后诊断：write/edit/apply_patch 成功后，如果 `codeintel` 已启动对应
   LSP server，结果会附带该文件 diagnostics；未用过 codeintel 时不拉起新进程。
 - 可续传的手机/远程同步：`/v1/events` 带事件 id、`Last-Event-ID` 回放、

@@ -10,8 +10,8 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
   validated for every file before the first write; a stale anchor aborts the
   whole batch.
 - **`apply_patch` plugin.** An on-demand Codex/OpenCode-style
-  `*** Begin Patch` envelope supports Update/Add/Delete sections and validates
-  every hunk before the first write.
+  `*** Begin Patch` envelope supports Update/Add/Delete/Move sections and
+  validates every hunk before the first write.
 - **Post-edit LSP diagnostics.** Successful write/edit/apply_patch calls append
   diagnostics when an LSP server is already running. The hook never starts a
   server, so sessions that never used code intelligence pay nothing.

@@ -178,7 +178,7 @@ OMP 的强项不是功能数量，而是编辑安全和批处理。argent 0.3.1 
    **已完成（Unreleased）**：`edit.edits` JSON 批量入口 + 三组测试。
 2. **P0 `apply_patch` 兼容入口**：给 Codex/OpenCode 模型熟悉的
    `*** Begin Patch` 外壳；内部先复用 hashline，避免新增一套文本匹配。
-   **已完成（Unreleased）**：按需加载的 `patch` 插件，支持 Update/Add/Delete。
+   **已完成（Unreleased）**：按需加载的 `patch` 插件，支持 Update/Add/Delete/Move。
 3. **P1 编辑后 LSP 诊断**：成功写入后对目标文件取一次 `diagnostics`，作为
    tool result 的附加块；没有 LSP 时零开销。
    **已完成（Unreleased）**：`ToolCtx.post_edit` hook，只查询已运行的 server。
