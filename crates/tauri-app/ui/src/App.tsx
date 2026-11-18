@@ -14,6 +14,7 @@ import Documents from "./Documents";
 import Memory from "./Memory";
 import Extensions from "./Extensions";
 import Usage from "./Usage";
+import Git from "./Git";
 import ToolCard from "./ToolCard";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -177,7 +178,7 @@ function App() {
     storageGet("argent.theme") === "light" ? "light" : "dark",
   );
   const [screen, setScreen] = createSignal<
-    "chat" | "automations" | "documents" | "memory" | "extensions" | "usage"
+    "chat" | "automations" | "documents" | "memory" | "extensions" | "usage" | "git"
   >("chat");
   const [help, setHelp] = createSignal(false);
   const [locale, setLocale] = createSignal<Locale>(detectLocale());
@@ -750,10 +751,9 @@ function App() {
   const newSession = async () => {
     if (busy()) return;
     try {
+      // The worker emits SessionCleared; clearing locally here would race with
+      // that event and can drop a freshly loaded transcript.
       await invoke("new_session", { sid: active() });
-      setItems([]);
-      setSessionPath("");
-      resetMetrics();
     } catch (err) {
       setError(String(err));
     }
@@ -808,10 +808,9 @@ function App() {
   const openSession = async (path: string) => {
     if (busy()) return;
     try {
+      // Loaded + Session events from the worker replace the transcript. Doing
+      // it here as well creates a race that can empty a just-reloaded tab.
       await invoke("open_session", { sid: active(), path });
-      setItems([]);
-      setSessionPath(path);
-      resetMetrics();
     } catch (err) {
       setError(String(err));
     }
@@ -1186,6 +1185,12 @@ function App() {
             onClick={() => setScreen("usage")}
           >
             用量
+          </button>
+          <button
+            classList={{ active: screen() === "git" }}
+            onClick={() => setScreen("git")}
+          >
+            Git
           </button>
         </div>
         <div class="side-head">
@@ -1713,6 +1718,9 @@ function App() {
         </Show>
         <Show when={screen() === "usage"}>
           <Usage />
+        </Show>
+        <Show when={screen() === "git"}>
+          <Git onAddToChat={addDocumentToChat} />
         </Show>
       </main>
 

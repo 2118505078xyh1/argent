@@ -654,6 +654,48 @@ fn list_markdown_names(dir: &std::path::Path) -> Vec<String> {
 }
 
 #[tauri::command]
+pub fn git_status() -> Result<Value, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(cwd)
+        .output()
+        .map_err(|error| format!("git is unavailable: {}", error))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let lines: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.len() > 3)
+        .map(str::to_string)
+        .collect();
+    Ok(json!(lines))
+}
+
+#[tauri::command]
+pub fn git_diff(path: String) -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let output = std::process::Command::new("git")
+        .arg("diff")
+        .arg("--")
+        .arg(path)
+        .current_dir(cwd)
+        .output()
+        .map_err(|error| format!("git is unavailable: {}", error))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let body = String::from_utf8_lossy(&output.stdout).into_owned();
+    const LIMIT: usize = 60_000;
+    if body.chars().count() <= LIMIT {
+        return Ok(body);
+    }
+    let mut clipped: String = body.chars().take(LIMIT).collect();
+    clipped.push('…');
+    Ok(clipped)
+}
+
+#[tauri::command]
 pub fn list_extensions() -> Result<Value, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let global = config_root();

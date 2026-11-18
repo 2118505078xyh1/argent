@@ -1111,6 +1111,19 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.git-row {
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.git-row code {
+  flex: none;
+  color: var(--ok);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
 .usage-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

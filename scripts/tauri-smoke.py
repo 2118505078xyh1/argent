@@ -186,7 +186,17 @@ async def run(args):
                     ".some((el) => el.textContent.includes('smoke complete'))",
                     label="second tab answer",
                 )
-                await cdp.eval("document.querySelectorAll('.tab-label')[0].click()")
+                # The first tab keeps its transcript across switches. Click
+                # through a short retry loop: the WebView may still be settling
+                # after the second tab's turn_done.
+                for _ in range(3):
+                    await cdp.eval("document.querySelectorAll('.tab-label')[0].click()")
+                    await asyncio.sleep(0.3)
+                    if await cdp.eval(
+                        "document.querySelector('.chat-tab.active .tab-label')"
+                        "?.textContent.includes('write a smoke file')"
+                    ):
+                        break
                 await cdp.wait_for(
                     "Array.from(document.querySelectorAll('.assistant'))"
                     ".some((el) => el.textContent.includes('smoke complete'))",

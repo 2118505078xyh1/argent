@@ -91,6 +91,8 @@ fn main() {
             backend::delete_automation,
             backend::run_automation,
             backend::automation_log,
+            backend::git_status,
+            backend::git_diff,
             backend::usage_summary,
             backend::list_extensions,
             backend::list_memory,

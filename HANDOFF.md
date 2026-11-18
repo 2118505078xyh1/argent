@@ -165,7 +165,11 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     sessions/loaded/error 与畸形 payload；CDP 冒烟通过。
 18. **命令面板与更多页面 ✅（2026-11-19）**：Ctrl+Shift+P 动作面板、记忆
     浏览/新增/删除（`argent-memory`）、扩展只读列表（skills/commands/hooks）、
-    用量仪表盘（`argent_session::usage`）。CDP 冒烟加入页面切换断言并通过。
+    用量仪表盘（`argent_session::usage`）、Git 状态/diff 面板。
+19. **竞态修复 ✅（2026-11-19）**：CDP 冒烟压测暴露"切回标签后助手消息丢失"——
+    `openSession/newSession` 在 invoke 返回后本地清空 transcript，与后端
+    `Loaded/SessionCleared` 事件交错。改为完全由引擎事件驱动，并让冒烟在切回
+    标签时显式检查激活态；连续 3 次冒烟通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）
