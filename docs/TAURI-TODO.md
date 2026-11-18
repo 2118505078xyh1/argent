@@ -227,7 +227,8 @@ server，`ARGENT_BASE_URL` 指过去；新增 `scripts/tauri-smoke.py`，用 CDP
 > T1.14 附件、T1.17 审批队列、T1.21 托盘、T1.23 前端 i18n、T1.29 更新提示。
 > 2026-11-19 第五轮：T1.17（审批队列）、T1.12（@文件补全）、T1.14（文本附件拖放）、
 > T1.21（托盘 + 关闭隐藏）、T1.23（前端 zh/en 切换）、T2.5（recv_timeout 轮询）、
-> T2.7（worker 锁不再 panic）。仍未做：T1.3 diff、T1.7 虚拟滚动、T1.29 更新提示。
+> T2.7（worker 锁不再 panic）、T3.11（会话导出 MD/JSON）、`crates/tauri-app/README.md`
+> （架构/安全模型/性能预算）。仍未做：T1.3 diff、T1.7 虚拟滚动、T1.29 更新提示。
 
 | ID | 项 | 说明 / 落点 | 量级 | 验收 |
 |---|---|---|---|---|

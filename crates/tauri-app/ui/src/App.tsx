@@ -290,6 +290,7 @@ const SLASH_COMMANDS = [
   "/thinking",
   "/cost",
   "/copy",
+  "/export",
   "/help",
 ];
 
@@ -988,6 +989,38 @@ function App() {
     return "";
   };
 
+  const exportTranscript = (format: "md" | "json") => {
+    const all = items();
+    const body =
+      format === "json"
+        ? JSON.stringify(all, null, 2)
+        : all
+            .map((item) => {
+              if (item.kind === "tool") {
+                return `> ${item.tool.name} ${item.tool.args}\n>\n> ${item.tool.output.replace(/\n/g, "\n> ")}`;
+              }
+              const prefix =
+                item.kind === "user"
+                  ? "## 你"
+                  : item.kind === "assistant"
+                    ? "## argent"
+                    : item.kind === "thinking"
+                      ? "## thinking"
+                      : "## notice";
+              return `${prefix}\n\n${item.text}`;
+            })
+            .join("\n\n");
+    const blob = new Blob([body], {
+      type: format === "json" ? "application/json" : "text/markdown",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `argent-session-${active()}.${format === "json" ? "json" : "md"}`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   const copyText = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -1094,10 +1127,13 @@ function App() {
       case "copy":
         await copyLast();
         return;
+      case "export":
+        exportTranscript(args.toLowerCase() === "json" ? "json" : "md");
+        return;
       case "help":
         append(
           "notice",
-          "命令：/new /rename [标题] /rewind [n] /compact /model [id] /thinking [档位] /cost /copy /help",
+          "命令：/new /rename [标题] /rewind [n] /compact /model [id] /thinking [档位] /cost /copy /export [md|json] /help",
         );
         return;
       default:
@@ -1705,6 +1741,14 @@ function App() {
               </Show>
             </div>
             <div class="diag">
+              <div class="diag-actions">
+                <button class="ghost" onClick={() => exportTranscript("md")}>
+                  导出 Markdown
+                </button>
+                <button class="ghost" onClick={() => exportTranscript("json")}>
+                  导出 JSON
+                </button>
+              </div>
               <div>provider · {ready()?.provider || "—"}</div>
               <div>protocol · {ready()?.protocol || "—"}</div>
               <div>model · {ready()?.model || "—"}</div>

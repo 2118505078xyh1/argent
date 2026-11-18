@@ -1207,6 +1207,11 @@ textarea:focus-visible {
   font-family: inherit;
 }
 
+.diag-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .doc-actions {
   display: flex;
   align-items: center;

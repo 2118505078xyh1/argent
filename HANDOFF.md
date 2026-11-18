@@ -150,6 +150,11 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     文本附件拖放、系统托盘（关闭隐藏到托盘，菜单显示/退出）、前端 zh/en 切换、
     事件轮询改 `recv_timeout(25ms)`、worker 锁不再 `expect` panic。
     clippy 与 CDP 冒烟通过。
+15. **导出与可读文档 ✅（2026-11-19）**：`/export md|json` + 帮助面板按钮导出
+    当前会话；新增 `crates/tauri-app/README.md`（架构、安全模型、性能预算）。
+    根 `cargo test --workspace` 296 passed / 1 failed：失败项
+    `notification_hook_carries_its_message_into_the_environment` 依赖 Git Bash
+    的 `printf`，本机未装 Git Bash（AGENTS.md 已记录该陷阱），与本次改动无关。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）
