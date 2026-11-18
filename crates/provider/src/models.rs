@@ -195,13 +195,16 @@ pub fn load(overrides: Option<&Json>) -> ModelCatalog {
     resolve(cache.as_ref(), override_catalog.as_ref())
 }
 
+/// A signature/integrity callback for a downloaded catalog.
+pub type VerifyCallback<'a> = dyn Fn(&[u8]) -> Result<()> + 'a;
+
 /// 从 `url` 拉取最新的模型目录**原始字节**。
 ///
 /// `verify` 是可选的签名/完整性校验闭包：传入时，只有校验通过才返回字节，
 /// 校验失败则整体拒绝（错误原样向上传播）。刻意把它做成参数而不是固定依赖，
 /// 以免 provider 依赖 update/plugins，保持依赖图无环。HTTP 非 2xx（例如 404）
 /// 返回 `Err` 而不是 panic。
-pub fn refresh(url: &str, verify: Option<&dyn Fn(&[u8]) -> Result<()>>) -> Result<Vec<u8>> {
+pub fn refresh(url: &str, verify: Option<&VerifyCallback<'_>>) -> Result<Vec<u8>> {
     let response = argent_core::http::send(&argent_core::http::Request::get(url))?;
     if !response.is_success() {
         return Err(Error::io(format!(

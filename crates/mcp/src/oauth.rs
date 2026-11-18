@@ -24,6 +24,9 @@ use crate::token_store::{AuthStatus, McpAuthStore, StoredCredential};
 /// 等回调的默认时限。
 pub const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// 打开授权页面的动作。
+pub type OpenCallback<'a> = dyn Fn(&str) -> Result<()> + 'a;
+
 /// 一个 MCP 服务器的 OAuth 配置。
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
@@ -257,7 +260,7 @@ pub struct AuthServerMetadata {
 /// 登录时可以注入的行为（测试用；生产环境用系统浏览器）。
 pub struct LoginOptions<'a> {
     /// 打开授权页面的动作；返回 `Err` 只提示，不中止流程。
-    pub open: Option<&'a dyn Fn(&str) -> Result<()>>,
+    pub open: Option<&'a OpenCallback<'a>>,
     /// 等待回环回调的时限。
     pub timeout: Duration,
 }

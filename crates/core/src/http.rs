@@ -886,6 +886,8 @@ fn send_via_curl(req: &Request) -> Result<Response> {
 mod tests {
     use super::*;
 
+    type TestRecycle = Option<Box<dyn FnOnce(std::io::Cursor<Vec<u8>>) + Send>>;
+
     #[test]
     fn splits_urls() {
         let (scheme, host, port, path) = split_url("http://127.0.0.1:3425/v1/chat").unwrap();
@@ -985,10 +987,9 @@ mod tests {
             headers: vec![("content-length".to_string(), "5".to_string())],
             status_line: "HTTP/1.1 200 OK".to_string(),
         };
-        let recycle: Option<Box<dyn FnOnce(std::io::Cursor<Vec<u8>>) + Send>> =
-            Some(Box::new(move |reader| {
-                sink.lock().unwrap().push(reader.into_inner())
-            }));
+        let recycle: TestRecycle = Some(Box::new(move |reader| {
+            sink.lock().unwrap().push(reader.into_inner())
+        }));
         let mut reader = BodyReader::new(std::io::Cursor::new(b"hello".to_vec()), &head, recycle);
         let mut out = Vec::new();
         reader.read_to_end(&mut out).unwrap();
@@ -1007,8 +1008,7 @@ mod tests {
             headers: Vec::new(),
             status_line: "HTTP/1.1 204 No Content".to_string(),
         };
-        let recycle: Option<Box<dyn FnOnce(std::io::Cursor<Vec<u8>>) + Send>> =
-            Some(Box::new(move |_reader| *sink.lock().unwrap() += 1));
+        let recycle: TestRecycle = Some(Box::new(move |_reader| *sink.lock().unwrap() += 1));
         let mut reader = BodyReader::new(std::io::Cursor::new(Vec::new()), &head, recycle);
         let mut out = Vec::new();
         reader.read_to_end(&mut out).unwrap();

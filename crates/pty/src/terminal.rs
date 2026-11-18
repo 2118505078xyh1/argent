@@ -399,18 +399,16 @@ mod platform {
         }
     }
 
-    /// Start a command attached to a new pseudoconsole.
-    pub fn spawn(
-        command: &str,
-        cwd: &Path,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(
+    /// The child session, its stdin, stdout, and process id.
+    pub type SpawnedSession = (
         Session,
         Box<dyn std::io::Write + Send>,
         Box<dyn Read + Send>,
         usize,
-    )> {
+    );
+
+    /// Start a command attached to a new pseudoconsole.
+    pub fn spawn(command: &str, cwd: &Path, cols: u16, rows: u16) -> Result<SpawnedSession> {
         unsafe {
             // Two pipes: our writes go to the terminal's input, its output
             // comes back to us.

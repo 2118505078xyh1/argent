@@ -18,6 +18,9 @@ use crate::oauth::OAuthConfig;
 use crate::token_store::{AuthStatus, McpAuthStore, FILE_NAME};
 use crate::transport::TransportKind;
 
+/// The connected clients and the tools they contributed.
+pub type ConnectedTools = (Vec<Arc<Mutex<McpClient>>>, Vec<Box<dyn Tool>>);
+
 /// A tool served by a connected MCP server.
 pub struct McpToolAdapter {
     /// Unqualified tool name on the server.
@@ -294,7 +297,7 @@ impl McpConfig {
     ///
     /// A server that fails to start is reported and skipped; one broken server
     /// must not take the session down with it.
-    pub fn connect_all(&self) -> (Vec<Arc<Mutex<McpClient>>>, Vec<Box<dyn Tool>>) {
+    pub fn connect_all(&self) -> ConnectedTools {
         let mut clients = Vec::new();
         let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 

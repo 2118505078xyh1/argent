@@ -983,17 +983,18 @@ mod tests {
         (registry, executed)
     }
 
-    fn audit_sink() -> (
-        Arc<Mutex<Vec<String>>>,
-        impl Fn(&str, &Json, &str, Option<String>) + Send + Sync + 'static,
-    ) {
+    type AuditSink = Arc<dyn Fn(&str, &Json, &str, Option<String>) + Send + Sync>;
+
+    fn audit_sink() -> (Arc<Mutex<Vec<String>>>, AuditSink) {
         let decisions = Arc::new(Mutex::new(Vec::<String>::new()));
         let log = Arc::clone(&decisions);
-        let sink = move |_name: &str, _args: &Json, decision: &str, _reason: Option<String>| {
-            if let Ok(mut list) = log.lock() {
-                list.push(decision.to_string());
-            }
-        };
+        let sink: AuditSink = Arc::new(
+            move |_name: &str, _args: &Json, decision: &str, _reason: Option<String>| {
+                if let Ok(mut list) = log.lock() {
+                    list.push(decision.to_string());
+                }
+            },
+        );
         (decisions, sink)
     }
 
@@ -1005,7 +1006,7 @@ mod tests {
             policy: Some(Arc::new(|name: &str, _args: &Json| {
                 (name == "probe").then(|| "the test policy says no".to_string())
             })),
-            audit: Some(Arc::new(sink)),
+            audit: Some(sink),
             ..ToolGate::default()
         };
         let result = gate.run(&registry, &ctx(), "probe", &Json::obj()).unwrap();
@@ -1030,7 +1031,7 @@ mod tests {
                     }
                 },
             )),
-            audit: Some(Arc::new(sink)),
+            audit: Some(sink),
             ..ToolGate::default()
         };
         let result = gate.run(&registry, &ctx(), "probe", &Json::obj()).unwrap();
@@ -1056,7 +1057,7 @@ mod tests {
                     }
                 },
             )),
-            audit: Some(Arc::new(sink)),
+            audit: Some(sink),
             ..ToolGate::default()
         };
         let result = gate.run(&registry, &ctx(), "probe", &Json::obj()).unwrap();

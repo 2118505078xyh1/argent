@@ -43,9 +43,6 @@ rust-version = "1.85"
 license = "MIT"
 
 [workspace.lints.clippy]
-# 触发它的都是回调形状的签名：ToolGate 的 policy/audit 句柄、测试里的 sink
-# 闭包。提 type alias 只把复杂度挪个位置，等拆 agent_loop 时一并做。
-type_complexity = "allow"
 # 各前端的入口函数一次性接住整套上下文：tui::spawn、tui::run、run_repl、
 # repl_command、acp::worker、engine::build_agent。拆成上下文结构体是一次
 # 重构任务，不是 lint 修复；需要时在那一处单独 allow。
