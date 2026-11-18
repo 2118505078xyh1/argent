@@ -573,8 +573,47 @@ fn apply_edit_batch(ctx: &ToolCtx, default_path: &str, raw: &str) -> Result<Tool
     Ok(result)
 }
 
+/// Wire format exposed to the model for `edit`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum EditMode {
+    /// Exact text replacement plus `LINE#HASH` anchors and batch `edits`.
+    #[default]
+    Hashline,
+    /// Exact text only; for weak/local models that cannot emit anchors.
+    Replace,
+}
+
+/// Pick a conservative edit mode for a model family.
+pub fn edit_mode_for_model(model: &str) -> EditMode {
+    let model = model.to_ascii_lowercase();
+    let weak = [
+        "qwen", "deepseek", "kimi", "minimax", "glm", "spark-4b", "llama", "local", "phi", "gemma",
+    ];
+    if weak.iter().any(|needle| model.contains(needle)) {
+        EditMode::Replace
+    } else {
+        EditMode::Hashline
+    }
+}
+
 /// Replace an exact text span in a file.
-pub struct EditTool;
+pub struct EditTool {
+    mode: EditMode,
+}
+
+impl Default for EditTool {
+    fn default() -> EditTool {
+        EditTool {
+            mode: EditMode::Hashline,
+        }
+    }
+}
+
+impl EditTool {
+    pub fn new(mode: EditMode) -> EditTool {
+        EditTool { mode }
+    }
+}
 
 impl Tool for EditTool {
     fn name(&self) -> &str {
@@ -582,22 +621,36 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Replace text or LINE#HASH range."
+        match self.mode {
+            EditMode::Hashline => "Replace text or LINE#HASH range.",
+            EditMode::Replace => "Replace exact text in a file.",
+        }
     }
 
     fn parameters(&self) -> Json {
-        schema_object(
-            vec![
-                ("path", "string", "File path"),
-                ("oldText", "string", "Exact text to replace"),
-                ("start", "string", "Start LINE#HASH anchor"),
-                ("end", "string", "End LINE#HASH"),
-                ("newText", "string", "New text"),
-                ("replaceAll", "boolean", "Replace all"),
-                ("edits", "string", "JSON batch edits"),
-            ],
-            vec!["path"],
-        )
+        match self.mode {
+            EditMode::Hashline => schema_object(
+                vec![
+                    ("path", "string", "File path"),
+                    ("oldText", "string", "Exact text to replace"),
+                    ("start", "string", "Start LINE#HASH anchor"),
+                    ("end", "string", "End LINE#HASH"),
+                    ("newText", "string", "New text"),
+                    ("replaceAll", "boolean", "Replace all"),
+                    ("edits", "string", "JSON batch edits"),
+                ],
+                vec!["path"],
+            ),
+            EditMode::Replace => schema_object(
+                vec![
+                    ("path", "string", "File path"),
+                    ("oldText", "string", "Exact text to replace"),
+                    ("newText", "string", "New text"),
+                    ("replaceAll", "boolean", "Replace all"),
+                ],
+                vec!["path", "oldText", "newText"],
+            ),
+        }
     }
 
     fn is_mutating(&self) -> bool {
@@ -616,6 +669,14 @@ impl Tool for EditTool {
         let end_anchor = arg_str_opt(args, "end");
         let new_text = arg_str_opt(args, "newText");
         let replace_all = arg_bool_opt(args, "replaceAll").unwrap_or(false);
+
+        if self.mode == EditMode::Replace
+            && (start_anchor.is_some() || end_anchor.is_some() || args.get("edits").is_some())
+        {
+            return Ok(ToolResult::error(
+                "this model uses replace mode; pass oldText/newText instead of anchors or edits",
+            ));
+        }
 
         if let Some(edits) = arg_str_opt(args, "edits") {
             if old_text.is_some() || start_anchor.is_some() || end_anchor.is_some() || replace_all {
@@ -1147,7 +1208,7 @@ mod tests {
         // 默认的 Sensible 审批模式只询问 needs_approval 为真的工具；
         // 写文件必须落在这一侧，否则模型可以静默覆盖用户文件。
         assert!(WriteTool.needs_approval(&Json::obj()));
-        assert!(EditTool.needs_approval(&Json::obj()));
+        assert!(EditTool::default().needs_approval(&Json::obj()));
     }
 
     #[test]
@@ -1175,7 +1236,7 @@ mod tests {
         assert!(out.content.contains("hello"));
         assert!(out.content.contains("1\thello"));
 
-        let edit = EditTool;
+        let edit = EditTool::default();
         let edit_args = format!(
             r#"{{"path":"{}","oldText":"world","newText":"there"}}"#,
             json_path(&path)
@@ -1195,7 +1256,7 @@ mod tests {
         let path = dir.join("b.txt");
         fs::write(&path, "x\nx\n").unwrap();
 
-        let edit = EditTool;
+        let edit = EditTool::default();
         let ambiguous_args = format!(
             r#"{{"path":"{}","oldText":"x","newText":"y"}}"#,
             json_path(&path)
@@ -1216,7 +1277,7 @@ mod tests {
         let path = dir.join("win.txt");
         fs::write(&path, "first\r\nsecond\r\nthird\r\n").unwrap();
 
-        let edit = EditTool;
+        let edit = EditTool::default();
         let args = format!(
             r#"{{"path":"{}","oldText":"first\nsecond","newText":"FIRST\nSECOND"}}"#,
             json_path(&path)
@@ -1236,7 +1297,7 @@ mod tests {
         let path = dir.join("bom.txt");
         fs::write(&path, "\u{FEFF}alpha\nbeta\n").unwrap();
 
-        let edit = EditTool;
+        let edit = EditTool::default();
         // 不带 BOM 的写法。
         let args = format!(
             r#"{{"path":"{}","oldText":"alpha","newText":"gamma"}}"#,
@@ -1344,7 +1405,7 @@ mod tests {
             r#"{{"path":"{}","oldText":"original","newText":"edited"}}"#,
             json_path(&path)
         );
-        EditTool
+        EditTool::default()
             .execute(&ctx, &Json::parse(&edit_args).unwrap())
             .unwrap();
 
@@ -1378,7 +1439,7 @@ mod tests {
             r#"{{"path":"{}","oldText":"missing","newText":"x"}}"#,
             json_path(&path)
         );
-        let out = EditTool
+        let out = EditTool::default()
             .execute(&ctx, &Json::parse(&args).unwrap())
             .unwrap();
         assert!(out.is_error);
@@ -1412,7 +1473,7 @@ mod tests {
             json_path(&path),
             anchor
         );
-        let out = EditTool
+        let out = EditTool::default()
             .execute(&ctx, &Json::parse(&edit_args).unwrap())
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
@@ -1439,7 +1500,7 @@ mod tests {
             json_path(&path),
             hash
         );
-        let out = EditTool
+        let out = EditTool::default()
             .execute(&ctx, &Json::parse(&edit_args).unwrap())
             .unwrap();
         assert!(out.is_error);
@@ -1472,7 +1533,7 @@ mod tests {
         let mut args = Json::obj();
         args.set("path", Json::string(a.to_string_lossy().into_owned()));
         args.set("edits", Json::string(edits));
-        let out = EditTool.execute(&ctx, &args).unwrap();
+        let out = EditTool::default().execute(&ctx, &args).unwrap();
         assert!(!out.is_error, "{}", out.content);
         assert_eq!(fs::read_to_string(&a).unwrap(), "ALPHA\n");
         assert_eq!(fs::read_to_string(&b).unwrap(), "BETA\n");
@@ -1498,7 +1559,7 @@ mod tests {
         let mut args = Json::obj();
         args.set("path", Json::string(path.to_string_lossy().into_owned()));
         args.set("edits", Json::string(edits));
-        let out = EditTool.execute(&ctx, &args).unwrap();
+        let out = EditTool::default().execute(&ctx, &args).unwrap();
         assert!(out.is_error);
         assert!(out.content.contains("overlapping"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nbeta\n");
@@ -1530,7 +1591,7 @@ mod tests {
         let mut args = Json::obj();
         args.set("path", Json::string(a.to_string_lossy().into_owned()));
         args.set("edits", Json::string(edits));
-        let out = EditTool.execute(&ctx, &args).unwrap();
+        let out = EditTool::default().execute(&ctx, &args).unwrap();
         assert!(out.is_error);
         assert!(out.content.contains("stale hash anchor"));
         assert_eq!(fs::read_to_string(&a).unwrap(), "alpha\n");
@@ -1550,7 +1611,7 @@ mod tests {
             r#"{{"path":"{}","oldText":"alpha","newText":"beta"}}"#,
             json_path(&path)
         );
-        let out = EditTool
+        let out = EditTool::default()
             .execute(&ctx, &Json::parse(&args).unwrap())
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
@@ -1560,6 +1621,39 @@ mod tests {
             out.content
         );
         assert!(out.content.contains("diag:a.txt"), "{}", out.content);
+    }
+
+    #[test]
+    fn model_families_choose_a_safe_edit_mode() {
+        assert_eq!(edit_mode_for_model("claude-sonnet-4.5"), EditMode::Hashline);
+        assert_eq!(edit_mode_for_model("gpt-5"), EditMode::Hashline);
+        assert_eq!(edit_mode_for_model("qwen2.5-coder"), EditMode::Replace);
+        assert_eq!(edit_mode_for_model("DeepSeek-V3"), EditMode::Replace);
+        assert_eq!(edit_mode_for_model("spark-4b"), EditMode::Replace);
+
+        let replace = EditTool::new(EditMode::Replace);
+        let schema = replace.parameters().dump();
+        assert!(!schema.contains("start"));
+        assert!(!schema.contains("edits"));
+        assert!(schema.contains("oldText"));
+    }
+
+    #[test]
+    fn replace_mode_rejects_anchor_fields() {
+        let dir = temp_dir("edit-mode");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("a.txt");
+        fs::write(&path, "alpha\n").unwrap();
+        let args = format!(
+            r#"{{"path":"{}","start":"1#12345678","newText":"beta"}}"#,
+            json_path(&path)
+        );
+        let out = EditTool::new(EditMode::Replace)
+            .execute(&ctx, &Json::parse(&args).unwrap())
+            .unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("replace mode"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\n");
     }
 
     #[test]
@@ -1574,7 +1668,7 @@ mod tests {
             json_path(&path),
             hash
         );
-        let out = EditTool
+        let out = EditTool::default()
             .execute(&ctx, &Json::parse(&args).unwrap())
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
@@ -1595,7 +1689,7 @@ mod tests {
             start,
             end
         );
-        let out = EditTool
+        let out = EditTool::default()
             .execute(&ctx, &Json::parse(&args).unwrap())
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
@@ -1615,7 +1709,7 @@ mod tests {
             json_path(&path),
             stale
         );
-        let out = EditTool
+        let out = EditTool::default()
             .execute(&ctx, &Json::parse(&args).unwrap())
             .unwrap();
         assert!(out.is_error);
@@ -1638,7 +1732,7 @@ mod tests {
             json_path(&path),
             hash
         );
-        let out = EditTool
+        let out = EditTool::default()
             .execute(&ctx, &Json::parse(&args).unwrap())
             .unwrap();
         assert!(!out.is_error, "{}", out.content);

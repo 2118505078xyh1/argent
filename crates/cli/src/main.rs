@@ -362,7 +362,8 @@ pub fn run(raw: &[String]) -> Result<i32> {
 
     // pi's four tools. Everything else is a plugin: registered, but out of the
     // live schema until settings, a flag or `tool_search` loads it.
-    let mut base_registry = ToolRegistry::with_core();
+    let mut base_registry =
+        ToolRegistry::with_core_mode(argent_tools::edit_mode_for_model(&config.model));
     base_registry.add_builtin_plugins();
 
     let mut plugin_manager = PluginManager::for_workspace(&cli.cwd);

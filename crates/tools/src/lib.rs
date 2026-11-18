@@ -25,7 +25,9 @@ pub use delegate::{
     DelegateBatch, DelegateHandle, DelegateRequest, DelegateSlot, DelegateTool, SubagentEvent,
     SubagentProgress, TaskOutcome,
 };
-pub use fs_tools::{EditTool, FindTool, GrepTool, LsTool, ReadTool, WriteTool};
+pub use fs_tools::{
+    edit_mode_for_model, EditMode, EditTool, FindTool, GrepTool, LsTool, ReadTool, WriteTool,
+};
 pub use memory_tool::{digest_from, memory_digest, MemoryTool};
 pub use office::DocumentTool;
 pub use registry::{BuiltinTools, PluginInfo, ToolRegistry};
@@ -36,7 +38,7 @@ pub use state_tools::{
 };
 pub use tool::{
     approval_preview, approval_summary, arg_bool_opt, arg_str, arg_str_opt, arg_usize_opt,
-    schema_object, with_post_edit_diagnostics, PostEditHook, Tool, ToolCtx, ToolResult,
+    schema_object, with_post_edit_diagnostics, PostEditHook, Tool, ToolCtx, ToolResult, ToolTrace,
 };
 pub use toolsearch::{CatalogEntry, Promotions, ToolSearchTool};
 pub use websearch::{Hit, WebSearchTool};

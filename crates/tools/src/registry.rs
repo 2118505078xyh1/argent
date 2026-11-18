@@ -13,7 +13,8 @@ use argent_core::error::{Error, Result};
 use argent_core::json::Json;
 
 use crate::plugin;
-use crate::tool::{Tool, ToolCtx, ToolResult};
+use crate::tool::{Tool, ToolCtx, ToolResult, ToolTrace};
+use crate::EditMode;
 
 /// Every tool argent ships with, flattened.
 pub struct BuiltinTools;
@@ -70,8 +71,13 @@ impl ToolRegistry {
 
     /// The default registry: pi's four tools, nothing else.
     pub fn with_core() -> ToolRegistry {
+        ToolRegistry::with_core_mode(EditMode::Hashline)
+    }
+
+    /// Core tools with an explicit `edit` wire format.
+    pub fn with_core_mode(mode: EditMode) -> ToolRegistry {
         let mut registry = ToolRegistry::new();
-        for tool in plugin::core_tools() {
+        for tool in plugin::core_tools_with_mode(mode) {
             registry.register_extension(tool);
         }
         registry
@@ -347,7 +353,18 @@ impl ToolRegistry {
         let tool = self
             .get(name)
             .ok_or_else(|| Error::tool(format!("unknown tool '{}'", name)))?;
-        tool.execute(ctx, args)
+        let started = std::time::Instant::now();
+        let result = tool.execute(ctx, args);
+        let is_error = match &result {
+            Ok(result) => result.is_error,
+            Err(_) => true,
+        };
+        ctx.record_trace(ToolTrace {
+            name: name.to_string(),
+            duration_ms: started.elapsed().as_millis() as u64,
+            is_error,
+        });
+        result
     }
 
     /// Check whether a tool call needs approval.
@@ -421,6 +438,26 @@ mod tests {
         let registry = ToolRegistry::with_core();
         let live = registry.enabled_names();
         assert_eq!(live, vec!["read", "write", "edit", "bash"]);
+    }
+
+    #[test]
+    fn every_tool_call_records_a_trace() {
+        let dir = std::env::temp_dir().join(format!("argent-tool-trace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+        let ctx = ToolCtx::new(dir.clone());
+        let registry = ToolRegistry::with_core();
+        let mut args = Json::obj();
+        args.set("path", Json::string(path.to_string_lossy().into_owned()));
+        registry.execute(&ctx, "read", &args).unwrap();
+        let traces = ctx.take_traces();
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0].name, "read");
+        assert!(!traces[0].is_error);
+        assert!(ctx.take_traces().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

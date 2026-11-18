@@ -758,7 +758,8 @@ fn build_agent(
     });
     // pi's four tools; everything else is a plugin the settings file decides
     // to load.
-    let mut registry = ToolRegistry::with_core();
+    let mut registry =
+        ToolRegistry::with_core_mode(argent_tools::edit_mode_for_model(&config.model));
 
     // 与 CLI 同一套装配规则：发现工作区插件包，按设置启用，再注册原生
     // out-of-tree 工具库。GUI 会话由此获得与终端一致的插件能力。

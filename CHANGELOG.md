@@ -21,6 +21,9 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 - **Reproducible Windows archive.** `scripts/build-release.ps1` now builds with
   `--locked`, sorts archive entries, fixes timestamps and two consecutive
   builds produce the same sha256.
+- **Model-aware edit mode.** Qwen/DeepSeek/Kimi/GLM/local models get exact-text
+  `edit`; stronger models keep hashline anchors. Core tool calls also record
+  name/duration/error traces on `ToolCtx`.
 - **Seen-line provenance for anchored edits.** `edit` now tracks the exact
   `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
   range is rejected even if its hash happens to match, and compaction clears

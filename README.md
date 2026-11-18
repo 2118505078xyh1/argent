@@ -503,6 +503,9 @@ argent --sessions               列出已有会话
   入口，支持 Update/Add/Delete/Move 文件段，先校验全部 hunk 再写盘。
 - 编辑后诊断：write/edit/apply_patch 成功后，如果 `codeintel` 已启动对应
   LSP server，结果会附带该文件 diagnostics；未用过 codeintel 时不拉起新进程。
+- 自适应编辑模式：Qwen/DeepSeek/Kimi/GLM/本地 4B 等模型自动使用
+  `replace` 精确文本模式；强模型使用 `hashline`。`ToolCtx` 同时记录每次
+  工具调用的 name/duration/error trace。
 - 可续传的手机/远程同步：`/v1/events` 带事件 id、`Last-Event-ID` 回放、
   15 秒心跳和 200 帧尾部；`/v1/prompt` 支持 `stream=false` JSON ack，
   内置 `/` 页面按帧合并 DOM。

@@ -61,6 +61,14 @@ impl std::fmt::Debug for PostEditHook {
     }
 }
 
+/// One completed tool invocation, for host-side tracing and diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolTrace {
+    pub name: String,
+    pub duration_ms: u64,
+    pub is_error: bool,
+}
+
 /// Execution context handed to a tool.
 #[derive(Debug, Clone)]
 pub struct ToolCtx {
@@ -86,6 +94,8 @@ pub struct ToolCtx {
     pub read_anchors: Arc<Mutex<HashMap<PathBuf, ReadAnchors>>>,
     /// Host-supplied diagnostics hook, called only after a successful write.
     pub post_edit: Option<PostEditHook>,
+    /// Completed tool spans for this session, in execution order.
+    pub traces: Arc<Mutex<Vec<ToolTrace>>>,
     /// Working directory the shell last ended in, for one session.
     ///
     /// Shared across clones like `read_cache`: a `cd` in one bash call keeps
@@ -115,6 +125,7 @@ impl ToolCtx {
             read_cache: Arc::new(Mutex::new(HashMap::new())),
             read_anchors: Arc::new(Mutex::new(HashMap::new())),
             post_edit: None,
+            traces: Arc::new(Mutex::new(Vec::new())),
             shell_cwd: Arc::new(Mutex::new(None)),
             cancel: argent_core::interrupt::Cancellation::new(),
             checkpoints: None,
@@ -198,6 +209,21 @@ impl ToolCtx {
         self.post_edit
             .as_ref()
             .and_then(|hook| hook.0.diagnostics(path))
+    }
+
+    /// Record one completed tool span.
+    pub fn record_trace(&self, trace: ToolTrace) {
+        if let Ok(mut traces) = self.traces.lock() {
+            traces.push(trace);
+        }
+    }
+
+    /// Drain completed tool spans.
+    pub fn take_traces(&self) -> Vec<ToolTrace> {
+        self.traces
+            .lock()
+            .map(|mut traces| std::mem::take(&mut *traces))
+            .unwrap_or_default()
     }
 
     /// Drop a cached read after a write/edit invalidates the file.

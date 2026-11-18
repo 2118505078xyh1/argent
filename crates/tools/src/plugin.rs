@@ -18,7 +18,7 @@
 
 use crate::apply_patch::ApplyPatchTool;
 use crate::bash::BashTool;
-use crate::fs_tools::{EditTool, FindTool, GrepTool, ReadTool, WriteTool};
+use crate::fs_tools::{EditMode, EditTool, FindTool, GrepTool, ReadTool, WriteTool};
 use crate::memory_tool::MemoryTool;
 use crate::state_tools::{AskTool, SubmitPlanTool, TodoTool};
 use crate::tool::Tool;
@@ -86,10 +86,15 @@ pub const DEFAULT_PLUGINS: &[&str] = &[EXPLORE];
 
 /// The four tools pi ships. Everything else is a plugin.
 pub fn core_tools() -> Vec<Box<dyn Tool>> {
+    core_tools_with_mode(EditMode::Hashline)
+}
+
+/// Core tools with an explicit `edit` wire format.
+pub fn core_tools_with_mode(mode: EditMode) -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(ReadTool),
         Box::new(WriteTool),
-        Box::new(EditTool),
+        Box::new(EditTool::new(mode)),
         Box::new(BashTool),
     ]
 }
