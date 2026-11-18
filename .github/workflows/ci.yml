@@ -50,6 +50,22 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: test
         run: cargo test --workspace --all-features --locked
+      - name: release size and startup smoke
+        shell: pwsh
+        run: |
+          cargo build --release --locked -p argent-cli
+          $exe = "target/release/argent.exe"
+          $size = (Get-Item $exe).Length
+          if ($size -gt 8MB) {
+            throw "argent.exe grew to $size bytes (budget 8MB)"
+          }
+          $watch = [System.Diagnostics.Stopwatch]::StartNew()
+          & $exe --version | Out-Null
+          $watch.Stop()
+          if ($watch.ElapsedMilliseconds -gt 3000) {
+            throw "argent.exe --version took $($watch.ElapsedMilliseconds) ms (budget 3000 ms)"
+          }
+          Write-Host "release smoke: $size bytes, $($watch.ElapsedMilliseconds) ms"
 
   # Race-hunting: one thread at a time surfaces order-dependent tests and
   # shared-temp-dir collisions that parallel runs hide. The portable crates
