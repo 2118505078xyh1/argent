@@ -1,4 +1,6 @@
 //! argent tool layer: the tool trait, built-in tools and the registry.
+pub mod apply_patch;
+pub use apply_patch::ApplyPatchTool;
 
 pub mod bash;
 pub mod checkpoint;

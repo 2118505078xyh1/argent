@@ -16,6 +16,7 @@
 //! is registered but off costs one line in the system prompt note and nothing
 //! in the request body.
 
+use crate::apply_patch::ApplyPatchTool;
 use crate::bash::BashTool;
 use crate::fs_tools::{EditTool, FindTool, GrepTool, ReadTool, WriteTool};
 use crate::memory_tool::MemoryTool;
@@ -25,6 +26,8 @@ use crate::websearch::WebSearchTool;
 
 /// Search and list files.
 pub const EXPLORE: &str = "explore";
+/// Apply Codex-style multi-file patch envelopes.
+pub const PATCH: &str = "patch";
 /// Task list, structured questions and plan submission.
 pub const PLAN: &str = "plan";
 /// Facts that survive a session.
@@ -58,6 +61,7 @@ pub struct Plugin {
 pub fn summary(name: &str) -> Option<&'static str> {
     Some(match name {
         EXPLORE => "search and list files",
+        PATCH => "apply multi-file patch envelopes",
         PLAN => "task list, structured questions and plan approval",
         MEMORY => "remember facts across sessions",
         SKILLS => "load a markdown procedure on demand",
@@ -101,6 +105,11 @@ pub fn builtin_plugins() -> Vec<Plugin> {
             name: EXPLORE,
             summary: summary(EXPLORE).unwrap_or_default(),
             tools: vec![Box::new(GrepTool), Box::new(FindTool)],
+        },
+        Plugin {
+            name: PATCH,
+            summary: summary(PATCH).unwrap_or_default(),
+            tools: vec![Box::new(ApplyPatchTool)],
         },
         Plugin {
             name: PLAN,
