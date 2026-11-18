@@ -3,7 +3,7 @@
 All notable changes to argent are documented here. The format is a loose
 Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
-## Unreleased
+## 0.3.2 — 2026-11-18
 
 - **Batch anchored edits.** `edit` accepts an `edits` JSON array of
   `{path,start,end,newText}` entries. Anchors, ranges, overlaps and paths are
@@ -39,6 +39,10 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
   `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
   range is rejected even if its hash happens to match, and compaction clears
   the anchor table.
+- **Structure and delivery.** `Budget`/approval/follow-up types moved to
+  `agent/config.rs`; `main.rs` and `agent_loop` tests moved to dedicated
+  modules; docs site + Pages workflow; CI guards release size/startup; personal
+  absolute paths removed from docs and fixtures.
 
 ## 0.3.1 — 2026-11-18
 
