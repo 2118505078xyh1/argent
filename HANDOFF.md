@@ -113,9 +113,11 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
    另完成：Loaded 事件重放、斜杠命令（/new /rename /rewind /compact /model /
    /thinking /cost /copy /help）、手动 compact（`ui-core::Command::Compact` +
    engine 处理 + Loaded 回放）、cost/requests 状态栏。详见 `docs/TAURI-TODO.md`。
-7. **打包配置 ✅（2026-11-19）**：`bundle.active=true`、targets `nsis/msi`、
-   icons/publisher/category 已填，`cargo check` 通过。**剩余**：用
-   `cargo tauri build` 实际产出安装包并验证签名/升级（本机未装 tauri CLI）。
+7. **打包 ✅（2026-11-19）**：`bundle.active=true`、targets `nsis/msi`、
+   icons/publisher/category 已填。安装 `tauri-cli 2.12.6` 后实测
+   `cargo tauri build --bundles nsis` 产出 `Argent_0.3.2_x64-setup.exe`（3.46 MiB），
+   `--bundles msi` 产出 `Argent_0.3.2_x64_en-US.msi`（5.10 MiB）；release 二进制
+   也通过 CDP 冒烟。**剩余**：代码签名与自动更新通道。
 8. **阶段 2 追加完成 ✅（2026-11-19）**：Loaded 事件重放五种 Entry、斜杠命令
    （含 `/compact`，`ui-core::Command::Compact` + engine 处理）、cost/requests
    状态栏、会话列表搜索/分组/相对时间、模型窗口与思考档位从 Ready 带出并持久化、

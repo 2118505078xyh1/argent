@@ -18,10 +18,20 @@ cargo clippy --all-targets -- -D warnings
 cargo build
 ```
 
+安装包（需要 `cargo install tauri-cli --version "^2"`）：
+
+```powershell
+cargo tauri build --bundles nsis
+cargo tauri build --bundles msi
+# target\release\bundle\nsis\Argent_0.3.2_x64-setup.exe
+# target\release\bundle\msi\Argent_0.3.2_x64_en-US.msi
+```
+
 端到端（需要 CDP + Python websockets）：
 
 ```powershell
 python scripts\tauri-smoke.py
+python scripts\tauri-smoke.py --exe crates\tauri-app\target\release\argent-tauri.exe
 python scripts\check-tauri-version.py
 ```
 

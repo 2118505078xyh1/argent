@@ -184,7 +184,7 @@ rename 后标题同步；删除当前会话回到新任务态。
 验收：A 运行中切到 B，A 继续产出；切回 A 能看到完整增量；1000 条事件后
 切换无丢失。
 
-### T0.14 打包（M）✅ 配置完成 2026-11-19
+### T0.14 打包（M）✅ 2026-11-19（NSIS + MSI 已实测产出）
 
 现状：`tauri.conf.json` 的 `bundle.active=false`，无 NSIS/MSI/updater。
 

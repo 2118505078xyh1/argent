@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import Markdown from "./Markdown";
 import Automations from "./Automations";
 import Documents from "./Documents";
+import ToolCard, { type Tool } from "./ToolCard";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   asNumber,
@@ -24,15 +25,6 @@ import {
 } from "./ipc";
 import { formatCost, formatTokens, relativeStamp, sessionGroup } from "./format";
 import { detectLocale, t, type Locale } from "./i18n";
-
-type Tool = {
-  id: string;
-  name: string;
-  args: string;
-  state: "running" | "ok" | "error";
-  output: string;
-  duration?: number;
-};
 
 type TextItem = {
   id: number;
@@ -1776,62 +1768,6 @@ function App() {
               </button>
             </div>
           </div>
-        </div>
-      </Show>
-    </div>
-  );
-}
-
-function ToolCard(props: {
-  tool: Tool;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const stateLabel = () => {
-    if (props.tool.state === "running") return "运行中";
-    if (props.tool.state === "error") return "失败";
-    return "完成";
-  };
-  return (
-    <div
-      class="tool"
-      classList={{
-        failed: props.tool.state === "error",
-        running: props.tool.state === "running",
-        expanded: props.expanded,
-      }}
-    >
-      <button class="tool-head" onClick={props.onToggle}>
-        <span class="tool-state">
-          {props.tool.state === "error"
-            ? "✗"
-            : props.tool.state === "running"
-              ? "·"
-              : "✓"}
-        </span>
-        <code class="tool-name">{props.tool.name}</code>
-        <span class="tool-args">{props.tool.args}</span>
-        <span class="spacer" />
-        <span class="tool-meta">
-          {stateLabel()}
-          {props.tool.duration !== undefined ? ` · ${props.tool.duration}ms` : ""}
-        </span>
-        <span class="tool-toggle">{props.expanded ? "▾" : "▸"}</span>
-      </button>
-      <Show when={props.expanded}>
-        <div class="tool-detail">
-          <Show when={props.tool.args}>
-            <div class="tool-detail-block">
-              <span class="tool-detail-label">原始参数</span>
-              <pre>{props.tool.args}</pre>
-            </div>
-          </Show>
-          <Show when={props.tool.output}>
-            <div class="tool-detail-block">
-              <span class="tool-detail-label">输出</span>
-              <pre class="tool-output">{props.tool.output}</pre>
-            </div>
-          </Show>
         </div>
       </Show>
     </div>
