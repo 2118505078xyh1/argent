@@ -12,9 +12,6 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 - **Dead code and dependency cleanup.** Removed unused mouse-click wiring,
   a dead highlighter, an always-false job truncation flag, an empty FFI
   block, and four unused `argent-ai` dependencies. `cargo machete` is clean.
-- **More aggressive releases.** The threshold drops from 5% to 2% of current
-  Rust lines (`ARGENT_RELEASE_THRESHOLD` overrides it); small cleanup batches
-  ship instead of waiting for a large line delta.
 
 ## 0.3.0 — 2026-11-18
 

@@ -113,11 +113,10 @@ cli -> every crate except engine / native
 ## Release policy
 
 - Trigger: when cumulative Rust line changes since the latest release tag
-  (added + deleted, committed content only) exceed **2% of the current
+  (added + deleted, committed content only) exceed **5% of the current
   Rust line total**, a new release is due. `scripts/release-threshold.sh`
   measures it (exit 0 = release due); `ARGENT_RELEASE_THRESHOLD` can override
-  the default. Small cleanup batches still ship; do not sit on working code
-  just because the line ratio is low.
+  the default.
 - Release procedure (same as v0.2.0): verify fmt/clippy/tests green →
   write the CHANGELOG section from git log (features → next minor, fixes
   only → patch) and sync the workspace `version` → commit → push master →
