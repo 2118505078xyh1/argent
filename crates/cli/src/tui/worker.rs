@@ -129,6 +129,72 @@ pub fn spawn(
 
         while let Ok(command) = command_rx.recv() {
             match command {
+                Command::Btw(question) => {
+                    let mut context = String::new();
+                    for message in agent.history().iter().rev().take(12).rev() {
+                        let role = if message.role == argent_ai::Role::User {
+                            "user"
+                        } else {
+                            "assistant"
+                        };
+                        let text: String = message.text().chars().take(1500).collect();
+                        if !text.trim().is_empty() {
+                            context.push_str(&format!("{role}: {text}\n"));
+                        }
+                    }
+                    let prompt = format!(
+                        "Answer this side question without modifying files or continuing the main task.\n\
+                         Question: {question}\n\nRecent conversation:\n{context}"
+                    );
+                    let exe = std::env::current_exe().ok();
+                    let provider = config.provider.clone();
+                    let base_url = config.base_url.clone();
+                    let model = config.model.clone();
+                    let btw_cwd = cwd.clone();
+                    let event_tx = event_tx.clone();
+                    std::thread::spawn(move || {
+                        let Some(exe) = exe else {
+                            let _ = event_tx.send(UiEvent::Btw("cannot locate argent".to_string()));
+                            return;
+                        };
+                        let output = std::process::Command::new(exe)
+                            .current_dir(&btw_cwd)
+                            .arg("--provider")
+                            .arg(provider)
+                            .arg("--base-url")
+                            .arg(base_url)
+                            .arg("--model")
+                            .arg(model)
+                            .arg("--thinking")
+                            .arg("off")
+                            .arg("--approval")
+                            .arg("never")
+                            .arg("--max-turns")
+                            .arg("1")
+                            .arg("-c")
+                            .arg("tools.include=[\"__none__\"]")
+                            .arg(prompt)
+                            .output();
+                        let text = match output {
+                            Ok(output) if output.status.success() => {
+                                let stdout =
+                                    String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                if stdout.is_empty() {
+                                    "empty response".to_string()
+                                } else {
+                                    stdout
+                                }
+                            }
+                            Ok(output) => {
+                                let stderr =
+                                    String::from_utf8_lossy(&output.stderr).trim().to_string();
+                                format!("failed: {stderr}")
+                            }
+                            Err(error) => format!("failed: {error}"),
+                        };
+                        let _ = event_tx.send(UiEvent::Btw(text));
+                    });
+                }
                 Command::Shell(command) => {
                     let call_id = format!(
                         "shell-{}",

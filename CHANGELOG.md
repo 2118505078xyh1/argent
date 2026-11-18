@@ -30,6 +30,9 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 - **Local edit benchmark.** `scripts/bench-edit.ps1` compares hashline and
   exact-text editing on a local 4B model; one run measured 24.0s/11,829 tokens
   vs 316.9s/19,566 tokens, both successful.
+- **`/btw` side chat.** A side question runs in a separate one-shot process
+  with the last 12 messages as context; its `[btw]` answer is shown without
+  entering the main session history.
 - **Seen-line provenance for anchored edits.** `edit` now tracks the exact
   `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
   range is rejected even if its hash happens to match, and compaction clears

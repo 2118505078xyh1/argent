@@ -393,6 +393,38 @@ fn hooks_panel_lists_documents_and_commands() {
 }
 
 #[test]
+fn btw_routes_to_the_worker_and_renders_a_separate_answer() {
+    let mut app = App::new(
+        Vec::new(),
+        crate::prompts::PromptLibrary::new(),
+        argent_i18n::Locale::En,
+        Vec::new(),
+        crate::keybindings::Bindings::default(),
+    );
+    let (command_tx, command_rx) = std::sync::mpsc::channel();
+    let (_event_tx, event_rx) = std::sync::mpsc::channel();
+    let worker = Worker {
+        commands: command_tx,
+        events: event_rx,
+        abort: argent_agent::AbortHandle::new(),
+        steering: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+    };
+
+    app.command(&worker, "/btw what is this?");
+    match command_rx.try_recv().expect("btw command") {
+        Command::Btw(question) => assert_eq!(question, "what is this?"),
+        _ => panic!("expected Command::Btw"),
+    }
+
+    app.handle_ui(UiEvent::Btw("side answer".to_string()));
+    assert!(app
+        .transcript
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, Entry::Assistant(text) if text == "[btw] side answer")));
+}
+
+#[test]
 fn the_session_manager_needs_a_second_ctrl_d_and_renames_in_place() {
     let mut app = App::new(
         Vec::new(),

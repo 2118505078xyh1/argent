@@ -146,9 +146,11 @@ Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，DSH 
   - `argent sessions import <file> [--title NAME]`：CC/Codex JSONL → argent 树式会话。
     只搬用户/助手文本与 thinking 块（工具 schema 不兼容，跳过）；真实文件冒烟通过
     （CC 2424 条 / Codex 477 条），导入产物已清理。
-- [ ] **`/btw` 式侧聊**
+- [x] **`/btw` 式侧聊**
   - 分叉子代理的旁路问答，不打断主回合。argent 已有 delegate 协程基础，TUI 侧加一个
     独立输入入口即可。先做协议（复用 delegate），再做面板。
+  - 已完成：TUI `/btw` 走独立一次性子进程，带最近 12 条上下文；结果以
+    `[btw]` 追加到 transcript，不污染主会话。
 - [ ] **官网/文档站**
   - 七家里 argent 是唯一没有文档站的。最小做法：GitHub Pages + 既有 docs/（README、
     ARCHITECTURE、PARITY + 七家档案），先不引静态站点生成器，纯 HTML/CSS 或

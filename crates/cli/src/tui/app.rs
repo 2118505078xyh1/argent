@@ -1180,6 +1180,10 @@ impl App {
             ("session", "current session info + actions"),
             ("new", "start a new session"),
             ("cost", "show usage, cost and context for this session"),
+            (
+                "btw",
+                "ask a side question without interrupting the main turn",
+            ),
             ("plan", "toggle plan mode"),
             ("help", "show keys and commands"),
             (
@@ -1588,6 +1592,13 @@ impl App {
             }
             "/cost" | "/usage" => {
                 let _ = worker.commands.send(Command::Cost);
+            }
+            "/btw" => {
+                if argument.is_empty() {
+                    self.set_status("usage: /btw <question>");
+                } else {
+                    let _ = worker.commands.send(Command::Btw(argument.to_string()));
+                }
             }
             "/rename" => {
                 if argument.is_empty() {

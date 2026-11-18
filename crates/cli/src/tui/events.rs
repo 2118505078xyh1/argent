@@ -19,6 +19,8 @@ pub enum Command {
         text: String,
         images: Vec<argent_ai::Content>,
     },
+    /// 不打断主回合的旁路问答。
+    Btw(String),
     Shell(String),
     SetModel(String),
     SetThinking(String),
@@ -97,6 +99,8 @@ pub enum UiEvent {
     Models(Vec<String>),
     Tools(Vec<(String, String)>),
     Notice(String),
+    /// A side chat answer from `/btw`; rendered separately from the main turn.
+    Btw(String),
     Error(String),
 }
 

@@ -506,6 +506,8 @@ argent --sessions               列出已有会话
 - 自适应编辑模式：Qwen/DeepSeek/Kimi/GLM/本地 4B 等模型自动使用
   `replace` 精确文本模式；强模型使用 `hashline`。`ToolCtx` 同时记录每次
   工具调用的 name/duration/error trace。
+- `/btw` 侧聊：`/btw <问题>` 用最近 12 条上下文启动独立子进程回答，
+  结果以 `[btw]` 追加到 transcript，不进入主会话历史。
 - 可续传的手机/远程同步：`/v1/events` 带事件 id、`Last-Event-ID` 回放、
   15 秒心跳和 200 帧尾部；`/v1/prompt` 支持 `stream=false` JSON ack，
   内置 `/` 页面按帧合并 DOM。
