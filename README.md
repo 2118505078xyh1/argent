@@ -503,6 +503,8 @@ argent --sessions               列出已有会话
   入口，支持 Update/Add/Delete/Move 文件段，先校验全部 hunk 再写盘。
 - 编辑后诊断：write/edit/apply_patch 成功后，如果 `codeintel` 已启动对应
   LSP server，结果会附带该文件 diagnostics；未用过 codeintel 时不拉起新进程。
+- 结构化块替换：`codeintel` 的 `ast_search` / `ast_replace` 用
+  `fn $NAME($*ARGS) { $$ }` 这类 pattern 做函数/块级替换；`edit` 保留行级锚点。
 - 自适应编辑模式：Qwen/DeepSeek/Kimi/GLM/本地 4B 等模型自动使用
   `replace` 精确文本模式；强模型使用 `hashline`。`ToolCtx` 同时记录每次
   工具调用的 name/duration/error trace。
