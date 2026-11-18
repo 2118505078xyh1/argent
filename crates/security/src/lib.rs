@@ -693,6 +693,31 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_rule_denies_a_symlink_target_outside_the_workspace() {
+        let base = std::env::temp_dir().join(format!("argent-rule-symlink-{}", std::process::id()));
+        let src = base.join("src");
+        let denied = base.join("home").join(".ssh");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&denied).unwrap();
+        let link = src.join("link");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&denied, &link).unwrap();
+
+        let policy = Policy::from_json(
+            &Json::parse(&format!(
+                r#"{{"rules":[{{"decision":"deny","tool":"read","path":"{}/.ssh/**"}}]}}"#,
+                base.join("home").to_string_lossy().replace('\\', "/")
+            ))
+            .unwrap(),
+        );
+        let args = Json::parse(r#"{"path":"src/link/id_rsa"}"#).unwrap();
+        assert_eq!(policy.decision("read", &args, &base), Some(Decision::Deny));
+        assert!(policy.check_tool("read", &args, &base).is_some());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn an_unresolvable_symlink_fails_closed_under_an_active_policy() {
         let base = std::env::temp_dir().join(format!("argent-policy-loop-{}", std::process::id()));
         let src = base.join("src");
