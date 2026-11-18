@@ -80,6 +80,7 @@ version = "0.2.0"
 dependencies = [
  "argent-config",
  "argent-core",
+ "argent-tools",
 ]
 
 [[package]]
@@ -150,6 +151,7 @@ dependencies = [
  "argent-agent",
  "argent-ai",
  "argent-auth",
+ "argent-automation",
  "argent-config",
  "argent-core",
  "argent-hooks",
