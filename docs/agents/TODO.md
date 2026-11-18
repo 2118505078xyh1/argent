@@ -118,11 +118,11 @@
 4. 之后：SDK、skills/commands 可视、插件市场、主题系统。
 5. 战略项（agent teams/宿主/远程/发布）等前四项稳定后再评估。
 
-## 下一轮计划（对照 Kimi / DeepSeek Harness，2026-11-18）
+## 下一轮计划（对照六大 agent：pi / Codex / Claude Code / ZCode / Kimi / DSH，2026-11-18）
 
-档案补齐到七家后的结论：Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，
-DSH 把办公自动化做成了捆绑运行时。argent 的取舍照旧——能力还给模型、单二进制、
-省 token。
+七家档案补齐后的结论（详表见 [argent-comparison.md](argent-comparison.md)）：
+Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，DSH 把办公自动化做成了
+捆绑运行时。argent 的取舍照旧——能力还给模型、单二进制、省 token。
 
 ### P0
 
@@ -148,6 +148,10 @@ DSH 把办公自动化做成了捆绑运行时。argent 的取舍照旧——能
 - [ ] **`/btw` 式侧聊**
   - 分叉子代理的旁路问答，不打断主回合。argent 已有 delegate 协程基础，TUI 侧加一个
     独立输入入口即可。先做协议（复用 delegate），再做面板。
+- [ ] **官网/文档站**
+  - 七家里 argent 是唯一没有文档站的。最小做法：GitHub Pages + 既有 docs/（README、
+    ARCHITECTURE、PARITY + 七家档案），先不引静态站点生成器，纯 HTML/CSS 或
+    mkdocs 二选一，发布工程里最省的一档。
 
 ### P2
 

@@ -39,6 +39,7 @@
 
 ## 相关文档
 
+- [argent 与七家对比 + 差距表](argent-comparison.md)（argent 视角的横向对照，结论喂给 [TODO.md](TODO.md) 的下一轮计划）
 - [pi 官方文档索引](../../../.pi/agent/install/releases/1.5.2/node_modules/@earendil-works/pi-coding-agent/docs/index.md)（本机安装目录）
 - Codex：`codex --help`、`~/.codex/config.toml`
 - Claude Code：`claude --help`、`~/.claude/settings.json`、code.claude.com/docs
