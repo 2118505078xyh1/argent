@@ -321,6 +321,32 @@ pub fn start_session(
                 }
                 Command::Abort => worker_abort.abort(),
                 Command::Clear => agent.set_history(Vec::new()),
+                Command::Compact => {
+                    let before = argent_agent::estimate_tokens(agent.history());
+                    match argent_session::controller::compact(
+                        &mut agent,
+                        context_max,
+                        config.reserved_context_tokens,
+                        config.keep_recent_tokens,
+                    ) {
+                        Some(_) => {
+                            let after = argent_agent::estimate_tokens(agent.history());
+                            let entries = argent_ui_core::Transcript::from_messages(agent.history())
+                                .entries()
+                                .to_vec();
+                            let _ = event_tx.send(UiEvent::Loaded(entries));
+                            let _ = event_tx.send(UiEvent::Agent(AgentEvent::Notice(format!(
+                                "context compacted: {} -> {} tokens",
+                                before, after
+                            ))));
+                        }
+                        None => {
+                            let _ = event_tx.send(UiEvent::Agent(AgentEvent::Notice(
+                                "nothing to compact".to_string(),
+                            )));
+                        }
+                    }
+                }
                 Command::OpenSession(path) => match open_session(&path) {
                     Ok((messages, opened)) => {
                         let loaded = argent_ui_core::Transcript::from_messages(&messages);
@@ -1249,6 +1275,7 @@ pub fn catalog(config: &Config) -> (usize, Vec<(String, usize)>) {
         Ok(models) => models
             .into_iter()
             .map(|info| (info.id, info.context_length))
+            .filter(|(id, _)| config.model_in_scope(id))
             .collect(),
         Err(_) => Vec::new(),
     };
@@ -1332,6 +1359,35 @@ mod session_worker_tests {
 
         let _ = one.commands.send(Command::Shutdown);
         let _ = two.commands.send(Command::Shutdown);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compact_command_reports_when_history_is_empty() {
+        let dir = std::env::temp_dir().join(format!("argent-engine-compact-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config {
+            session_dir: dir.clone(),
+            ..Config::default()
+        };
+        let engine = start_session(config, dir.clone(), None, Arc::new(AtomicU64::new(1)));
+        let _ = engine.commands.send(Command::Compact);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut saw = false;
+        while std::time::Instant::now() < deadline {
+            match engine.events.recv_timeout(Duration::from_millis(500)) {
+                Ok(UiEvent::Agent(AgentEvent::Notice(text))) if text.contains("nothing to compact") => {
+                    saw = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        assert!(saw, "the worker must report an empty compaction");
+        let _ = engine.commands.send(Command::Shutdown);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

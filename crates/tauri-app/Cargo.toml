@@ -13,8 +13,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 argent-agent = { path = "../agent" }
+argent-automation = { path = "../automation" }
 argent-core = { path = "../core" }
 argent-engine = { path = "../engine" }
+argent-tools = { path = "../tools" }
 argent-ui-core = { path = "../ui-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

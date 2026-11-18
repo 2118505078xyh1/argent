@@ -70,7 +70,8 @@ not cover the browser/mobile multi-end target.
 
 `crates/tauri-app` is the migration prototype. It has its own Cargo workspace
 so the root `cargo test --workspace` and CI do not require Tauri/WebKit system
-dependencies. It is not the default desktop binary yet. Build it with:
+dependencies. It is not the default desktop binary yet. The itemized backlog
+(P0–P4, with acceptance criteria) lives in `docs/TAURI-TODO.md`. Build it with:
 
 ```bash
 cd crates/tauri-app/ui

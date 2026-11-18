@@ -2,11 +2,15 @@ import {
   For,
   Show,
   createEffect,
+  createMemo,
   createSignal,
   onCleanup,
   onMount,
 } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import Markdown from "./Markdown";
+import Automations from "./Automations";
+import Documents from "./Documents";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 type Tool = {
@@ -29,14 +33,49 @@ type Item = TextItem | ToolItem;
 
 type Approval = { id: number; name: string; arguments: string };
 
+type SessionRow = {
+  path: string;
+  title: string;
+  updated: string;
+  cwd: string;
+};
+
+type LoadedEntry =
+  | { kind: "user" | "assistant" | "thinking"; text: string }
+  | { kind: "notice"; level: "info" | "warning" | "error"; text: string }
+  | {
+      kind: "tool";
+      callId: string;
+      name: string;
+      arguments: string;
+      output: string;
+      state: "running" | "ok" | "error";
+      durationMs?: number;
+    };
+
+type ModelInfo = { id: string; contextLength: number };
+
 type Ready = {
   model: string;
   level: string;
+  models: ModelInfo[];
+  thinkingLevels: string[];
   contextMax: number;
   cwd: string;
   provider: string;
   protocol: string;
 };
+
+const THINKING_LEVELS = [
+  "auto",
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
 
 type AgentEvent =
   | { type: "turn_start" }
@@ -64,10 +103,22 @@ type AgentEvent =
 type Incoming =
   | ({ kind: "ready" } & Ready)
   | { kind: "agent"; event: AgentEvent }
-  | { kind: "turn_done"; reason: string }
+  | {
+      kind: "turn_done";
+      reason: string;
+      promptTokens?: number;
+      completionTokens?: number;
+      totalTokens?: number;
+      cachedTokens?: number;
+      requests?: number;
+      cost?: number;
+      priced?: boolean;
+    }
   | Approval & { kind: "approval" }
   | { kind: "session"; path: string }
   | { kind: "session_cleared" }
+  | { kind: "sessions"; sessions: SessionRow[] }
+  | { kind: "loaded"; entries: LoadedEntry[] }
   | { kind: "error"; message: string };
 
 type UnknownRecord = Record<string, unknown>;
@@ -84,10 +135,74 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function storageGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Private modes can deny storage; selection still works for this run.
+  }
+}
+
+function formatTokens(count: number): string {
+  if (count <= 0) return "—";
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+  return String(count);
+}
+
+function formatCost(cost: number): string {
+  if (cost <= 0) return "$0";
+  if (cost < 0.0001) return "<$0.0001";
+  return `$${cost.toFixed(4)}`;
+}
+
+function dayStamp(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${month}-${day}`;
+}
+
+function sessionGroup(updated: string): "今天" | "昨天" | "更早" {
+  const stamp = /^(\d{2}-\d{2})/.exec(updated)?.[1];
+  if (!stamp) return "更早";
+  const now = new Date();
+  if (stamp === dayStamp(now)) return "今天";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (stamp === dayStamp(yesterday)) return "昨天";
+  return "更早";
+}
+
+function relativeStamp(updated: string): string {
+  const time = /(\d{2}:\d{2})$/.exec(updated)?.[1] ?? "";
+  const group = sessionGroup(updated);
+  return group === "更早" ? updated : `${group} ${time}`.trim();
+}
+
 function parseReady(raw: UnknownRecord): Ready {
   return {
     model: asString(raw.model),
     level: asString(raw.level),
+    models: Array.isArray(raw.models)
+      ? raw.models
+          .map((value) => asRecord(value))
+          .filter((value): value is UnknownRecord => value !== null)
+          .map((value) => ({
+            id: asString(value.id),
+            contextLength: asNumber(value.contextLength) ?? 0,
+          }))
+          .filter((value) => value.id.length > 0)
+      : [],
+    thinkingLevels: Array.isArray(raw.thinking)
+      ? raw.thinking.filter((value): value is string => typeof value === "string")
+      : [],
     contextMax: asNumber(raw.contextMax) ?? 0,
     cwd: asString(raw.cwd),
     provider: asString(raw.provider),
@@ -134,6 +249,58 @@ function parseAgentEvent(raw: unknown): AgentEvent | null {
   }
 }
 
+function parseLoadedEntry(raw: unknown): LoadedEntry | null {
+  const value = asRecord(raw);
+  if (!value) return null;
+  const text = asString(value.text);
+  switch (value.kind) {
+    case "user":
+    case "assistant":
+    case "thinking":
+      return { kind: value.kind, text };
+    case "notice": {
+      const level =
+        value.level === "warning" || value.level === "error" ? value.level : "info";
+      return { kind: "notice", level, text };
+    }
+    case "tool": {
+      const state =
+        value.state === "running" || value.state === "error" ? value.state : "ok";
+      return {
+        kind: "tool",
+        callId: asString(value.callId),
+        name: asString(value.name),
+        arguments: asString(value.arguments),
+        output: asString(value.output),
+        state,
+        durationMs: asNumber(value.durationMs),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function loadedItems(entries: LoadedEntry[]): Item[] {
+  return entries.map((entry) => {
+    if (entry.kind === "tool") {
+      return {
+        id: nextId++,
+        kind: "tool",
+        tool: {
+          id: entry.callId,
+          name: entry.name,
+          args: entry.arguments,
+          state: entry.state,
+          output: entry.output,
+          duration: entry.durationMs,
+        },
+      };
+    }
+    return { id: nextId++, kind: entry.kind, text: entry.text };
+  });
+}
+
 function parseIncoming(raw: unknown): Incoming | null {
   const value = asRecord(raw);
   if (!value) return null;
@@ -145,7 +312,17 @@ function parseIncoming(raw: unknown): Incoming | null {
       return event ? { kind: "agent", event } : null;
     }
     case "turn_done":
-      return { kind: "turn_done", reason: asString(value.reason, "ready") };
+      return {
+        kind: "turn_done",
+        reason: asString(value.reason, "ready"),
+        promptTokens: asNumber(value.promptTokens),
+        completionTokens: asNumber(value.completionTokens),
+        totalTokens: asNumber(value.totalTokens),
+        cachedTokens: asNumber(value.cachedTokens),
+        requests: asNumber(value.requests),
+        cost: asNumber(value.cost),
+        priced: value.priced === true,
+      };
     case "approval":
       return {
         kind: "approval",
@@ -157,6 +334,30 @@ function parseIncoming(raw: unknown): Incoming | null {
       return { kind: "session", path: asString(value.path) };
     case "session_cleared":
       return { kind: "session_cleared" };
+    case "loaded": {
+      const entries = Array.isArray(value.entries) ? value.entries : [];
+      return {
+        kind: "loaded",
+        entries: entries
+          .map(parseLoadedEntry)
+          .filter((entry): entry is LoadedEntry => entry !== null),
+      };
+    }
+    case "sessions": {
+      const rows = Array.isArray(value.sessions) ? value.sessions : [];
+      return {
+        kind: "sessions",
+        sessions: rows.map((raw) => {
+          const row = asRecord(raw) ?? {};
+          return {
+            path: asString(row.path),
+            title: asString(row.title),
+            updated: asString(row.updated),
+            cwd: asString(row.cwd),
+          };
+        }),
+      };
+    }
     case "error":
       return { kind: "error", message: asString(value.message, "unknown error") };
     default:
@@ -175,7 +376,42 @@ function App() {
   const [approval, setApproval] = createSignal<Approval | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [sessionPath, setSessionPath] = createSignal("");
+  const [sessions, setSessions] = createSignal<SessionRow[]>([]);
+  const [sessionQuery, setSessionQuery] = createSignal("");
+  const [theme, setTheme] = createSignal<"dark" | "light">(
+    storageGet("argent.theme") === "light" ? "light" : "dark",
+  );
+  const [screen, setScreen] = createSignal<"chat" | "automations" | "documents">("chat");
+  const [promptTokens, setPromptTokens] = createSignal(0);
+  const [cachedTokens, setCachedTokens] = createSignal(0);
+  const [requests, setRequests] = createSignal(0);
+  const [cost, setCost] = createSignal(0);
+  const [priced, setPriced] = createSignal(false);
+  const [completionTokens, setCompletionTokens] = createSignal(0);
+  const [totalTokens, setTotalTokens] = createSignal(0);
   const [follow, setFollow] = createSignal(true);
+
+  const filteredSessions = createMemo(() => {
+    const query = sessionQuery().trim().toLowerCase();
+    if (!query) return sessions();
+    return sessions().filter((row) =>
+      [row.title, row.cwd, row.path].some((field) => field.toLowerCase().includes(query)),
+    );
+  });
+
+  const modelOptions = createMemo(() => {
+    const models = ready()?.models ?? [];
+    const current = ready()?.model;
+    if (current && !models.some((model) => model.id === current)) {
+      return [...models, { id: current, contextLength: ready()?.contextMax ?? 0 }];
+    }
+    return models;
+  });
+
+  const thinkingOptions = createMemo(() => {
+    const levels = ready()?.thinkingLevels ?? [];
+    return levels.length > 0 ? levels : THINKING_LEVELS;
+  });
 
   let viewport!: HTMLDivElement;
   let composer!: HTMLTextAreaElement;
@@ -193,6 +429,16 @@ function App() {
   const applyReady = (value: Ready) => {
     setReady(value);
     setStatus("ready");
+  };
+
+  const resetMetrics = () => {
+    setPromptTokens(0);
+    setCompletionTokens(0);
+    setTotalTokens(0);
+    setCachedTokens(0);
+    setRequests(0);
+    setCost(0);
+    setPriced(false);
   };
 
   const handleAgent = (event: AgentEvent) => {
@@ -265,6 +511,14 @@ function App() {
       case "turn_done":
         setBusy(false);
         setStatus(payload.reason);
+        if (payload.promptTokens !== undefined) setPromptTokens(payload.promptTokens);
+        if (payload.completionTokens !== undefined)
+          setCompletionTokens(payload.completionTokens);
+        if (payload.totalTokens !== undefined) setTotalTokens(payload.totalTokens);
+        if (payload.cachedTokens !== undefined) setCachedTokens(payload.cachedTokens);
+        if (payload.requests !== undefined) setRequests(payload.requests);
+        if (payload.cost !== undefined) setCost(payload.cost);
+        if (payload.priced !== undefined) setPriced(payload.priced);
         break;
       case "approval":
         setApproval(payload);
@@ -275,6 +529,16 @@ function App() {
       case "session_cleared":
         setItems([]);
         setSessionPath("");
+        resetMetrics();
+        break;
+      case "sessions":
+        setSessions(payload.sessions);
+        break;
+      case "loaded":
+        setItems(loadedItems(payload.entries));
+        setError(null);
+        setStatus("ready");
+        setFollow(true);
         break;
       case "error":
         setError(payload.message);
@@ -294,11 +558,69 @@ function App() {
       const state = await invoke<unknown>("get_state");
       const stateRecord = asRecord(state);
       const readyRecord = stateRecord ? asRecord(stateRecord.ready) : null;
-      if (readyRecord) applyReady(parseReady(readyRecord));
+      if (readyRecord) {
+        const parsed = parseReady(readyRecord);
+        applyReady(parsed);
+        const savedModel = storageGet("argent.model");
+        if (savedModel && savedModel !== parsed.model) {
+          try {
+            await invoke("set_model", { model: savedModel });
+            const info = parsed.models.find((entry) => entry.id === savedModel);
+            setReady((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    model: savedModel,
+                    contextMax:
+                      info && info.contextLength > 0 ? info.contextLength : prev.contextMax,
+                  }
+                : prev,
+            );
+          } catch (err) {
+            setError(String(err));
+          }
+        }
+        const savedThinking = storageGet("argent.thinking");
+        if (
+          savedThinking &&
+          THINKING_LEVELS.includes(savedThinking) &&
+          savedThinking !== parsed.level
+        ) {
+          try {
+            await invoke("set_thinking", { level: savedThinking });
+            setReady((prev) => (prev ? { ...prev, level: savedThinking } : prev));
+          } catch (err) {
+            setError(String(err));
+          }
+        }
+      }
     } catch (err) {
       setError(String(err));
     }
     onCleanup(() => unlisten?.());
+  });
+
+  onMount(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!approval()) return;
+      const target = event.target as HTMLElement | null;
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      const key = event.key.toLowerCase();
+      if (key === "y" || key === "enter") {
+        event.preventDefault();
+        void answer(true);
+      } else if (key === "n" || key === "escape") {
+        event.preventDefault();
+        void answer(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
+
+  createEffect(() => {
+    document.documentElement.dataset.theme = theme();
+    storageSet("argent.theme", theme());
   });
 
   createEffect(() => {
@@ -312,13 +634,31 @@ function App() {
 
   const send = async () => {
     const text = input().trim();
-    if (!text || busy()) return;
-    setItems((prev) => [...prev, { id: nextId++, kind: "user", text }]);
+    if (!text) return;
     setInput("");
-    setBusy(true);
-    setStatus("working");
     setError(null);
     composer.style.height = "auto";
+
+    if (text.startsWith("/")) {
+      await runCommand(text);
+      return;
+    }
+
+    // While a turn is running, Enter queues a correction instead of starting a
+    // second prompt. The agent drains it at the next tool boundary.
+    if (busy()) {
+      try {
+        await invoke("steer", { text });
+        append("notice", "插话已排队，将在下一个工具边界注入");
+      } catch (err) {
+        setError(String(err));
+      }
+      return;
+    }
+
+    setItems((prev) => [...prev, { id: nextId++, kind: "user", text }]);
+    setBusy(true);
+    setStatus("working");
     try {
       await invoke("send_prompt", { text });
     } catch (err) {
@@ -326,6 +666,19 @@ function App() {
       setBusy(false);
       setStatus("error");
     }
+  };
+
+  const addDocumentToChat = (text: string) => {
+    setScreen("chat");
+    setInput(text);
+    setError(null);
+    requestAnimationFrame(() => {
+      try {
+        composer.focus();
+      } catch {
+        // The composer is remounted with the chat screen; focusing is cosmetic.
+      }
+    });
   };
 
   const abort = async () => {
@@ -342,9 +695,99 @@ function App() {
       await invoke("new_session");
       setItems([]);
       setSessionPath("");
+      resetMetrics();
     } catch (err) {
       setError(String(err));
     }
+  };
+
+  const rewind = async (steps = 1) => {
+    if (busy()) return;
+    if (!window.confirm(`撤销最近 ${steps} 轮的文件改动？`)) return;
+    try {
+      await invoke("rewind", { steps });
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const chooseModel = async (model: string) => {
+    try {
+      await invoke("set_model", { model });
+      const info = ready()?.models.find((entry) => entry.id === model);
+      setReady((prev) =>
+        prev
+          ? {
+              ...prev,
+              model,
+              contextMax: info?.contextLength && info.contextLength > 0
+                ? info.contextLength
+                : prev.contextMax,
+            }
+          : prev,
+      );
+      storageSet("argent.model", model);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const chooseModelCustom = async () => {
+    const model = window.prompt("模型 ID", ready()?.model ?? "")?.trim();
+    if (model) await chooseModel(model);
+  };
+
+  const chooseThinking = async (level: string) => {
+    try {
+      await invoke("set_thinking", { level });
+      setReady((prev) => (prev ? { ...prev, level } : prev));
+      storageSet("argent.thinking", level);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const openSession = async (path: string) => {
+    if (busy()) return;
+    try {
+      await invoke("open_session", { path });
+      setItems([]);
+      setSessionPath(path);
+      resetMetrics();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const renameSession = async (row: SessionRow) => {
+    const title = window.prompt("会话名称", row.title);
+    if (!title || !title.trim()) return;
+    try {
+      await invoke("rename_session", { path: row.path, title: title.trim() });
+      setSessions((prev) =>
+        prev.map((item) =>
+          item.path === row.path ? { ...item, title: title.trim() } : item,
+        ),
+      );
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const deleteSession = async (row: SessionRow) => {
+    if (!window.confirm(`删除会话「${row.title || "未命名"}」？`)) return;
+    try {
+      await invoke("delete_session", { path: row.path });
+      setSessions((prev) => prev.filter((item) => item.path !== row.path));
+      if (sessionPath() === row.path) setSessionPath("");
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const approvalDanger = () => {
+    const name = approval()?.name.toLowerCase() ?? "";
+    return /bash|write|edit|delete|remove|patch|move|copy|exec|apply|shell/.test(name);
   };
 
   const answer = async (allow: boolean) => {
@@ -358,7 +801,148 @@ function App() {
     }
   };
 
+  const currentRow = (): SessionRow | undefined =>
+    sessions().find((row) => row.path === sessionPath());
+
+  const renameCurrent = async (titleArg: string) => {
+    const path = sessionPath();
+    if (!path) {
+      setError("当前还没有会话文件，先发一条消息");
+      return;
+    }
+    const title = titleArg.trim() || window.prompt("会话名称", currentRow()?.title ?? "")?.trim();
+    if (!title) return;
+    try {
+      await invoke("rename_session", { path, title });
+      setSessions((prev) =>
+        prev.map((item) => (item.path === path ? { ...item, title } : item)),
+      );
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const lastAssistantText = (): string => {
+    const all = items();
+    for (let index = all.length - 1; index >= 0; index -= 1) {
+      const item = all[index];
+      if (item.kind === "assistant") return item.text;
+    }
+    return "";
+  };
+
+  const copyLast = async () => {
+    const text = lastAssistantText();
+    if (!text) {
+      setError("还没有可复制的助手回复");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      append("notice", "已复制最后一条助手回复");
+    } catch (err) {
+      setError(`复制失败：${String(err)}`);
+    }
+  };
+
+  const costSummary = (): string => {
+    const max = ready()?.contextMax ?? 0;
+    const used = promptTokens();
+    const percent = max > 0 ? Math.min((used * 100) / max, 100).toFixed(0) : "—";
+    const spend = priced() ? formatCost(cost()) : "未配置单价";
+    return [
+      `上下文 ${formatTokens(used)} / ${formatTokens(max)} (${percent}%)`,
+      `请求 ${requests()} · 花费 ${spend}`,
+      `prompt ${formatTokens(promptTokens())} · completion ${formatTokens(completionTokens())} · cached ${formatTokens(cachedTokens())} · total ${formatTokens(totalTokens())}`,
+    ].join("\n");
+  };
+
+  const runCommand = async (text: string) => {
+    const match = /^\/([a-zA-Z-]+)\s*(.*)$/.exec(text);
+    if (!match) {
+      setError("命令格式：/help");
+      return;
+    }
+    const name = match[1].toLowerCase();
+    const args = match[2].trim();
+    switch (name) {
+      case "new":
+        if (busy()) {
+          setError("运行中不能新建会话，先停止或等待完成");
+          return;
+        }
+        await newSession();
+        return;
+      case "rename":
+        await renameCurrent(args);
+        return;
+      case "rewind": {
+        const steps = args ? Number.parseInt(args, 10) : 1;
+        if (!Number.isFinite(steps) || steps <= 0) {
+          setError("用法：/rewind [正整数]");
+          return;
+        }
+        await rewind(steps);
+        return;
+      }
+      case "model":
+        if (!args) {
+          append(
+            "notice",
+            `当前模型 ${ready()?.model || "—"} · 可用 ${ready()?.models?.map((model) => model.id).join(", ") || "—"}`,
+          );
+          return;
+        }
+        await chooseModel(args);
+        return;
+      case "thinking": {
+        const level = args.toLowerCase();
+        if (!level) {
+          append(
+            "notice",
+            `当前思考档位 ${ready()?.level || "auto"} · 可选 ${THINKING_LEVELS.join(", ")}`,
+          );
+          return;
+        }
+        if (!thinkingOptions().includes(level)) {
+          setError(`未知思考档位 ${level}，可选 ${thinkingOptions().join(", ")}`);
+          return;
+        }
+        await chooseThinking(level);
+        return;
+      }
+      case "compact":
+        if (busy()) {
+          setError("运行中不能压缩上下文，等待本轮结束");
+          return;
+        }
+        try {
+          await invoke("compact");
+        } catch (err) {
+          setError(String(err));
+        }
+        return;
+      case "cost":
+        append("notice", costSummary());
+        return;
+      case "copy":
+        await copyLast();
+        return;
+      case "help":
+        append(
+          "notice",
+          "命令：/new /rename [标题] /rewind [n] /compact /model [id] /thinking [档位] /cost /copy /help",
+        );
+        return;
+      default:
+        setError(`未知命令 /${name}，输入 /help 查看可用命令`);
+    }
+  };
+
   const onComposerKey = (event: KeyboardEvent) => {
+    // `isComposing` is the standard guard; keyCode 229 is the fallback used by
+    // some IMEs that do not set it on Windows WebView2.
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void send();
@@ -377,17 +961,102 @@ function App() {
     <div class="app">
       <aside class="sidebar">
         <div class="brand">argent</div>
+        <div class="side-tabs">
+          <button
+            classList={{ active: screen() === "chat" }}
+            onClick={() => setScreen("chat")}
+          >
+            聊天
+          </button>
+          <button
+            classList={{ active: screen() === "automations" }}
+            onClick={() => setScreen("automations")}
+          >
+            定时任务
+          </button>
+          <button
+            classList={{ active: screen() === "documents" }}
+            onClick={() => setScreen("documents")}
+          >
+            文档
+          </button>
+        </div>
         <div class="side-head">
           <span>任务</span>
           <button class="icon" title="新任务" onClick={() => void newSession()}>
             ＋
           </button>
         </div>
+        <div class="side-search-wrap">
+          <input
+            class="side-search"
+            placeholder="搜索会话…"
+            value={sessionQuery()}
+            onInput={(event) => setSessionQuery(event.currentTarget.value)}
+          />
+        </div>
         <nav class="side-list">
-          <button class="side-item active">
-            <span class="side-title">当前会话</span>
-            <span class="side-meta">{sessionPath() || ready()?.cwd || "新任务"}</span>
-          </button>
+          <Show
+            when={sessions().length > 0}
+            fallback={
+              <button class="side-item active">
+                <span class="side-title">当前会话</span>
+                <span class="side-meta">{sessionPath() || ready()?.cwd || "新任务"}</span>
+              </button>
+            }
+          >
+            <Show
+              when={filteredSessions().length > 0}
+              fallback={<div class="side-empty">没有匹配的会话</div>}
+            >
+              <For each={["今天", "昨天", "更早"]}>
+                {(group) => {
+                  const rows = () =>
+                    filteredSessions().filter((row) => sessionGroup(row.updated) === group);
+                  return (
+                    <Show when={rows().length > 0}>
+                      <div class="side-group">{group}</div>
+                      <For each={rows()}>
+                        {(row) => (
+                          <div
+                            class="side-item"
+                            classList={{ active: row.path === sessionPath() }}
+                          >
+                            <button
+                              class="side-open"
+                              title={`${row.title || "未命名会话"}\n${row.path}`}
+                              onClick={() => void openSession(row.path)}
+                            >
+                              <span class="side-title">{row.title || "未命名会话"}</span>
+                              <span class="side-meta">
+                                {relativeStamp(row.updated) || row.path}
+                              </span>
+                            </button>
+                            <span class="side-actions">
+                              <button
+                                class="icon"
+                                title="重命名"
+                                onClick={() => void renameSession(row)}
+                              >
+                                ✎
+                              </button>
+                              <button
+                                class="icon"
+                                title="删除"
+                                onClick={() => void deleteSession(row)}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          </div>
+                        )}
+                      </For>
+                    </Show>
+                  );
+                }}
+              </For>
+            </Show>
+          </Show>
         </nav>
         <div class="side-foot">
           <span class="dot" classList={{ live: busy() }} />
@@ -396,6 +1065,7 @@ function App() {
       </aside>
 
       <main class="main">
+        <Show when={screen() === "chat"}>
         <header class="topbar">
           <div class="title-block">
             <div class="title">Argent</div>
@@ -403,9 +1073,52 @@ function App() {
           </div>
           <div class="top-meta">
             <span class="label">模型</span>
-            <span class="pill">{ready()?.model || "—"}</span>
+            <select
+              class="pill select"
+              value={ready()?.model || ""}
+              onChange={(event) => void chooseModel(event.currentTarget.value)}
+            >
+              <For each={modelOptions()}>
+                {(model) => (
+                  <option value={model.id}>
+                    {model.id}
+                    {model.contextLength > 0 ? ` · ${formatTokens(model.contextLength)}` : ""}
+                  </option>
+                )}
+              </For>
+            </select>
+            <button
+              class="icon"
+              title="手动输入模型 ID"
+              onClick={() => void chooseModelCustom()}
+            >
+              ＋
+            </button>
             <span class="label">思考</span>
-            <span class="pill">{ready()?.level || "auto"}</span>
+            <select
+              class="pill select"
+              value={ready()?.level || "auto"}
+              onChange={(event) => void chooseThinking(event.currentTarget.value)}
+            >
+              <For each={thinkingOptions()}>
+                {(level) => <option value={level}>{level}</option>}
+              </For>
+            </select>
+            <button
+              class="ghost"
+              title="撤销最近一轮 write/edit"
+              disabled={busy()}
+              onClick={() => void rewind()}
+            >
+              ↶ 撤销
+            </button>
+            <button
+              class="icon"
+              title={theme() === "dark" ? "切换到浅色主题" : "切换到深色主题"}
+              onClick={() => setTheme(theme() === "dark" ? "light" : "dark")}
+            >
+              {theme() === "dark" ? "☀" : "☾"}
+            </button>
           </div>
         </header>
 
@@ -486,11 +1199,22 @@ function App() {
                 return (
                   <div class="assistant">
                     <div class="role">argent</div>
-                    <div class="text">{item.text}</div>
+                    <Markdown text={item.text} />
                   </div>
                 );
               }}
             </For>
+          </Show>
+          <Show when={!follow() && items().length > 0}>
+            <button
+              class="jump-bottom"
+              onClick={() => {
+                setFollow(true);
+                viewport.scrollTop = viewport.scrollHeight;
+              }}
+            >
+              ↓ 回到底部
+            </button>
           </Show>
           <div class="anchor" />
         </section>
@@ -502,9 +1226,13 @@ function App() {
                 <span class="approval-mark">!</span>
                 <strong>允许工具调用？</strong>
                 <code>{pending().name}</code>
+                <span class="risk" classList={{ danger: approvalDanger() }}>
+                  {approvalDanger() ? "会修改文件或执行命令" : "只读操作"}
+                </span>
               </div>
               <pre>{pending().arguments}</pre>
               <div class="approval-actions">
+                <span class="hint">Y 允许 · N/Esc 拒绝</span>
                 <button class="ghost" onClick={() => void answer(false)}>
                   拒绝
                 </button>
@@ -530,23 +1258,27 @@ function App() {
             <textarea
               ref={composer}
               value={input()}
-              placeholder="给 argent 发消息…"
+              placeholder={busy() ? "运行中，输入内容会插话…" : "给 argent 发消息…"}
               rows={1}
               onInput={resizeComposer}
               onKeyDown={onComposerKey}
             />
             <div class="composer-actions">
-              <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+              <span class="hint">
+                {busy()
+                  ? "Enter 插话 · 将在工具边界注入 · Shift+Enter 换行"
+                  : "Enter 发送 · Shift+Enter 换行"}
+              </span>
               <div class="buttons">
                 <button class="ghost" disabled={!busy()} onClick={() => void abort()}>
                   停止
                 </button>
                 <button
                   class="primary"
-                  disabled={!input().trim() || busy()}
+                  disabled={!input().trim()}
                   onClick={() => void send()}
                 >
-                  发送
+                  {busy() ? "插话" : "发送"}
                 </button>
               </div>
             </div>
@@ -555,13 +1287,38 @@ function App() {
             <span class="dot" classList={{ live: busy() }} />
             <span>{status()}</span>
             <span class="sep">·</span>
+            <span>{currentRow()?.title || (sessionPath() ? "未命名会话" : "新任务")}</span>
+            <span class="sep">·</span>
             <span>{ready()?.provider || "—"}</span>
             <span class="sep">·</span>
             <span>{ready()?.model || "—"}</span>
             <span class="spacer" />
-            <span>ctx — / {ready()?.contextMax || "—"}</span>
+            <span>
+              ctx {formatTokens(promptTokens())} / {formatTokens(ready()?.contextMax ?? 0)}
+            </span>
+            <Show when={cachedTokens() > 0 && promptTokens() > 0}>
+              <span class="sep">·</span>
+              <span>
+                cache {Math.min((cachedTokens() * 100) / promptTokens(), 100).toFixed(0)}%
+              </span>
+            </Show>
+            <Show when={requests() > 0}>
+              <span class="sep">·</span>
+              <span>{requests()} req</span>
+            </Show>
+            <Show when={cost() > 0}>
+              <span class="sep">·</span>
+              <span>{formatCost(cost())}</span>
+            </Show>
           </div>
         </footer>
+        </Show>
+        <Show when={screen() === "automations"}>
+          <Automations />
+        </Show>
+        <Show when={screen() === "documents"}>
+          <Documents onAddToChat={addDocumentToChat} />
+        </Show>
       </main>
     </div>
   );

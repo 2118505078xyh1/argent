@@ -236,8 +236,10 @@ name = "argent-tauri"
 version = "0.3.2"
 dependencies = [
  "argent-agent",
+ "argent-automation",
  "argent-core",
  "argent-engine",
+ "argent-tools",
  "argent-ui-core",
  "serde",
  "serde_json",

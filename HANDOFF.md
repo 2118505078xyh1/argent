@@ -86,13 +86,48 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
 ## 3. 未完成 / 下一步
 
 ### Tauri 迁移阶段 2–4（见 docs/FRONTEND.md）
-1. **审批端到端验证**：`ARGENT_APPROVAL=ask` 或写文件类工具触发审批卡；点击允许/拒绝验证 `answer_approval` 链路；验证拒绝后 agent 收到 deny
-2. **会话列表**：`UiEvent::Sessions` 已 emit（kind=sessions），前端还没渲染侧栏列表；需接 `OpenSession/RenameSession/DeleteSession`
-3. **模型/思考选择器**：`Ready` 事件里有 models/thinking 列表，前端只显示文本，未接 `SetModel/SetThinking`
-4. **ctx token 显示**：TurnDone 的 usage 没往前端传（backend.rs 里 `..` 丢弃了 usage），statusbar 显示 `ctx —`
-5. **steering**：运行中插话（native 有，Tauri 没有）
-6. **rewind / automations / documents**：未迁移
-7. **打包**：`tauri.conf.json` 里 `bundle.active=false`；NSIS/MSI 未配
+
+完整可执行清单已整理到 **`docs/TAURI-TODO.md`**（P0–P4，约 90 项，带落点、
+量级与验收标准）。以下是当前台账摘要：
+1. **审批桥接验证 ✅（2026-11-19 完成）**：把 `approvals` pending map 提取为 `ApprovalBridge`，
+   加 3 个契约测试（allow 到达 worker / deny 到达且不能二次回答 / 未知 id 报错），
+   `cargo test --bin argent-tauri` 3 passed；前端 `answer()` → `invoke("answer_approval")`
+   接线在 `App.tsx`，`bun run build` 通过。真实 CDP 点击仍受限于本机无 auth.json/模型，
+   但桥接逻辑已可重复验证。**剩余**：有 provider 时做一次真实端到端点击（审批卡出现 → 点允许 → agent 继续）。
+2. **会话列表 ✅（2026-11-19 完成）**：后端新增 `open_session/rename_session/delete_session`
+   command（转发 engine `Command`）；前端 `App.tsx` 解析 `sessions` 事件，侧栏渲染会话列表
+   （点击打开 / 重命名 / 删除），`styles.css` 补 hover 操作按钮样式。`bun run build` 通过。
+   **剩余**：有 provider 时做一次真实 UI 验证（会话切换后 transcript 重载、rename/delete 生效）。
+3. **模型/思考选择器 ✅（2026-11-19 完成）**：后端新增 `set_model`/`set_thinking`
+   command；前端 `Ready` 带出 `models`，topbar 的只读 pill 改为 `<select>`，
+   思考档位用 `THINKING_LEVELS` 常量，`.pill.select` 补交互样式。
+   `cargo check` + `bun run build` 通过。**剩余**：按 provider 能力过滤档位、
+   记住上次选择（见 `docs/TAURI-TODO.md` T0.11）。
+4. **ctx token 显示 ✅（2026-11-19 完成）**：backend `map_event` 的 TurnDone 带出
+   `promptTokens`/`cachedTokens`；前端加 signal + `formatTokens`，statusbar 显示
+   `ctx N / max` 与 cache 命中率百分比。`bun run build` + `cargo check` 通过。
+5. **steering ✅（2026-11-19）**：backend `steer` 把文本 push 进 `engine.steering`，
+   前端 busy 时 Enter 改为插话（提示随状态变化）；队列 FIFO 契约测试通过。
+6. **rewind ✅（2026-11-19）**：backend `rewind(steps)` + 前端工具栏按钮 +
+   二次确认，engine 既有 notice/错误路径复用。**automations / documents**：未迁移。
+   另完成：Loaded 事件重放、斜杠命令（/new /rename /rewind /compact /model /
+   /thinking /cost /copy /help）、手动 compact（`ui-core::Command::Compact` +
+   engine 处理 + Loaded 回放）、cost/requests 状态栏。详见 `docs/TAURI-TODO.md`。
+7. **打包配置 ✅（2026-11-19）**：`bundle.active=true`、targets `nsis/msi`、
+   icons/publisher/category 已填，`cargo check` 通过。**剩余**：用
+   `cargo tauri build` 实际产出安装包并验证签名/升级（本机未装 tauri CLI）。
+8. **阶段 2 追加完成 ✅（2026-11-19）**：Loaded 事件重放五种 Entry、斜杠命令
+   （含 `/compact`，`ui-core::Command::Compact` + engine 处理）、cost/requests
+   状态栏、会话列表搜索/分组/相对时间、模型窗口与思考档位从 Ready 带出并持久化、
+   Markdown 组件与代码复制、IME 保护与回到底部、审批风险标签与 Y/N 快捷回答、
+   Automations 页（后端 7 个 command + `argent-automation`）与 Documents 页
+   （`argent-tools::office::extract_text` + 工作区路径校验）。`cargo test --bin
+   argent-tauri` 7 passed、`bun run typecheck` + `bun run build` 通过。
+9. **真端到端冒烟 ✅（2026-11-19）**：新增 `tests/fixtures/tauri_smoke_provider.py`
+   （本地假 OpenAI provider，首请求发 write 工具调用）与 `scripts/tauri-smoke.py`
+   （CDP asyncio 驱动）。实测：prompt → 审批卡点允许 → 工具卡 → 助手回答 →
+   点会话重放历史，全部通过；截图 `dist/tauri-smoke.png`。
+   运行：`python scripts/tauri-smoke.py`（需先 `cargo build` 于 Tauri workspace）。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

@@ -12,6 +12,8 @@ pub enum Command {
     Abort,
     /// Drop the conversation, keeping the transcript file.
     Clear,
+    /// Compact the history now, when it is near the context window.
+    Compact,
     /// Undo the file changes of the last `steps` runs.
     Rewind { steps: u64 },
     /// Switch the model for the rest of the session.
