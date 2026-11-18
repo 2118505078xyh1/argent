@@ -18,6 +18,7 @@ use argent_core::error::Result as CoreResult;
 use argent_session::SessionIndex;
 use argent_tools::{ToolCtx, ToolRegistry};
 use argent_ui_core::approval::{check_approval, ApprovalEvents};
+use argent_ui_core::history::{check_rewind, RewindEvents};
 use argent_ui_core::session::{check_session_switch, SessionEvents};
 use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
 
@@ -232,6 +233,100 @@ fn opening_a_session_emits_one_change_notification() {
     }
     assert_eq!(events.changes.len(), 1, "one open emits one session change");
     assert_eq!(events.changes[0], second.display().to_string());
+    assert!(check_session_switch(&events).is_ok());
+
+    let _ = worker.commands.send(Command::Shutdown);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_rewind_reports_exactly_one_outcome() {
+    let dir = scratch("rewind");
+    let index = SessionIndex::new(dir.join("sessions"));
+    let path = index.create(&dir, "rewind").expect("create");
+    let session = crate::session_ctx::SessionContext::open(path).expect("open");
+    let agent = Agent::new(
+        Box::new(FailingProvider),
+        Arc::new(ToolRegistry::with_core()),
+        AgentConfig::new("failing-model"),
+        ToolCtx::new(dir.clone()),
+        "system",
+    );
+    let worker = super::spawn(
+        agent,
+        session,
+        argent_tools::CheckpointStore::detached(),
+        argent_core::config::Config::default(),
+        index,
+        dir.clone(),
+        argent_hooks::HookConfig::default(),
+        argent_i18n::Locale::En,
+    );
+    while worker.events.try_recv().is_ok() {}
+
+    let _ = worker.commands.send(Command::Rewind { steps: 1 });
+
+    let mut events = RewindEvents::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        match worker.events.recv_timeout(Duration::from_millis(500)) {
+            Ok(UiEvent::Notice(text)) if text.contains("rewind") => events.notice(text),
+            Ok(UiEvent::Error(text)) if text.contains("rewind") => events.error(text),
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        if events.has_single_outcome() {
+            break;
+        }
+    }
+    assert!(events.has_single_outcome(), "one rewind reports once");
+    assert!(check_rewind(&events).is_ok());
+
+    let _ = worker.commands.send(Command::Shutdown);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_fork_emits_exactly_one_session_change() {
+    let dir = scratch("fork");
+    let index = SessionIndex::new(dir.join("sessions"));
+    let path = index.create(&dir, "original").expect("create");
+    let session = crate::session_ctx::SessionContext::open(path).expect("open");
+    let agent = Agent::new(
+        Box::new(FailingProvider),
+        Arc::new(ToolRegistry::with_core()),
+        AgentConfig::new("failing-model"),
+        ToolCtx::new(dir.clone()),
+        "system",
+    );
+    let worker = super::spawn(
+        agent,
+        session,
+        argent_tools::CheckpointStore::detached(),
+        argent_core::config::Config::default(),
+        index,
+        dir.clone(),
+        argent_hooks::HookConfig::default(),
+        argent_i18n::Locale::En,
+    );
+    while worker.events.try_recv().is_ok() {}
+
+    let _ = worker.commands.send(Command::Fork);
+
+    let mut events = SessionEvents::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        match worker.events.recv_timeout(Duration::from_millis(500)) {
+            Ok(UiEvent::SessionOpened { path, .. }) => events.change(path),
+            Ok(UiEvent::Error(message)) => events.error(message),
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        if events.has_single_change() {
+            break;
+        }
+    }
+    assert_eq!(events.changes.len(), 1, "one fork emits one session change");
     assert!(check_session_switch(&events).is_ok());
 
     let _ = worker.commands.send(Command::Shutdown);

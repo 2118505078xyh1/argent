@@ -11,6 +11,7 @@ pub mod approval;
 pub mod command;
 #[cfg(any(test, feature = "test-support"))]
 pub mod failing_provider;
+pub mod history;
 pub mod icon;
 pub mod metrics;
 pub mod palette;
@@ -23,6 +24,7 @@ pub use approval::{check_approval, ApprovalEvents, ApprovalViolation};
 pub use command::Command;
 #[cfg(any(test, feature = "test-support"))]
 pub use failing_provider::failing_base_url;
+pub use history::{check_rewind, HistoryViolation, RewindEvents};
 pub use icon::{rgba as icon_rgba, write_ico};
 pub use metrics::{format_duration, format_tokens, progress_bar, Metrics};
 pub use palette::{Palette, Rgb, Role};

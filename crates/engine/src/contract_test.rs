@@ -13,8 +13,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 
+use argent_agent::AgentEvent;
 use argent_core::config::Config;
 use argent_ui_core::approval::{check_approval, ApprovalEvents};
+use argent_ui_core::history::{check_rewind, RewindEvents};
 use argent_ui_core::session::{check_session_switch, SessionEvents};
 use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
 
@@ -198,6 +200,45 @@ fn opening_a_session_emits_one_change_notification() {
     assert_eq!(events.changes.len(), 1, "one open emits one session change");
     assert_eq!(events.changes[0], second.display().to_string());
     assert!(check_session_switch(&events).is_ok());
+
+    let _ = engine.commands.send(Command::Shutdown);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_rewind_reports_exactly_one_outcome() {
+    let dir = std::env::temp_dir().join(format!(
+        "argent-engine-rewind-contract-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = Config {
+        session_dir: dir.clone(),
+        ..Config::default()
+    };
+    let engine = start_session(config, dir.clone(), None, Arc::new(AtomicU64::new(1)));
+    while engine.events.try_recv().is_ok() {}
+
+    let _ = engine.commands.send(Command::Rewind { steps: 1 });
+
+    let mut events = RewindEvents::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        match engine.events.recv_timeout(Duration::from_millis(500)) {
+            Ok(UiEvent::Agent(AgentEvent::Notice(text))) if text.contains("rewind") => {
+                events.notice(text)
+            }
+            Ok(UiEvent::Error(text)) if text.contains("rewind") => events.error(text),
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        if events.has_single_outcome() {
+            break;
+        }
+    }
+    assert!(events.has_single_outcome(), "one rewind reports once");
+    assert!(check_rewind(&events).is_ok());
 
     let _ = engine.commands.send(Command::Shutdown);
     let _ = std::fs::remove_dir_all(&dir);
