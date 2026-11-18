@@ -24,6 +24,13 @@ pub struct CachedRead {
     pub compacted: bool,
 }
 
+/// Hash anchors emitted by `read hash=true` for one file.
+#[derive(Debug, Clone, Default)]
+pub struct ReadAnchors {
+    /// Line number (1-based) to the 8-character hash the model was shown.
+    pub lines: HashMap<usize, String>,
+}
+
 /// Execution context handed to a tool.
 #[derive(Debug, Clone)]
 pub struct ToolCtx {
@@ -42,6 +49,11 @@ pub struct ToolCtx {
     /// Shared across clones, so every tool call in one session sees the same
     /// table; a new session starts with an empty one.
     pub read_cache: Arc<Mutex<HashMap<PathBuf, CachedRead>>>,
+    /// Anchors actually shown by `read hash=true`, keyed by canonical path.
+    ///
+    /// Anchored edits only accept lines in this table, so a model cannot
+    /// invent a line number that was never in its visible read range.
+    pub read_anchors: Arc<Mutex<HashMap<PathBuf, ReadAnchors>>>,
     /// Working directory the shell last ended in, for one session.
     ///
     /// Shared across clones like `read_cache`: a `cd` in one bash call keeps
@@ -69,6 +81,7 @@ impl ToolCtx {
             auto_approve_bash: true,
             vars: BTreeMap::new(),
             read_cache: Arc::new(Mutex::new(HashMap::new())),
+            read_anchors: Arc::new(Mutex::new(HashMap::new())),
             shell_cwd: Arc::new(Mutex::new(None)),
             cancel: argent_core::interrupt::Cancellation::new(),
             checkpoints: None,
@@ -125,11 +138,36 @@ impl ToolCtx {
         }
     }
 
+    /// Remember the exact line anchors shown by `read hash=true`.
+    pub fn remember_anchors(&self, path: &Path, anchors: ReadAnchors) {
+        let key = cache_key(path);
+        if let Ok(mut cache) = self.read_anchors.lock() {
+            cache.insert(key, anchors);
+        }
+    }
+
+    /// Whether `line#hash` was actually shown by an anchored read.
+    ///
+    /// `None` means this session never read the file with `hash=true`, so the
+    /// caller falls back to the current-file hash check. `Some(false)` means
+    /// the file was read, but this exact line was outside the visible range.
+    pub fn anchor_seen(&self, path: &Path, line: usize, hash: &str) -> Option<bool> {
+        let key = cache_key(path);
+        self.read_anchors
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&key).cloned())
+            .map(|anchors| anchors.lines.get(&line).is_some_and(|seen| seen == hash))
+    }
+
     /// Drop a cached read after a write/edit invalidates the file.
     pub fn forget_read(&self, path: &Path) {
         let key = cache_key(path);
         if let Ok(mut cache) = self.read_cache.lock() {
             cache.remove(&key);
+        }
+        if let Ok(mut anchors) = self.read_anchors.lock() {
+            anchors.remove(&key);
         }
     }
 
@@ -144,6 +182,10 @@ impl ToolCtx {
             for entry in cache.values_mut() {
                 entry.compacted = true;
             }
+        }
+        // Anchors shown before compaction are no longer visible to the model.
+        if let Ok(mut anchors) = self.read_anchors.lock() {
+            anchors.clear();
         }
     }
 }

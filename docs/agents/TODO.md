@@ -163,6 +163,30 @@ Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，DSH 
 - [ ] **`/goal` 目标队列**：与 follow_ups 重叠度高，先观察 Kimi 的实际用法再决定
     是否值得。
 
+### OMP 对照补充（2026-11-18）
+
+OMP 的强项不是功能数量，而是编辑安全和批处理。argent 0.3.1 已补：
+
+- [x] `read hash=true` + `edit start/end` 的 `LINE#HASH` 锚点编辑。
+- [x] seen-lines provenance：只接受本会话实际展示过的锚点，压缩后清空。
+- [x] 锚点编辑保留 CRLF/BOM，失败不落盘、不记 checkpoint。
+
+下一步按优先级：
+
+1. **P0 多范围/多文件原子编辑**：一个调用里提交多个 `{path,start,end,newText}`，
+   先全部校验锚点/重叠/路径，再统一写盘；写失败保留已落前缀并报告。
+2. **P0 `apply_patch` 兼容入口**：给 Codex/OpenCode 模型熟悉的
+   `*** Begin Patch` 外壳；内部先复用 hashline，避免新增一套文本匹配。
+3. **P1 编辑后 LSP 诊断**：成功写入后对目标文件取一次 `diagnostics`，作为
+   tool result 的附加块；没有 LSP 时零开销。
+4. **P1 model-specific edit mode**：`edit.mode = hashline|replace` +
+   模型族回退；4B/弱模型退回 `replace`，避免输出锚点语法失败。
+5. **P1 hashline 基准**：本地 4B 跑“同文件多处修改、并发漂移、CRLF”三组，
+   记录成功率/轮数/token，和精确文本替换对比。
+6. **P2 block anchors**：用现有 AST 把 `start` 扩展到函数/块级，减少行号脆弱性。
+7. **P2 multi-file rollback**：把批量编辑纳入单次 checkpoint 事务，`/rewind`
+   一次回滚整批。
+
 ### 明确不做（对照 DSH）
 
 - 捆绑 Python/Node/MSYS 运行时（违背单二进制；办公文档走 MCP/Rhai 扩展）。

@@ -10,8 +10,8 @@ use argent_core::path::{expand_home, glob_match, normalize, resolve, walk};
 use argent_core::text::diff_lines;
 
 use crate::tool::{
-    arg_bool_opt, arg_str, arg_str_opt, arg_usize_opt, schema_object, CachedRead, Tool, ToolCtx,
-    ToolResult,
+    arg_bool_opt, arg_str, arg_str_opt, arg_usize_opt, schema_object, CachedRead, ReadAnchors,
+    Tool, ToolCtx, ToolResult,
 };
 
 const READ_DEFAULT_LINES: usize = 2000;
@@ -124,6 +124,18 @@ impl Tool for ReadTool {
             } else {
                 out.push_str(&format!("{}\t{}\n", number, line));
             }
+        }
+        if with_hash {
+            ctx.remember_anchors(
+                &target,
+                ReadAnchors {
+                    lines: slice
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, line)| (offset + idx, short_hash(line.as_bytes(), 8)))
+                        .collect(),
+                },
+            );
         }
         let mut result = ToolResult::ok(if offset > 1 || end < lines.len() {
             format!("[lines {}-{} of {}]\n{}", offset, end, lines.len(), out)
@@ -289,6 +301,12 @@ fn apply_anchored_edit(
         (start_line, start_hash.as_str()),
         (end_line, end_hash.as_str()),
     ] {
+        if let Some(false) = ctx.anchor_seen(target, number, expected) {
+            return Ok(ToolResult::error(format!(
+                "line {} anchor was not in a hash=true read; re-read that range with hash=true",
+                number
+            )));
+        }
         let actual = if number == 1 && !bom.is_empty() {
             short_hash(format!("{}{}", bom, lines[0]).as_bytes(), 8)
         } else {
@@ -1169,6 +1187,34 @@ mod tests {
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
         assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nBETA\ngamma\n");
+    }
+
+    #[test]
+    fn anchored_edit_rejects_lines_outside_a_partial_hash_read() {
+        let dir = temp_dir("hashline-unseen");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("h.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+
+        let read_args = format!(r#"{{"path":"{}","hash":true,"limit":1}}"#, json_path(&path));
+        let read = ReadTool
+            .execute(&ctx, &Json::parse(&read_args).unwrap())
+            .unwrap();
+        assert!(read.content.contains("1#"));
+        assert!(!read.content.contains("2#"));
+
+        let hash = short_hash(b"beta", 8);
+        let edit_args = format!(
+            r#"{{"path":"{}","start":"2#{}","newText":"BETA"}}"#,
+            json_path(&path),
+            hash
+        );
+        let out = EditTool
+            .execute(&ctx, &Json::parse(&edit_args).unwrap())
+            .unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("not in a hash=true read"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nbeta\ngamma\n");
     }
 
     #[test]

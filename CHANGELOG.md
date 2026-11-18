@@ -3,6 +3,13 @@
 All notable changes to argent are documented here. The format is a loose
 Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
+## Unreleased
+
+- **Seen-line provenance for anchored edits.** `edit` now tracks the exact
+  `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
+  range is rejected even if its hash happens to match, and compaction clears
+  the anchor table.
+
 ## 0.3.1 — 2026-11-18
 
 - **Hash-anchored edits.** `read hash=true` now feeds `edit` directly:
