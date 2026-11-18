@@ -12,6 +12,9 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 - **`apply_patch` plugin.** An on-demand Codex/OpenCode-style
   `*** Begin Patch` envelope supports Update/Add/Delete sections and validates
   every hunk before the first write.
+- **Post-edit LSP diagnostics.** Successful write/edit/apply_patch calls append
+  diagnostics when an LSP server is already running. The hook never starts a
+  server, so sessions that never used code intelligence pay nothing.
 - **Seen-line provenance for anchored edits.** `edit` now tracks the exact
   `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
   range is rejected even if its hash happens to match, and compaction clears

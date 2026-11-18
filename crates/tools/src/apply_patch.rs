@@ -13,7 +13,7 @@ use argent_core::error::{Error, Result};
 use argent_core::json::Json;
 use argent_core::path::{expand_home, resolve};
 
-use crate::tool::{arg_str, schema_object, Tool, ToolCtx, ToolResult};
+use crate::tool::{arg_str, schema_object, with_post_edit_diagnostics, Tool, ToolCtx, ToolResult};
 
 /// Apply a Codex-style patch envelope.
 pub struct ApplyPatchTool;
@@ -166,7 +166,11 @@ impl Tool for ApplyPatchTool {
             written += 1;
         }
 
-        Ok(ToolResult::ok(format!("applied {} file(s)", total)))
+        let mut result = ToolResult::ok(format!("applied {} file(s)", total));
+        for (target, _) in &updates {
+            result = with_post_edit_diagnostics(ctx, target, result);
+        }
+        Ok(result)
     }
 }
 

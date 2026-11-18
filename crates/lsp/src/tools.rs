@@ -304,6 +304,26 @@ fn render_symbols(symbols: &[crate::server::Symbol], label: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// Diagnostics for `path` if a language server is already running.
+///
+/// The manager is only created by the model's `codeintel` tool; if it was
+/// never used, this returns `None` and starts nothing.
+pub fn diagnostics_if_running(
+    _cwd: &std::path::Path,
+    path: &std::path::Path,
+    wait: std::time::Duration,
+) -> Option<String> {
+    let slot = manager_slot();
+    let guard = slot.lock().ok()?;
+    let manager = guard.as_ref()?;
+    let items = manager.diagnostics_if_running(path, wait);
+    if items.is_empty() {
+        None
+    } else {
+        Some(render_diagnostics(&items))
+    }
+}
+
 fn render_diagnostics(items: &[crate::server::Diagnostic]) -> String {
     if items.is_empty() {
         return "no diagnostics".to_string();

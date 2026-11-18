@@ -873,6 +873,10 @@ fn build_agent(
     tool_ctx.confirm_delete = config.confirm_delete;
     tool_ctx.auto_approve_bash = config.auto_approve_bash;
     tool_ctx.checkpoints = Some(checkpoints.clone());
+    let lsp_root = cwd.clone();
+    tool_ctx.post_edit = Some(argent_tools::PostEditHook::new(move |path| {
+        argent_lsp::diagnostics_if_running(&lsp_root, path, std::time::Duration::from_millis(1000))
+    }));
     tool_ctx
         .vars
         .insert("ask_channel".to_string(), "terminal".to_string());

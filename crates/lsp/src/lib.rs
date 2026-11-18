@@ -14,10 +14,9 @@ pub mod registry;
 pub mod server;
 pub mod tools;
 
-pub use tools::CodeIntelTool;
+pub use tools::{diagnostics_if_running, CodeIntelTool, LspTool};
 
 pub use manager::LspManager;
 pub use protocol::{Inbound, Position, RpcMessage};
 pub use registry::{BuiltinResolver, LanguageResolver, ServerSpec};
 pub use server::{Diagnostic, LspServer, Symbol};
-pub use tools::LspTool;

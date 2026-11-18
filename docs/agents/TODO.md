@@ -181,6 +181,7 @@ OMP 的强项不是功能数量，而是编辑安全和批处理。argent 0.3.1 
    **已完成（Unreleased）**：按需加载的 `patch` 插件，支持 Update/Add/Delete。
 3. **P1 编辑后 LSP 诊断**：成功写入后对目标文件取一次 `diagnostics`，作为
    tool result 的附加块；没有 LSP 时零开销。
+   **已完成（Unreleased）**：`ToolCtx.post_edit` hook，只查询已运行的 server。
 4. **P1 model-specific edit mode**：`edit.mode = hashline|replace` +
    模型族回退；4B/弱模型退回 `replace`，避免输出锚点语法失败。
 5. **P1 hashline 基准**：本地 4B 跑“同文件多处修改、并发漂移、CRLF”三组，

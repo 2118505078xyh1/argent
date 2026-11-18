@@ -11,8 +11,8 @@ use argent_core::path::{expand_home, glob_match, normalize, resolve, walk};
 use argent_core::text::diff_lines;
 
 use crate::tool::{
-    arg_bool_opt, arg_str, arg_str_opt, arg_usize_opt, schema_object, CachedRead, ReadAnchors,
-    Tool, ToolCtx, ToolResult,
+    arg_bool_opt, arg_str, arg_str_opt, arg_usize_opt, schema_object, with_post_edit_diagnostics,
+    CachedRead, ReadAnchors, Tool, ToolCtx, ToolResult,
 };
 
 const READ_DEFAULT_LINES: usize = 2000;
@@ -213,12 +213,16 @@ impl Tool for WriteTool {
         }
         argent_core::write_text_file(&target, &content)?;
         ctx.forget_read(&target);
-        Ok(ToolResult::ok(format!(
-            "{} {} ({} bytes)",
-            if existed { "updated" } else { "created" },
-            target.display(),
-            content.len()
-        )))
+        Ok(with_post_edit_diagnostics(
+            ctx,
+            &target,
+            ToolResult::ok(format!(
+                "{} {} ({} bytes)",
+                if existed { "updated" } else { "created" },
+                target.display(),
+                content.len()
+            )),
+        ))
     }
 }
 
@@ -350,14 +354,18 @@ fn apply_anchored_edit(
         .iter()
         .filter(|line| matches!(line, argent_core::text::DiffLine::Removed(_)))
         .count();
-    Ok(ToolResult::ok(format!(
-        "edited {} (lines {}..{}, +{} -{} lines)",
-        target.display(),
-        start_line,
-        end_line,
-        added,
-        removed
-    )))
+    Ok(with_post_edit_diagnostics(
+        ctx,
+        target,
+        ToolResult::ok(format!(
+            "edited {} (lines {}..{}, +{} -{} lines)",
+            target.display(),
+            start_line,
+            end_line,
+            added,
+            removed
+        )),
+    ))
 }
 
 struct BatchRange {
@@ -555,10 +563,14 @@ fn apply_edit_batch(ctx: &ToolCtx, default_path: &str, raw: &str) -> Result<Tool
         ctx.forget_read(target);
     }
 
-    Ok(ToolResult::ok(format!(
+    let mut result = ToolResult::ok(format!(
         "edited {} file(s) (+{} -{} lines)",
         total_files, total_added, total_removed
-    )))
+    ));
+    for (target, _) in &updates {
+        result = with_post_edit_diagnostics(ctx, target, result);
+    }
+    Ok(result)
 }
 
 /// Replace an exact text span in a file.
@@ -717,12 +729,16 @@ impl Tool for EditTool {
             .filter(|d| matches!(d, argent_core::text::DiffLine::Removed(_)))
             .count()
             * copies;
-        Ok(ToolResult::ok(format!(
-            "edited {} (+{} -{} lines)",
-            target.display(),
-            added,
-            removed
-        )))
+        Ok(with_post_edit_diagnostics(
+            ctx,
+            &target,
+            ToolResult::ok(format!(
+                "edited {} (+{} -{} lines)",
+                target.display(),
+                added,
+                removed
+            )),
+        ))
     }
 }
 
@@ -1519,6 +1535,31 @@ mod tests {
         assert!(out.content.contains("stale hash anchor"));
         assert_eq!(fs::read_to_string(&a).unwrap(), "alpha\n");
         assert_eq!(fs::read_to_string(&b).unwrap(), "changed\n");
+    }
+
+    #[test]
+    fn edit_appends_host_diagnostics() {
+        let dir = temp_dir("post-edit-diag");
+        let mut ctx = ToolCtx::new(dir.clone());
+        ctx.post_edit = Some(crate::tool::PostEditHook::new(|path| {
+            Some(format!("diag:{}", path.file_name()?.to_string_lossy()))
+        }));
+        let path = dir.join("a.txt");
+        fs::write(&path, "alpha\n").unwrap();
+        let args = format!(
+            r#"{{"path":"{}","oldText":"alpha","newText":"beta"}}"#,
+            json_path(&path)
+        );
+        let out = EditTool
+            .execute(&ctx, &Json::parse(&args).unwrap())
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert!(
+            out.content.contains("LSP diagnostics for"),
+            "{}",
+            out.content
+        );
+        assert!(out.content.contains("diag:a.txt"), "{}", out.content);
     }
 
     #[test]

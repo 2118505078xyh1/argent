@@ -3,6 +3,29 @@
 //! Servers are expensive to start (rust-analyzer takes seconds), so the
 //! manager only launches the one a query actually needs and keeps it alive for
 //! the rest of the session.
+    /// Diagnostics for `path` if its language server is already running.
+    ///
+    /// This never starts a server: post-edit diagnostics must be free when the
+    /// session never used code intelligence. When a server does exist, refresh
+    /// the file first so the result reflects the bytes just written.
+    pub fn diagnostics_if_running(
+        &self,
+        path: &Path,
+        wait: std::time::Duration,
+    ) -> Vec<Diagnostic> {
+        let Some(spec) = self.resolver.resolve(path) else {
+            return Vec::new();
+        };
+        let Some(shared) = self.servers.get(&spec.id) else {
+            return Vec::new();
+        };
+        let Ok(mut server) = shared.lock() else {
+            return Vec::new();
+        };
+        let _ = server.refresh(path);
+        server.diagnostics(Some(path), wait)
+    }
+
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

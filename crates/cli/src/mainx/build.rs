@@ -90,6 +90,10 @@ pub(crate) fn build_ctx(config: &Config, cwd: &Path) -> ToolCtx {
         }
         ctx.write_roots = roots;
     }
+    let lsp_root = cwd.to_path_buf();
+    ctx.post_edit = Some(argent_tools::PostEditHook::new(move |path| {
+        argent_lsp::diagnostics_if_running(&lsp_root, path, std::time::Duration::from_millis(1000))
+    }));
     ctx
 }
 

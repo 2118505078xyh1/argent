@@ -36,7 +36,7 @@ pub use state_tools::{
 };
 pub use tool::{
     approval_preview, approval_summary, arg_bool_opt, arg_str, arg_str_opt, arg_usize_opt,
-    schema_object, Tool, ToolCtx, ToolResult,
+    schema_object, with_post_edit_diagnostics, PostEditHook, Tool, ToolCtx, ToolResult,
 };
 pub use toolsearch::{CatalogEntry, Promotions, ToolSearchTool};
 pub use websearch::{Hit, WebSearchTool};

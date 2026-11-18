@@ -31,6 +31,36 @@ pub struct ReadAnchors {
     pub lines: HashMap<usize, String>,
 }
 
+/// Host-supplied diagnostics provider for a path.
+pub trait PostEditDiagnostics: Send + Sync {
+    fn diagnostics(&self, path: &Path) -> Option<String>;
+}
+
+impl<F> PostEditDiagnostics for F
+where
+    F: Fn(&Path) -> Option<String> + Send + Sync,
+{
+    fn diagnostics(&self, path: &Path) -> Option<String> {
+        self(path)
+    }
+}
+
+/// Optional host hook that returns diagnostics after a successful edit.
+#[derive(Clone)]
+pub struct PostEditHook(Arc<dyn PostEditDiagnostics>);
+
+impl PostEditHook {
+    pub fn new(hook: impl Fn(&Path) -> Option<String> + Send + Sync + 'static) -> PostEditHook {
+        PostEditHook(Arc::new(hook))
+    }
+}
+
+impl std::fmt::Debug for PostEditHook {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PostEditHook")
+    }
+}
+
 /// Execution context handed to a tool.
 #[derive(Debug, Clone)]
 pub struct ToolCtx {
@@ -54,6 +84,8 @@ pub struct ToolCtx {
     /// Anchored edits only accept lines in this table, so a model cannot
     /// invent a line number that was never in its visible read range.
     pub read_anchors: Arc<Mutex<HashMap<PathBuf, ReadAnchors>>>,
+    /// Host-supplied diagnostics hook, called only after a successful write.
+    pub post_edit: Option<PostEditHook>,
     /// Working directory the shell last ended in, for one session.
     ///
     /// Shared across clones like `read_cache`: a `cd` in one bash call keeps
@@ -82,6 +114,7 @@ impl ToolCtx {
             vars: BTreeMap::new(),
             read_cache: Arc::new(Mutex::new(HashMap::new())),
             read_anchors: Arc::new(Mutex::new(HashMap::new())),
+            post_edit: None,
             shell_cwd: Arc::new(Mutex::new(None)),
             cancel: argent_core::interrupt::Cancellation::new(),
             checkpoints: None,
@@ -158,6 +191,13 @@ impl ToolCtx {
             .ok()
             .and_then(|cache| cache.get(&key).cloned())
             .map(|anchors| anchors.lines.get(&line).is_some_and(|seen| seen == hash))
+    }
+
+    /// Ask the host for diagnostics after a successful write.
+    pub fn post_edit_diagnostics(&self, path: &Path) -> Option<String> {
+        self.post_edit
+            .as_ref()
+            .and_then(|hook| hook.0.diagnostics(path))
     }
 
     /// Drop a cached read after a write/edit invalidates the file.
@@ -441,6 +481,23 @@ fn path_under(target: &Path, root: &Path) -> bool {
     let root = root.to_string_lossy().to_lowercase().replace('\\', "/");
     let root = root.trim_end_matches('/');
     target == root || target.starts_with(&format!("{}/", root))
+}
+
+/// Append host diagnostics to a successful write result.
+pub fn with_post_edit_diagnostics(
+    ctx: &ToolCtx,
+    path: &Path,
+    mut result: ToolResult,
+) -> ToolResult {
+    if !result.is_error {
+        if let Some(text) = ctx.post_edit_diagnostics(path) {
+            result
+                .content
+                .push_str(&format!("\n\nLSP diagnostics for {}:\n", path.display()));
+            result.content.push_str(&text);
+        }
+    }
+    result
 }
 
 /// Read a required string argument.
