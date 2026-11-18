@@ -31,16 +31,16 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a file with line numbers, or list a directory."
+        "Read a file or list a directory."
     }
 
     fn parameters(&self) -> Json {
         schema_object(
             vec![
-                ("path", "string", "Absolute or relative path"),
-                ("offset", "integer", "First line (1-based)"),
-                ("limit", "integer", "Max lines (default 2000)"),
-                ("hash", "boolean", "Add a short hash anchor per line"),
+                ("path", "string", "File path"),
+                ("offset", "integer", "First line"),
+                ("limit", "integer", "Max lines (2000)"),
+                ("hash", "boolean", "Add LINE#HASH anchors"),
             ],
             vec!["path"],
         )
@@ -177,14 +177,14 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file, creating parent directories as needed. Overwrites an existing file."
+        "Write a file; creates parent directories."
     }
 
     fn parameters(&self) -> Json {
         schema_object(
             vec![
-                ("path", "string", "Absolute or relative path to the file"),
-                ("content", "string", "Full file content to write"),
+                ("path", "string", "File path"),
+                ("content", "string", "Content"),
             ],
             vec!["path", "content"],
         )

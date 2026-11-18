@@ -15,6 +15,9 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 - **Post-edit LSP diagnostics.** Successful write/edit/apply_patch calls append
   diagnostics when an LSP server is already running. The hook never starts a
   server, so sessions that never used code intelligence pay nothing.
+- **Smaller core schema.** Trimmed read/write descriptions and parameter text,
+  freeing roughly 175 characters from every request while keeping the 1700-char
+  budget test.
 - **Seen-line provenance for anchored edits.** `edit` now tracks the exact
   `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
   range is rejected even if its hash happens to match, and compaction clears
