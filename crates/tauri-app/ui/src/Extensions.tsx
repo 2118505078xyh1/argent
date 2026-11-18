@@ -1,0 +1,54 @@
+import { For, createSignal, onMount } from "solid-js";
+import { invoke } from "@tauri-apps/api/core";
+
+type ExtensionList = { skills: string[]; commands: string[]; hooks: string[] };
+
+export default function Extensions() {
+  const [data, setData] = createSignal<ExtensionList>({
+    skills: [],
+    commands: [],
+    hooks: [],
+  });
+  const [error, setError] = createSignal("");
+
+  onMount(async () => {
+    try {
+      setData(await invoke<ExtensionList>("list_extensions"));
+    } catch (err) {
+      setError(String(err));
+    }
+  });
+
+  const sections: Array<{ title: string; items: () => string[]; empty: string }> = [
+    { title: "Skills", items: () => data().skills, empty: "暂无 skills" },
+    { title: "自定义命令", items: () => data().commands, empty: "暂无自定义命令" },
+    { title: "Hooks", items: () => data().hooks, empty: "暂无 hooks" },
+  ];
+
+  return (
+    <section class="page">
+      <header class="page-head">
+        <div>
+          <h2>扩展</h2>
+          <p>当前工作区与用户目录下发现的技能、命令和 hook 事件。</p>
+        </div>
+      </header>
+      {error() && <div class="error-bar">{error()}</div>}
+      <div class="ext-grid">
+        <For each={sections}>
+          {(section) => (
+            <div class="ext-card">
+              <h3>{section.title}</h3>
+              <For
+                each={section.items()}
+                fallback={<div class="side-empty">{section.empty}</div>}
+              >
+                {(item) => <div class="ext-item">{item}</div>}
+              </For>
+            </div>
+          )}
+        </For>
+      </div>
+    </section>
+  );
+}

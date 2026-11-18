@@ -602,6 +602,85 @@ pub fn delete_session(state: State<'_, Backend>, sid: String, path: String) -> R
         .map_err(|_| "agent worker is gone".to_string())
 }
 
+#[tauri::command]
+pub fn usage_summary() -> Result<Value, String> {
+    let records = argent_session::usage::read();
+    let summary = argent_session::usage::summary(&records, 0);
+    Ok(json!({
+        "turns": summary.turns,
+        "requests": summary.requests,
+        "warmRequests": summary.warm_requests,
+        "promptTokens": summary.prompt_tokens,
+        "completionTokens": summary.completion_tokens,
+        "cachedTokens": summary.cached_tokens,
+        "missedTokens": summary.missed_tokens,
+        "cacheHitPercent": summary.cache_hit_percent(),
+        "cost": summary.cost,
+        "models": summary.by_model.iter().map(|(name, usage)| json!({
+            "name": name,
+            "turns": usage.turns,
+            "promptTokens": usage.prompt_tokens,
+            "cost": usage.cost,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+fn config_root() -> std::path::PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".argent")
+}
+
+fn list_markdown_names(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        })
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .collect();
+    names.sort();
+    names
+}
+
+#[tauri::command]
+pub fn list_extensions() -> Result<Value, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let global = config_root();
+    let mut skills = list_markdown_names(&global.join("skills"));
+    skills.extend(list_markdown_names(&cwd.join(".argent").join("skills")));
+    let mut commands = list_markdown_names(&global.join("commands"));
+    commands.extend(list_markdown_names(&cwd.join(".argent").join("commands")));
+
+    let mut hooks = Vec::new();
+    for path in [global.join("hooks.json"), cwd.join(".argent").join("hooks.json")] {
+        let Ok(body) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if let Ok(value) = serde_json::from_str::<Value>(&body) {
+            if let Some(map) = value.pointer("/hooks").and_then(Value::as_object) {
+                for key in map.keys() {
+                    if !hooks.contains(key) {
+                        hooks.push(key.clone());
+                    }
+                }
+            }
+        }
+    }
+    hooks.sort();
+    Ok(json!({ "skills": skills, "commands": commands, "hooks": hooks }))
+}
+
 fn memory_store() -> Result<argent_memory::MemoryStore, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let slug = cwd
@@ -753,7 +832,13 @@ fn collect_documents(dir: &std::path::Path, depth: usize, out: &mut Vec<Value>) 
     }
 }
 
-fn collect_files(dir: &std::path::Path, depth: usize, query: &str, out: &mut Vec<String>) {
+fn collect_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    depth: usize,
+    query: &str,
+    out: &mut Vec<String>,
+) {
     if depth > 3 || out.len() >= 200 {
         return;
     }
@@ -770,11 +855,11 @@ fn collect_files(dir: &std::path::Path, depth: usize, query: &str, out: &mut Vec
             continue;
         }
         if path.is_dir() {
-            collect_files(&path, depth + 1, query, out);
+            collect_files(root, &path, depth + 1, query, out);
             continue;
         }
         let relative = path
-            .strip_prefix(std::env::current_dir().unwrap_or_default())
+            .strip_prefix(root)
             .unwrap_or(&path)
             .to_string_lossy()
             .into_owned();
@@ -788,7 +873,7 @@ fn collect_files(dir: &std::path::Path, depth: usize, query: &str, out: &mut Vec
 pub fn list_files(query: String) -> Result<Vec<String>, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let mut found = Vec::new();
-    collect_files(&cwd, 0, &query, &mut found);
+    collect_files(&cwd, &cwd, 0, &query, &mut found);
     Ok(found)
 }
 

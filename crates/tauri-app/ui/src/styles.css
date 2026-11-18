@@ -1111,6 +1111,62 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.usage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.usage-card span {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.usage-card strong {
+  font-size: 16px;
+}
+
+.usage-title {
+  margin: 18px 0 8px;
+  font-size: 13px;
+}
+
+.ext-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.ext-card {
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.ext-card h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.ext-item {
+  padding: 5px 0;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
 .doc-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));

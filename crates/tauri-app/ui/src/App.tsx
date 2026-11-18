@@ -12,6 +12,8 @@ import Markdown from "./Markdown";
 import Automations from "./Automations";
 import Documents from "./Documents";
 import Memory from "./Memory";
+import Extensions from "./Extensions";
+import Usage from "./Usage";
 import ToolCard from "./ToolCard";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -174,7 +176,9 @@ function App() {
   const [theme, setTheme] = createSignal<"dark" | "light">(
     storageGet("argent.theme") === "light" ? "light" : "dark",
   );
-  const [screen, setScreen] = createSignal<"chat" | "automations" | "documents" | "memory">("chat");
+  const [screen, setScreen] = createSignal<
+    "chat" | "automations" | "documents" | "memory" | "extensions" | "usage"
+  >("chat");
   const [help, setHelp] = createSignal(false);
   const [locale, setLocale] = createSignal<Locale>(detectLocale());
   const [statusSegments, setStatusSegments] = createSignal<StatusSegment[]>(
@@ -1171,6 +1175,18 @@ function App() {
           >
             记忆
           </button>
+          <button
+            classList={{ active: screen() === "extensions" }}
+            onClick={() => setScreen("extensions")}
+          >
+            扩展
+          </button>
+          <button
+            classList={{ active: screen() === "usage" }}
+            onClick={() => setScreen("usage")}
+          >
+            用量
+          </button>
         </div>
         <div class="side-head">
           <span>{t(locale(), "chat")}</span>
@@ -1691,6 +1707,12 @@ function App() {
         </Show>
         <Show when={screen() === "memory"}>
           <Memory />
+        </Show>
+        <Show when={screen() === "extensions"}>
+          <Extensions />
+        </Show>
+        <Show when={screen() === "usage"}>
+          <Usage />
         </Show>
       </main>
 
