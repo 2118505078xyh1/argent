@@ -658,7 +658,7 @@ assistant: {}",
                         }
                     }
                 }
-                Command::Import(source) => match import_session(&index, &source) {
+                Command::Import(source) => match import_session(&index, &source, &cwd) {
                     Ok(path) => match SessionContext::open(path.clone()) {
                         Ok(opened) => {
                             session.close();

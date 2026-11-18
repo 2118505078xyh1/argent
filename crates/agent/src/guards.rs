@@ -45,23 +45,24 @@ pub struct RecentCall {
 /// A refusal that the model can retry forever is not a refusal, it is a
 /// suggestion: the model asks again, the policy answers again, and the run
 /// burns its whole turn budget on one denied path. So a blocked call is
-/// remembered, and the second attempt ends the run instead of repeating the
-/// answer.
+/// remembered by the denial it earned, and the second attempt ends the run
+/// instead of repeating the answer.
 #[derive(Debug, Clone)]
 pub struct BlockedCall {
     pub name: String,
-    pub args: String,
+    /// Tool name and normalized refusal reason; arguments are not part of it.
+    pub key: String,
     pub turn: usize,
+    /// The reason as the policy wrote it, kept for diagnostics.
     pub reason: String,
 }
 
-/// How many times a policy-blocked call is answered before the run stops.
+/// How many policy-blocked calls are answered before the run stops.
 ///
-/// A model that gets the same refusal twice usually just needs to read the
-/// reason and adjust; cutting it off after one try was premature. Three
-/// identical refusals in a row, though, mean the run is stuck on a denied
-/// path and should stop burning tokens.
-pub const BLOCKED_CALL_LIMIT: usize = 3;
+/// The first refusal explains the policy. A second refusal for the same tool
+/// and normalized reason means the model is grinding on a denied path, so the
+/// run stops there instead of burning the rest of its turn budget.
+pub const BLOCKED_CALL_LIMIT: usize = 2;
 
 /// The identity of a guarded call, or `None` when repeats are allowed.
 pub fn repeat_key(call: &ToolCall) -> Option<String> {
@@ -71,13 +72,35 @@ pub fn repeat_key(call: &ToolCall) -> Option<String> {
     Some(canonical_json(&call.parsed_args()))
 }
 
-/// The identity of a call for the blocked-call guard.
+/// Canonical argument text, used by callers that need a stable argument shape.
 ///
-/// Unlike the repeat guard, this covers every tool: a denied `bash` is just
-/// as repeatable as a denied `read`, and the model is just as likely to ask
-/// again.
+/// Object keys are sorted recursively so two spellings of the same arguments
+/// compare equal. The blocked-call guard deliberately does not use this: its
+/// identity is the tool plus the policy reason, not the argument spelling.
 pub fn canonical_args(args: &Json) -> String {
     canonical_json(args)
+}
+
+/// The identity of a policy refusal: the tool name and normalized reason.
+///
+/// Arguments are deliberately excluded. A model that rewrites a denied command
+/// with different whitespace is still asking for the same denied effect, and
+/// must not get a fresh chance to retry forever.
+pub fn blocked_key(name: &str, reason: &str) -> String {
+    let mut key = String::with_capacity(name.len() + reason.len() + 1);
+    key.push_str(name);
+    key.push('\0');
+    key.push_str(&normalize_policy_reason(reason));
+    key
+}
+
+/// Collapse cosmetic differences in an operator's refusal text.
+pub fn normalize_policy_reason(reason: &str) -> String {
+    reason
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 /// Stable text for an argument value: object keys are sorted recursively.

@@ -7,7 +7,7 @@ use argent_config::Settings;
 use argent_core::error::{Error, Result};
 use argent_core::json::Json;
 
-use crate::manifest::{find_manifest, McpServerDecl, PluginManifest};
+use crate::manifest::{find_manifest, validate_plugin_name, McpServerDecl, PluginManifest};
 use crate::signature::{verify, SignatureMode, SignaturePolicy, SignatureStatus};
 
 /// 安装插件时使用的策略参数。
@@ -224,8 +224,39 @@ impl PluginManager {
     ) -> Result<PluginManifest> {
         let manifest = PluginManifest::load(source)?;
         check_signature(source, policy, &manifest.name)?;
+        // 名称在清单解析时已校验；这里再用规范化路径确认目标（包括符号链接
+        // 解析后的位置）确实位于 destination_root 内，避免删除/写入越界。
+        std::fs::create_dir_all(destination_root).map_err(|e| {
+            Error::io(format!(
+                "create {} failed: {}",
+                destination_root.display(),
+                e
+            ))
+        })?;
+        let canonical_root = std::fs::canonicalize(destination_root).map_err(|e| {
+            Error::io(format!(
+                "canonicalize {} failed: {}",
+                destination_root.display(),
+                e
+            ))
+        })?;
         let destination = destination_root.join(&manifest.name);
-        if destination.exists() {
+        if std::fs::symlink_metadata(&destination).is_ok() {
+            let resolved = std::fs::canonicalize(&destination).map_err(|_| {
+                Error::config(format!(
+                    "插件 '{}' 的安装目标 {} 是无效符号链接",
+                    manifest.name,
+                    destination.display()
+                ))
+            })?;
+            if !resolved.starts_with(&canonical_root) || resolved == canonical_root {
+                return Err(Error::config(format!(
+                    "插件 '{}' 的安装目标越界：{} 不在 {} 之内",
+                    manifest.name,
+                    resolved.display(),
+                    canonical_root.display()
+                )));
+            }
             if !force {
                 return Err(Error::config(format!(
                     "plugin '{}' is already installed at {}; use --force to replace it",
@@ -246,6 +277,7 @@ impl PluginManager {
     /// Only a directory whose manifest name matches is removed, so a typo
     /// cannot delete an unrelated directory.
     pub fn uninstall(name: &str, roots: &[PathBuf]) -> Result<bool> {
+        validate_plugin_name(name).map_err(Error::config)?;
         for root in roots {
             let candidate = root.join(name);
             if let Ok(manifest) = PluginManifest::load(&candidate) {
@@ -544,5 +576,46 @@ mod tests {
         let servers = manager.mcp_servers();
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].0, "alpha");
+    }
+
+    #[test]
+    fn uninstall_rejects_traversal_and_reserved_names() {
+        let root = scratch("uninstall-invalid");
+        write_plugin(&root, "alpha", r#""description":"a""#);
+        for bad in ["", ".", "..", "../alpha", "nested/alpha", "C:alpha", "con"] {
+            assert!(
+                PluginManager::uninstall(bad, std::slice::from_ref(&root)).is_err(),
+                "must reject uninstall name {:?}",
+                bad
+            );
+        }
+        assert!(root.join("alpha").is_dir());
+    }
+
+    #[test]
+    fn install_local_refuses_a_destination_symlink_escape() {
+        let source_root = scratch("symlink-source");
+        write_plugin(&source_root, "alpha", r#""description":"a""#);
+        let destination = scratch("symlink-destination");
+        let outside = scratch("symlink-outside");
+        let link = destination.join("alpha");
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, &link).is_ok();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(&outside, &link).is_ok();
+        #[cfg(not(any(unix, windows)))]
+        let linked = false;
+        if !linked {
+            return;
+        }
+        let error = PluginManager::install_local(
+            &source_root.join("alpha"),
+            &destination,
+            true,
+            &mut InstallPolicy::default(),
+        )
+        .expect_err("a destination symlink pointing outside the root must be refused");
+        assert!(error.to_string().contains("越界"), "{}", error);
+        assert_eq!(outside.read_dir().unwrap().count(), 0);
     }
 }

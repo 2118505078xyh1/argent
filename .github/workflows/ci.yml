@@ -6,6 +6,34 @@ on:
   pull_request:
 
 jobs:
+  # The Windows job below owns the TUI/ConPTY and Job Object paths. This job
+  # exercises the portable crates on Linux, where path handling, curl TLS,
+  # auth backends and shell fallbacks behave differently.
+  portable-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: test portable crates
+        run: >-
+          cargo test --locked
+          -p argent-core
+          -p argent-config
+          -p argent-security
+          -p argent-session
+          -p argent-ai
+          -p argent-provider
+          -p argent-tools
+          -p argent-agent
+          -p argent-plugins
+          -p argent-mcp
+          -p argent-commands
+          -p argent-hooks
+          -p argent-eval
+
   # The development platform: the TUI, the Windows Job Object sandbox and the
   # ConPTY probes are Windows-specific, so the suite runs there.
   test:

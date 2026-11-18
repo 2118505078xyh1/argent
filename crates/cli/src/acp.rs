@@ -487,6 +487,14 @@ fn worker(
                     }
                     Err(error) => {
                         let _ = events.send(Event::Error(error.to_string()));
+                        // 只发 Error 不会更新会话的上下文占用；补一个终止回合事件，
+                        // 错误原因放在 reason 里，其余字段与成功路径一致。
+                        let _ = events.send(Event::TurnDone {
+                            reason: FinishReason::Error(error.to_string()),
+                            usage: agent.usage(),
+                            requests: agent.requests(),
+                            context_used: argent_agent::estimate_tokens(agent.history()),
+                        });
                     }
                 }
             }

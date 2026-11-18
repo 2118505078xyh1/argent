@@ -259,11 +259,15 @@ pub(super) fn tree_rows(session: &SessionContext) -> Vec<TreeRow> {
     rows
 }
 
-/// Copy an external session file into the sessions directory, keeping every
-/// id, parent link and the original header (cwd included).
+/// Import a session file into the sessions directory.
+///
+/// Native sessions are copied verbatim (ids, parents and header included);
+/// foreign Claude Code / Codex JSONL is converted into a native session so
+/// restore and tree browsing work. Empty or unrecognized sources are rejected.
 pub(super) fn import_session(
     index: &SessionIndex,
     source: &str,
+    cwd: &Path,
 ) -> argent_core::error::Result<std::path::PathBuf> {
     let source_path = std::path::PathBuf::from(source);
     if !source_path.is_file() {
@@ -272,23 +276,47 @@ pub(super) fn import_session(
             source
         )));
     }
-    // Structural validation: every line must be JSON; the tree rebuild also
-    // verifies parent links resolve.
-    let lines = argent_session::SessionStore::read_raw(&source_path)?;
-    argent_session::SessionTree::from_raw(&lines)?;
-    let stamp = argent_session::timestamp_slug();
+    let text = std::fs::read_to_string(&source_path)
+        .map_err(|e| argent_core::error::Error::io(format!("read {} failed: {}", source, e)))?;
+    let lines = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            argent_core::json::Json::parse(line).map_err(|e| {
+                argent_core::error::Error::io(format!("session line is not JSON: {}", e))
+            })
+        })
+        .collect::<argent_core::error::Result<Vec<_>>>()?;
+
     let stem = source_path
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| "imported".to_string());
-    let name = argent_session::sanitize(&format!("import-{}-{}", stamp, stem));
-    let destination = index.dir().join(format!("{}.jsonl", name));
-    std::fs::create_dir_all(index.dir()).map_err(|e| {
-        argent_core::error::Error::io(format!("create {} failed: {}", index.dir().display(), e))
-    })?;
-    std::fs::copy(&source_path, &destination)
-        .map_err(|e| argent_core::error::Error::io(format!("copy {} failed: {}", source, e)))?;
-    Ok(destination)
+
+    // Foreign transcripts are valid JSONL, but none of their lines map to a
+    // recognized session Entry. Only copy the file when it is truly native;
+    // from_raw also verifies that all parent links resolve.
+    let tree = argent_session::SessionTree::from_raw(&lines)?;
+    if !tree.ids().is_empty() {
+        let stamp = argent_session::timestamp_slug();
+        let name = argent_session::sanitize(&format!("import-{}-{}", stamp, stem));
+        let destination = index.dir().join(format!("{}.jsonl", name));
+        std::fs::create_dir_all(index.dir()).map_err(|e| {
+            argent_core::error::Error::io(format!("create {} failed: {}", index.dir().display(), e))
+        })?;
+        std::fs::copy(&source_path, &destination)
+            .map_err(|e| argent_core::error::Error::io(format!("copy {} failed: {}", source, e)))?;
+        return Ok(destination);
+    }
+
+    let turns = argent_session::import::parse(&text)?;
+    if turns.is_empty() {
+        return Err(argent_core::error::Error::config(format!(
+            "no importable messages in {} (expected a native session, Claude Code or Codex JSONL)",
+            source
+        )));
+    }
+    argent_session::import::import(index, cwd, &stem, turns)
 }
 
 /// /resume 切到另一个会话时，缓存亲和键也跟着换，避免和别的会话
@@ -454,7 +482,8 @@ mod tree_tests {
         let mut ctx = SessionContext::open(source.clone()).expect("open");
         ctx.record(Message::user("traveller")).expect("record");
         ctx.close();
-        let destination = import_session(&index, source.to_str().expect("utf8")).expect("import");
+        let destination =
+            import_session(&index, source.to_str().expect("utf8"), &dir).expect("import");
         assert!(destination.is_file());
         assert_eq!(
             destination.parent().expect("parent"),
@@ -469,9 +498,61 @@ mod tree_tests {
         // 坏 JSON 被拒绝
         let bad = dir.join("bad.jsonl");
         std::fs::write(&bad, "not json at all").expect("write");
-        assert!(import_session(&index, bad.to_str().expect("utf8")).is_err());
+        assert!(import_session(&index, bad.to_str().expect("utf8"), &dir).is_err());
+        // 合法 JSON 但不是任何已知格式，也要拒绝
+        let unknown = dir.join("unknown.jsonl");
+        std::fs::write(&unknown, "{\"hello\":\"world\"}\n").expect("write");
+        let error = import_session(&index, unknown.to_str().expect("utf8"), &dir)
+            .expect_err("reject unknown format");
+        assert!(
+            error.to_string().contains("unrecognized"),
+            "clear error: {}",
+            error
+        );
         // 不存在的文件被拒绝
-        assert!(import_session(&index, dir.join("nope.jsonl").to_str().expect("utf8")).is_err());
+        assert!(
+            import_session(&index, dir.join("nope.jsonl").to_str().expect("utf8"), &dir).is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_converts_claude_code_fixture_into_a_restorable_session() {
+        let dir = temp_dir("claude-import");
+        let index = SessionIndex::new(dir.join("sessions"));
+        let source = dir.join("claude.jsonl");
+        std::fs::write(
+            &source,
+            concat!(
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"from claude\"}}\n",
+                "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":",
+                "[{\"type\":\"text\",\"text\":\"claude reply\"}]}}\n",
+            ),
+        )
+        .expect("write fixture");
+
+        let destination = import_session(&index, source.to_str().expect("utf8"), &dir)
+            .expect("import Claude Code transcript");
+        assert!(destination.is_file());
+        assert_ne!(destination, source, "foreign file is converted, not copied");
+        let entries = argent_session::SessionStore::read_all(&destination).expect("read");
+        let texts: Vec<String> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Message(message) => Some(message.text()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|text| text == "from claude"),
+            "user utterance is present"
+        );
+        assert!(
+            texts.iter().any(|text| text == "claude reply"),
+            "assistant utterance is present"
+        );
+        let list = index.list().expect("list");
+        assert!(list.iter().any(|(path, _)| path == &destination));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

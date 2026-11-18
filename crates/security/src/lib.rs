@@ -105,10 +105,27 @@ impl Policy {
 
     /// Check one path against the path rules.
     pub fn check_path(&self, path: &str, cwd: &Path) -> Option<String> {
+        // No path rules: keep the old behavior, including no filesystem work.
+        if self.deny_paths.is_empty() && self.allow_paths.is_empty() {
+            return None;
+        }
         let resolved = resolve(cwd, path);
-        let text = normalize(&resolved);
+        let lexical = normalize(&resolved);
+        // Symlinks can make a lexically allowed path point at a denied one, so
+        // every path rule is also applied to the resolved target. If the
+        // target (or its nearest existing ancestor) cannot be resolved we
+        // cannot prove the path safe, hence fail closed.
+        let canonical = match canonical_with_tail(&resolved) {
+            Ok(canonical) => normalize(&canonical),
+            Err(err) => {
+                return Some(format!(
+                    "the path '{}' could not be canonicalized for policy checking ({}); denying to avoid an unresolved symlink target",
+                    path, err
+                ));
+            }
+        };
         for pattern in &self.deny_paths {
-            if glob_matches(pattern, &text) {
+            if glob_matches(pattern, &lexical) || glob_matches(pattern, &canonical) {
                 return Some(format!(
                     "the path '{}' is denied by policy (rule '{}')",
                     path, pattern
@@ -116,11 +133,12 @@ impl Policy {
             }
         }
         if !self.allow_paths.is_empty() {
-            let allowed = self
-                .allow_paths
-                .iter()
-                .any(|pattern| glob_matches(pattern, &text));
-            if !allowed {
+            let allowed = |text: &str| {
+                self.allow_paths
+                    .iter()
+                    .any(|pattern| glob_matches(pattern, text))
+            };
+            if !allowed(&lexical) || !allowed(&canonical) {
                 return Some(format!("the path '{}' is outside the allowed set", path));
             }
         }
@@ -282,6 +300,63 @@ fn normalize(path: &Path) -> String {
         }
     }
     parts.join("/")
+}
+
+/// Resolve symlinks for as much of `path` as exists, then re-attach the
+/// remaining components. An error means no ancestor could be resolved, so
+/// callers can fail closed instead of checking an unverified path.
+fn canonical_with_tail(path: &Path) -> std::io::Result<PathBuf> {
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => return Ok(strip_verbatim_prefix(canonical)),
+        Err(err) if is_missing_path(&err) => {}
+        Err(err) => return Err(err),
+    }
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut current = path;
+    loop {
+        if let Some(name) = current.file_name() {
+            tail.push(name.to_os_string());
+        }
+        let Some(parent) = current.parent() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no resolvable ancestor for '{}'", path.display()),
+            ));
+        };
+        current = parent;
+        match std::fs::canonicalize(current) {
+            Ok(mut canonical) => {
+                for part in tail.iter().rev() {
+                    canonical.push(part);
+                }
+                return Ok(strip_verbatim_prefix(canonical));
+            }
+            Err(err) if is_missing_path(&err) => continue,
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+/// A missing target (or one below a non-directory) is expected for new
+/// paths; every other filesystem error is a resolution failure.
+fn is_missing_path(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
+/// Drop Windows' `\\?\` prefix so canonical text lines up with the lexical
+/// form used by the rules.
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix("\\\\?\\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path
 }
 
 /// Match a glob pattern against a normalized path.
@@ -466,6 +541,74 @@ mod tests {
         let cwd = Path::new("/work/project");
         assert!(policy.check_path("src/main.rs", cwd).is_none());
         assert!(policy.check_path("etc/passwd", cwd).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_under_an_allowed_root_cannot_reach_a_denied_home_path() {
+        let base =
+            std::env::temp_dir().join(format!("argent-policy-symlink-{}", std::process::id()));
+        let src = base.join("src");
+        let home = base.join("home");
+        let denied = home.join(".ssh");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&denied).unwrap();
+        let link = src.join("link");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&denied, &link).unwrap();
+
+        let policy = Policy {
+            deny_paths: vec![format!("{}/.ssh/**", home.to_string_lossy())],
+            allow_paths: vec!["src/**".to_string()],
+            ..Policy::default()
+        };
+        let reason = policy.check_path("src/link/id_rsa", &base);
+        assert!(
+            reason.is_some(),
+            "a symlink under an allowed root must be checked at its canonical target"
+        );
+        assert!(
+            reason.unwrap().contains("denied by policy"),
+            "the canonical target must be matched against the deny rules"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unresolvable_symlink_fails_closed_under_an_active_policy() {
+        let base = std::env::temp_dir().join(format!("argent-policy-loop-{}", std::process::id()));
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let loop_link = src.join("loop");
+        let _ = std::fs::remove_file(&loop_link);
+        std::os::unix::fs::symlink("loop", &loop_link).unwrap();
+
+        let policy = Policy {
+            allow_paths: vec!["src/**".to_string()],
+            ..Policy::default()
+        };
+        let reason = policy.check_path("src/loop/file.rs", &base);
+        assert!(
+            reason
+                .as_deref()
+                .is_some_and(|text| text.contains("could not be canonicalized")),
+            "an unresolved symlink must be denied with a clear reason"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn nonexistent_paths_still_match_rules_via_existing_ancestors() {
+        let cwd = std::env::temp_dir();
+        let policy = Policy {
+            deny_paths: vec!["**/.env".to_string()],
+            allow_paths: vec!["src/**".to_string()],
+            ..Policy::default()
+        };
+        assert!(policy.check_path("src/new/file.rs", &cwd).is_none());
+        assert!(policy.check_path("src/new/.env", &cwd).is_some());
+        assert!(policy.check_path("docs/new/file.rs", &cwd).is_some());
     }
 
     #[test]

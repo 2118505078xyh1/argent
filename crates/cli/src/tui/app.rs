@@ -36,6 +36,8 @@ pub(super) struct App {
     pub(super) pending_text: std::collections::VecDeque<char>,
     /// 自管的鼠标拖选：起点、当前终点（屏幕行列，0 基）。
     pub(super) selection: Option<((u16, u16), (u16, u16))>,
+    /// 剪贴板写入口；生产用系统剪贴板，测试可注入记录器。
+    pub(super) copy_to_clipboard: fn(&str) -> argent_core::error::Result<()>,
     /// 按下点落在输入区：(光标位置, 行, 列)。原地松开只移光标；
     /// 拖动则升级成普通选区（从按下点起，松开复制）。
     pub(super) input_press: Option<(usize, u16, u16)>,
@@ -134,6 +136,7 @@ impl App {
             animate_stream: false,
             pending_text: std::collections::VecDeque::new(),
             selection: None,
+            copy_to_clipboard: argent_core::clipboard::copy_text,
             input_press: None,
             input_hit_rows: Vec::new(),
             undo_stack: Vec::new(),
@@ -687,7 +690,7 @@ impl App {
                 } else {
                     let text = self.selected_text(start, (row, col));
                     if !text.trim().is_empty() {
-                        match argent_core::clipboard::copy_text(&text) {
+                        match (self.copy_to_clipboard)(&text) {
                             Ok(()) => {
                                 self.set_status(format!("copied {} chars", text.chars().count()))
                             }
@@ -1027,7 +1030,7 @@ impl App {
                         1 => {
                             if let Some(path) = self.ready.as_ref().map(|r| r.session_path.clone())
                             {
-                                let _ = argent_core::clipboard::copy_text(&path);
+                                let _ = (self.copy_to_clipboard)(&path);
                                 self.set_status(format!("copied {}", path));
                             }
                             self.overlay = None;
@@ -4168,6 +4171,13 @@ mod cursor_tests {
     use super::*;
     use run::*;
 
+    static LAST_COPIED_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+    fn recording_copy(text: &str) -> argent_core::error::Result<()> {
+        *LAST_COPIED_TEXT.lock().unwrap() = Some(text.to_owned());
+        Ok(())
+    }
+
     fn app() -> App {
         App::new(
             Vec::new(),
@@ -4988,8 +4998,10 @@ mod cursor_tests {
 
     #[test]
     fn dragging_in_the_input_area_copies_the_selected_text() {
+        *LAST_COPIED_TEXT.lock().unwrap() = None;
         let worker = test_worker();
         let mut app = app();
+        app.copy_to_clipboard = recording_copy;
         app.input = "abcd".chars().collect();
         app.frame(40, 20);
         let (row, _, _) = app.input_hit_rows[0].clone();
@@ -5001,18 +5013,18 @@ mod cursor_tests {
         app.handle_key(&worker, Key::MouseRelease { row, col: 4 });
         assert!(app.selection.is_none(), "release clears the selection");
         assert!(app.input_press.is_none());
-        // 复制路径走到了：剪贴板在测试环境里可能失败，两种状态都算通过。
         let status = app
             .status
             .as_ref()
             .map(|(text, _)| text.clone())
             .unwrap_or_default();
-        // 成功 "copied N chars" / 失败 "copy failed: ..." 两种都接受，机器剪贴板不可靠。
-        assert!(
-            status.starts_with("copied") || status.starts_with("copy failed"),
-            "{}",
-            status
-        );
+        assert!(status.starts_with("copied"), "{}", status);
+        let copied = LAST_COPIED_TEXT
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("drag release copies the selection");
+        assert_eq!(copied, "bc");
     }
 
     #[test]

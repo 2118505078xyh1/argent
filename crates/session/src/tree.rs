@@ -94,6 +94,24 @@ impl SessionTree {
         }
     }
 
+    /// Whether `id` is `ancestor` or one of its descendants.
+    fn reaches(&self, id: &str, ancestor: &str) -> bool {
+        let mut current = id;
+        loop {
+            if current == ancestor {
+                return true;
+            }
+            match self
+                .nodes
+                .get(current)
+                .and_then(|node| node.parent.as_deref())
+            {
+                Some(parent) => current = parent,
+                None => return false,
+            }
+        }
+    }
+
     /// Whether a node with this id exists.
     pub fn contains(&self, id: &str) -> bool {
         self.nodes.contains_key(id)
@@ -130,10 +148,15 @@ impl SessionTree {
     /// Lines carry `id` / `parent` when they were written by the tree path;
     /// older linear files do not, and their entries are minted fresh ids
     /// chained in file order. An `active` event line restores the branch the
-    /// session was on; without one the last line wins.
+    /// session was on, unless a later record appended under that node made
+    /// the marker stale; without one the last line wins.
     pub fn from_raw(lines: &[Json]) -> Result<SessionTree> {
         let mut tree = SessionTree::new();
         let mut pending_active: Option<String> = None;
+        // Nodes written after the latest active event. Only those can make
+        // the marker stale; children that predate it belong to the branch
+        // the operator deliberately checked out.
+        let mut after_active: Vec<String> = Vec::new();
         for line in lines {
             let entry = match Entry::from_json(line) {
                 Some(entry) => entry,
@@ -142,25 +165,34 @@ impl SessionTree {
             if let Entry::Event(event) = &entry {
                 if event.str_or("type", "") == "active" {
                     pending_active = Some(event.str_or("id", ""));
+                    after_active.clear();
                     continue;
                 }
             }
             let id = line.str_or("id", "");
-            if id.is_empty() || tree.contains(&id) {
-                tree.append(entry)?;
+            let inserted = if id.is_empty() || tree.contains(&id) {
+                tree.append(entry)?
             } else {
                 let parent = match line.get("parent") {
                     Some(Json::Str(parent)) => Some(parent.clone()),
                     _ => None,
                 };
                 tree.insert_node(&id, parent, entry)?;
+                id
+            };
+            if pending_active.is_some() {
+                after_active.push(inserted);
             }
         }
-        // A persisted active marker only wins when it still points at a leaf:
-        // fork/checkout writes the marker before new records, and those newer
-        // lines must not be pulled off the active path by a stale anchor.
+        // A persisted marker wins even when its target has older children:
+        // checkout to a branch point is legitimate. It is stale only when a
+        // later record was appended under it, in which case that newer
+        // branch must stay active.
         if let Some(id) = pending_active {
-            if tree.contains(&id) && tree.children(&id).is_empty() {
+            let stale = after_active
+                .iter()
+                .any(|candidate| tree.reaches(candidate, &id));
+            if tree.contains(&id) && !stale {
                 tree.set_active(&id)?;
             }
         }
@@ -498,5 +530,61 @@ mod tests {
     fn rejects_an_unknown_parent() {
         let mut tree = SessionTree::new();
         assert!(tree.append_to("nope", user("x")).is_err());
+    }
+
+    fn message_line(id: &str, parent: Option<&str>, text: &str) -> Json {
+        let mut line = user(text).to_json();
+        line.set("id", Json::string(id));
+        line.set("parent", parent.map(Json::string).unwrap_or(Json::Null));
+        line
+    }
+
+    fn active_line(id: &str) -> Json {
+        let mut event = Json::obj();
+        event.set("type", Json::string("active"));
+        event.set("id", Json::string(id));
+        Entry::Event(event).to_json()
+    }
+
+    #[test]
+    fn persisted_active_marker_wins_at_a_branch_point() {
+        let lines = vec![
+            message_line("n1", None, "root"),
+            message_line("n2", Some("n1"), "branch one"),
+            message_line("n3", Some("n1"), "branch two"),
+            // Checkout back to the branch point: the older children do not
+            // make this marker stale.
+            active_line("n1"),
+        ];
+        let tree = SessionTree::from_raw(&lines).expect("parse");
+        assert_eq!(tree.active(), Some("n1"));
+        assert_eq!(tree.children("n1").len(), 2);
+        assert_eq!(
+            tree.messages().len(),
+            1,
+            "only the checked-out path is live"
+        );
+    }
+
+    #[test]
+    fn stale_active_marker_does_not_override_a_newer_reply() {
+        let lines = vec![
+            message_line("n1", None, "root"),
+            message_line("n2", Some("n1"), "checked out here"),
+            active_line("n2"),
+            // A reply written after the marker must remain the active leaf.
+            message_line("n3", Some("n2"), "newer reply"),
+        ];
+        let tree = SessionTree::from_raw(&lines).expect("parse");
+        assert_eq!(tree.active(), Some("n3"));
+        let texts: Vec<String> = tree.messages().iter().map(|m| m.text()).collect();
+        assert_eq!(
+            texts,
+            [
+                "root".to_string(),
+                "checked out here".to_string(),
+                "newer reply".to_string()
+            ]
+        );
     }
 }

@@ -15,8 +15,8 @@ use argent_tools::{ToolCtx, ToolRegistry};
 
 use crate::events::{AgentEvent, EventSink, FinishReason};
 use crate::guards::{
-    canonical_args, repeat_key, BlockedCall, EffortState, RecentCall, REPEAT_GUARD_MAX_ENTRIES,
-    REPEAT_GUARD_WINDOW,
+    blocked_key, repeat_key, BlockedCall, EffortState, RecentCall, BLOCKED_CALL_LIMIT,
+    REPEAT_GUARD_MAX_ENTRIES, REPEAT_GUARD_WINDOW,
 };
 
 /// Upper bound on assistant turns in a single run.
@@ -1626,7 +1626,8 @@ impl Agent {
         // can approve. A mis-click must not be able to wave it through.
         if let Some(policy) = self.config.policy.clone() {
             if let Some(reason) = policy(&call.name, args) {
-                let repeated = self.previously_blocked(&call.name, args).is_some();
+                let prior_blocks = self.blocked_repeat_count(&call.name, &reason);
+                let repeated = prior_blocks + 1 >= BLOCKED_CALL_LIMIT;
                 self.audit(
                     &call.name,
                     args,
@@ -1646,7 +1647,7 @@ impl Agent {
                         call.name, reason
                     )
                 };
-                self.remember_blocked(&call.name, args, &reason);
+                self.remember_blocked(&call.name, &reason);
                 if repeated {
                     self.policy_stop = Some(reason);
                 }
@@ -1758,31 +1759,30 @@ impl Agent {
         }
     }
 
-    /// Whether this call was already refused by the policy in this run.
+    /// How often this tool was refused for the same reason in this run.
     ///
     /// The window matches the repeat guard: a refusal from twenty turns ago
-    /// says nothing about the model now.
-    fn previously_blocked(&self, name: &str, args: &Json) -> Option<String> {
-        let key = canonical_args(args);
+    /// says nothing about the model now. Arguments are not compared — a
+    /// rewritten command that earns the same refusal is the same dead end.
+    fn blocked_repeat_count(&self, name: &str, reason: &str) -> usize {
+        let key = blocked_key(name, reason);
         self.blocked_calls
             .iter()
-            .rev()
-            .find(|blocked| {
-                blocked.name == name
-                    && blocked.args == key
+            .filter(|blocked| {
+                blocked.key == key
                     && self.current_turn.saturating_sub(blocked.turn) <= REPEAT_GUARD_WINDOW
             })
-            .map(|blocked| blocked.reason.clone())
+            .count()
     }
 
     /// Remember a refused call.
-    fn remember_blocked(&mut self, name: &str, args: &Json, reason: &str) {
+    fn remember_blocked(&mut self, name: &str, reason: &str) {
         if self.blocked_calls.len() >= REPEAT_GUARD_MAX_ENTRIES {
             self.blocked_calls.remove(0);
         }
         self.blocked_calls.push(BlockedCall {
             name: name.to_string(),
-            args: canonical_args(args),
+            key: blocked_key(name, reason),
             turn: self.current_turn,
             reason: reason.to_string(),
         });
@@ -2252,6 +2252,35 @@ mod tests {
         }
     }
 
+    /// A bash stand-in that records any call that slips past the policy.
+    struct CountingBash {
+        executions: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Tool for CountingBash {
+        fn name(&self) -> &str {
+            "bash"
+        }
+
+        fn description(&self) -> &str {
+            "fake bash"
+        }
+
+        fn parameters(&self) -> Json {
+            argent_tools::schema_object(vec![], vec![])
+        }
+
+        fn is_mutating(&self) -> bool {
+            true
+        }
+
+        fn execute(&self, _ctx: &ToolCtx, _args: &Json) -> Result<ToolResult> {
+            self.executions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ToolResult::ok("ran"))
+        }
+    }
+
     /// A mutating tool that stands in for `write`.
     struct FakeWrite;
 
@@ -2355,6 +2384,81 @@ mod tests {
         }
         // 触发停止的那次调用也必须有结果，否则历史无法重放。
         assert_every_call_is_answered(&agent);
+    }
+
+    #[test]
+    fn whitespace_only_retries_of_a_denied_bash_stop_the_run() {
+        let _guard = run_lock();
+        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = ToolRegistry::with_core();
+        registry.register(Box::new(CountingBash {
+            executions: Arc::clone(&executions),
+        }));
+
+        // The same denied command is asked for three times with only
+        // whitespace changed. The second refusal must end the run: the third
+        // call never reaches the policy gate or the tool registry.
+        let mut second_turn = Message::assistant("trying again");
+        second_turn.tool_calls = vec![
+            ToolCall::new("b2", "bash", r#"{"command":"echo  denied"}"#),
+            ToolCall::new("b3", "bash", r#"{"command":"  echo denied  "}"#),
+        ];
+        let mut agent = Agent::new(
+            Box::new(ScriptedProvider::new(vec![
+                tool_turn("b1", "bash", r#"{"command":"echo denied"}"#),
+                second_turn,
+                Message::assistant("should never be requested"),
+            ])),
+            Arc::new(registry),
+            AgentConfig::new("test-model"),
+            ToolCtx::new(std::env::temp_dir()),
+            "system",
+        );
+        agent.config.max_turns = 8;
+        agent.config.policy = Some(Arc::new(|name, _args| {
+            (name == "bash").then(|| "the command is denied by policy".to_string())
+        }));
+        let decisions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&decisions);
+        agent.config.audit = Some(Arc::new(move |_, _, decision, _| {
+            recorder.lock().unwrap().push(decision.to_string());
+        }));
+
+        let mut sink = crate::events::CollectingSink::default();
+        let reason = agent.run("run the command", &mut sink).expect("run");
+        match reason {
+            FinishReason::PolicyBlocked(message) => {
+                assert!(message.contains("denied by policy"));
+            }
+            other => panic!("expected a policy stop, got {:?}", other),
+        }
+        assert_eq!(
+            executions.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no denied bash call may reach the tool"
+        );
+        assert_eq!(
+            *decisions.lock().unwrap(),
+            vec!["blocked".to_string(), "blocked-again".to_string()]
+        );
+        assert_every_call_is_answered(&agent);
+        assert!(agent
+            .history()
+            .iter()
+            .any(|message| message.text() == UNRUN_POLICY));
+        let assistant_turns = agent
+            .history()
+            .iter()
+            .filter(|message| message.role == argent_ai::Role::Assistant)
+            .count();
+        assert_eq!(
+            assistant_turns, 2,
+            "the run must stop at the second refusal"
+        );
+        assert!(
+            assistant_turns < agent.config.max_turns,
+            "the run must not burn its whole turn budget"
+        );
     }
 
     #[test]

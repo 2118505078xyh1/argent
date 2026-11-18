@@ -307,6 +307,14 @@ pub fn start_session(
                         }
                         Err(e) => {
                             let _ = event_tx.send(UiEvent::Error(e.to_string()));
+                            // 只发 Error 会让桌面的用量与请求计数停在上一回合；
+                            // 补一个终止回合事件，错误原因随 reason 一起带走。
+                            let _ = event_tx.send(UiEvent::TurnDone {
+                                reason: FinishReason::Error(e.to_string()),
+                                usage: agent.usage(),
+                                requests: agent.requests(),
+                                cost: agent.usage_cost(),
+                            });
                         }
                     }
                     let _ = event_tx.send(UiEvent::Sessions(session_rows(&index)));
@@ -1036,7 +1044,7 @@ fn build_agent(
                 session: session_label.clone(),
                 tool: name.to_string(),
                 decision: decision.to_string(),
-                reason,
+                reason: reason.map(|text| argent_security::redact_text(&text)),
                 arguments: Some(argent_security::redact_json(args).dump()),
             };
             audit.record(&entry);

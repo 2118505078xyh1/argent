@@ -268,6 +268,7 @@ impl MarketplaceStore {
     }
 
     fn add_remote(&self, url: &str, name: Option<&str>) -> Result<Marketplace> {
+        validate_git_source(url)?;
         let name = name.map(str::to_string).unwrap_or_else(|| repo_name(url));
         let root = self.cache_root().join(sanitize(&name));
         if root.join(".git").is_dir() {
@@ -289,7 +290,7 @@ impl MarketplaceStore {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("marketplace");
-            git(parent, &["clone", "--depth", "1", url, leaf])?;
+            git(parent, &["clone", "--depth", "1", "--", url, leaf])?;
         }
         Marketplace::load(&root)
     }
@@ -373,6 +374,7 @@ impl MarketplaceStore {
         if let Some(source) = catalog.local_source(entry) {
             return PluginManager::install_local(&source, destination_root, force, policy);
         }
+        validate_git_source(&entry.source)?;
         // A remote plugin is cloned into a scratch directory, then copied like
         // any local plugin. The scratch copy is removed afterwards.
         let scratch = self
@@ -396,6 +398,7 @@ impl MarketplaceStore {
                 "clone",
                 "--depth",
                 "1",
+                "--",
                 &entry.source,
                 scratch
                     .file_name()
@@ -439,6 +442,26 @@ fn default_path() -> PathBuf {
         .storage()
         .join("cli")
         .join("marketplaces.json")
+}
+
+/// 拒绝会被 git 当成命令行选项或含有控制字符的远程源。
+fn validate_git_source(source: &str) -> Result<()> {
+    if source.is_empty() {
+        return Err(Error::config("git 源不能为空"));
+    }
+    if source.starts_with('-') {
+        return Err(Error::config(format!(
+            "git 源 '{}' 不能以 '-' 开头（会被当作命令行选项）",
+            source.escape_debug()
+        )));
+    }
+    if source.chars().any(char::is_control) {
+        return Err(Error::config(format!(
+            "git 源 '{}' 含有控制字符",
+            source.escape_debug()
+        )));
+    }
+    Ok(())
 }
 
 fn is_remote(source: &str) -> bool {
@@ -552,5 +575,65 @@ mod tests {
         assert_eq!(manifest.name, "demo");
         assert!(destination.join("demo").is_dir());
         assert_eq!(market.plugins.len(), 1);
+    }
+
+    #[test]
+    fn rejects_option_like_and_control_git_sources() {
+        for bad in [
+            "",
+            "--upload-pack=evil",
+            "-oProxyCommand=evil",
+            "https://example.com/repo.git\n--upload-pack=evil",
+            "https://example.com/repo\u{0000}.git",
+        ] {
+            assert!(
+                validate_git_source(bad).is_err(),
+                "must reject git source {:?}",
+                bad
+            );
+        }
+        for good in ["https://example.com/repo.git", "git@host:org/repo.git"] {
+            assert!(validate_git_source(good).is_ok(), "must accept {:?}", good);
+        }
+    }
+
+    #[test]
+    fn add_remote_rejects_an_option_like_source() {
+        let inventory = scratch("option-inventory").join("marketplaces.json");
+        let store = MarketplaceStore::at(&inventory).expect("open");
+        let error = store
+            .add_remote("--upload-pack=evil", None)
+            .expect_err("option-like source must be refused");
+        assert!(error.to_string().contains("'-'"), "{}", error);
+    }
+
+    #[test]
+    fn install_rejects_an_unsafe_remote_source() {
+        let inventory = scratch("unsafe-inventory").join("marketplaces.json");
+        let store = MarketplaceStore::at(&inventory).expect("open");
+        let entry = MarketplaceEntry {
+            name: "demo".to_string(),
+            source: "https://example.com/repo.git\n--upload-pack=evil".to_string(),
+            description: String::new(),
+            version: String::new(),
+        };
+        let catalog = Marketplace {
+            name: "personal".to_string(),
+            root: scratch("unsafe-catalog-root"),
+            path: PathBuf::new(),
+            plugins: vec![entry.clone()],
+        };
+        let destination = scratch("unsafe-destination");
+        let error = store
+            .install(
+                &catalog,
+                &entry,
+                &destination,
+                false,
+                &mut InstallPolicy::default(),
+            )
+            .expect_err("control characters in a remote source must be refused");
+        assert!(error.to_string().contains("控制字符"), "{}", error);
+        assert!(!destination.join("demo").exists());
     }
 }

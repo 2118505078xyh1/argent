@@ -600,6 +600,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
         let audit = Arc::new(audit);
         let session = session_path.clone();
         agent_config.audit = Some(Arc::new(move |name, args, decision, reason| {
+            let reason = reason.map(|text| argent_security::redact_text(&text));
             let entry = argent_security::AuditEntry {
                 timestamp: argent_session::now_iso(),
                 session: session.to_string_lossy().into_owned(),
@@ -2479,6 +2480,16 @@ pub(crate) fn doctor() -> Result<i32> {
                 "powershell UIA     : {}",
                 yes(argent_core::process::find_program("powershell", &[]).is_some())
             );
+            // HTTPS is delegated to curl, resolved to an absolute path the
+            // same way the request path resolves it: a bare program name can
+            // pick up a different curl with another TLS backend on Windows.
+            let curl = argent_core::process::which("curl");
+            println!(
+                "curl               : {}",
+                curl.as_deref()
+                    .map(|path| format!("yes ({path})"))
+                    .unwrap_or_else(|| "no (not on PATH)".to_string())
+            );
             println!("hook documents     : {}", load_hooks(&manager, &cwd).len());
 
             // The safety layer is worth reporting: an operator who thinks a
@@ -2529,6 +2540,12 @@ pub(crate) fn doctor() -> Result<i32> {
                     );
                 }
                 argent_tools::ShellFlavor::PowerShell => {}
+            }
+            if curl.is_none() {
+                warnings.push(
+                    "curl is not on PATH; HTTPS provider and MCP traffic need it for TLS."
+                        .to_string(),
+                );
             }
             let skill_roots = argent_tools::SkillRegistry::default_roots(&cwd);
             if skill_roots.iter().all(|root| !root.is_dir()) {

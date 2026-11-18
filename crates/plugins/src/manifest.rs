@@ -24,6 +24,48 @@ pub const MANIFEST_PATHS: [&str; 4] = [
     "plugin.json",
 ];
 
+/// 校验插件名称是否是安全的单个路径组件。
+///
+/// 插件名称会被直接当作目录名用于安装/卸载，因此只接受字母、数字以及
+/// `-`、`_`、`.`、`@`，并显式拒绝路径遍历、绝对路径、控制字符和 Windows
+/// 保留设备名。
+pub(crate) fn validate_plugin_name(name: &str) -> std::result::Result<(), String> {
+    if name.is_empty() {
+        return Err("插件名称不能为空".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err(format!("插件名称 '{}' 是保留的目录名", name));
+    }
+    if name.chars().any(|ch| {
+        ch.is_control() || ch == ':' || ch == '/' || ch == '\\' || std::path::is_separator(ch)
+    }) {
+        return Err(format!(
+            "插件名称 '{}' 含有路径分隔符、冒号或控制字符",
+            name.escape_debug()
+        ));
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.' | '@'))
+    {
+        return Err(format!(
+            "插件名称 '{}' 只能包含字母、数字以及 '-'、'_'、'.'、'@'",
+            name
+        ));
+    }
+    // Windows 设备名不区分大小写，并且带扩展名时仍然保留（如 `con.txt`）。
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved_word = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0');
+    if reserved_word {
+        return Err(format!("插件名称 '{}' 是 Windows 保留设备名", name));
+    }
+    Ok(())
+}
+
 /// One MCP server declared by a plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpServerDecl {
@@ -124,6 +166,7 @@ impl PluginManifest {
         } else {
             name
         };
+        validate_plugin_name(&name).map_err(Error::config)?;
         let author = value.get("author").and_then(|author| {
             author
                 .get("name")
@@ -448,5 +491,52 @@ mod tests {
     fn a_directory_without_a_manifest_is_rejected() {
         let root = scratch("missing");
         assert!(PluginManifest::load(&root).is_err());
+    }
+
+    #[test]
+    fn rejects_traversal_and_unsafe_plugin_names() {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "sub/dir",
+            "sub\\dir",
+            "C:evil",
+            "with space",
+            "name;semi",
+            "nul",
+            "CON.txt",
+            "com1",
+            "lpt9.log",
+            "a\u{0000}b",
+            "a\nb",
+        ] {
+            assert!(
+                validate_plugin_name(bad).is_err(),
+                "must reject plugin name {:?}",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_compatible_plugin_names() {
+        for good in ["alpha", "my-plugin_v1.2", "scope@plugin", "插件"] {
+            assert!(
+                validate_plugin_name(good).is_ok(),
+                "must accept plugin name {:?}: {:?}",
+                good,
+                validate_plugin_name(good)
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_parse_rejects_a_traversal_name() {
+        let root = scratch("bad-name");
+        std::fs::write(root.join("plugin.json"), r#"{"name":"../escape"}"#).unwrap();
+        let err = PluginManifest::load(&root).expect_err("traversal name must be refused");
+        assert!(err.to_string().contains("插件名称"), "{}", err);
     }
 }

@@ -151,15 +151,70 @@ fn placeholder(kind: &str) -> &'static str {
     }
 }
 
-/// Redact a JSON document by stringifying, scrubbing and parsing back.
+/// Keys whose string values are credentials regardless of their prefix.
 ///
-/// The document keeps its shape: a key whose value was a credential becomes a
-/// placeholder string, not a deleted field.
+/// Matching normalizes case and drops separators, so `API-KEY`, `api_key` and
+/// `ApiKey` all land on the same entry.
+const SECRET_KEYS: &[(&str, &str)] = &[
+    ("apikey", "api key"),
+    ("secret", "secret"),
+    ("password", "password"),
+    ("passwd", "password"),
+    ("token", "token"),
+    ("accesskey", "access key"),
+    ("privatekey", "private key"),
+];
+
+/// Match an object key against the secret list after normalization.
+fn secret_key_kind(key: &str) -> Option<&'static str> {
+    let normalized: String = key
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|ch| ch.is_alphanumeric())
+        .collect();
+    SECRET_KEYS
+        .iter()
+        .find(|(name, _)| *name == normalized)
+        .map(|(_, kind)| *kind)
+}
+
+/// Redact a JSON value structurally. `secret_kind` is set when this value is
+/// held under a secret-ish key: in that case a string is replaced wholesale.
+fn redact_value(
+    value: &argent_core::json::Json,
+    secret_kind: Option<&'static str>,
+) -> argent_core::json::Json {
+    use argent_core::json::Json;
+    match value {
+        Json::Str(text) => match secret_kind {
+            Some(kind) => Json::string(placeholder(kind)),
+            None => Json::string(redact_text(text)),
+        },
+        Json::Obj(entries) => Json::Obj(
+            entries
+                .iter()
+                .map(|(key, value)| (key.clone(), redact_value(value, secret_key_kind(key))))
+                .collect(),
+        ),
+        Json::Arr(items) => Json::Arr(items.iter().map(|item| redact_value(item, None)).collect()),
+        Json::Raw(raw) => match Json::parse(raw) {
+            Ok(parsed) => redact_value(&parsed, secret_kind),
+            Err(_) => match secret_kind {
+                Some(kind) => Json::string(placeholder(kind)),
+                None => Json::string(redact_text(raw)),
+            },
+        },
+        other => other.clone(),
+    }
+}
+
+/// Redact a JSON document without flattening it to text.
+///
+/// A string held under a secret-ish key becomes a placeholder even when it has
+/// no recognizable prefix. Every other string is scrubbed with [`redact_text`].
+/// Objects, arrays and primitives keep their shape.
 pub fn redact_json(value: &argent_core::json::Json) -> argent_core::json::Json {
-    let text = value.dump();
-    let scrubbed = redact_text(&text);
-    argent_core::json::Json::parse(&scrubbed)
-        .unwrap_or_else(|_| argent_core::json::Json::string(scrubbed))
+    redact_value(value, None)
 }
 
 #[cfg(test)]
@@ -209,5 +264,90 @@ mod tests {
         // Nothing after the prefix means there is no credential to hide.
         let out = redact_text("Bearer ");
         assert_eq!(out, "Bearer ");
+    }
+
+    #[test]
+    fn nested_password_value_is_removed_and_shape_preserved() {
+        let value = argent_core::json::Json::parse(
+            r#"{"name":"db","config":{"host":"localhost","password":"hunter2"},"port":5432}"#,
+        )
+        .unwrap();
+        let out = redact_json(&value);
+        assert!(!out.dump().contains("hunter2"));
+        assert_eq!(out.str_or("name", ""), "db");
+        assert_eq!(out.get("port").and_then(|v| v.as_i64()), Some(5432));
+        let config = out.get("config").unwrap();
+        assert_eq!(config.str_or("host", ""), "localhost");
+        assert_eq!(
+            config.get("password").and_then(|v| v.as_str()),
+            Some("[redacted:password]")
+        );
+    }
+
+    #[test]
+    fn token_in_nested_array_is_removed() {
+        let value = argent_core::json::Json::parse(
+            r#"{"steps":[{"tool":"read","token":"plain-token-no-prefix"},{"token":"second-token"}]}"#,
+        )
+        .unwrap();
+        let out = redact_json(&value);
+        let dump = out.dump();
+        assert!(!dump.contains("plain-token-no-prefix"));
+        assert!(!dump.contains("second-token"));
+        let steps = out.get("steps").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].str_or("tool", ""), "read");
+        assert_eq!(steps[0].str_or("token", ""), "[redacted:token]");
+        assert_eq!(steps[1].str_or("token", ""), "[redacted:token]");
+    }
+
+    #[test]
+    fn secret_keys_normalize_case_and_separators() {
+        let value = argent_core::json::Json::parse(
+            r#"{"API-KEY":"one","ApiKey":"two","access_key":"three","Private-Key":"four","passwd":"five"}"#,
+        )
+        .unwrap();
+        let out = redact_json(&value);
+        let dump = out.dump();
+        for secret in ["one", "two", "three", "four", "five"] {
+            assert!(!dump.contains(secret));
+        }
+        assert_eq!(out.str_or("API-KEY", ""), "[redacted:api key]");
+        assert_eq!(out.str_or("ApiKey", ""), "[redacted:api key]");
+        assert_eq!(out.str_or("access_key", ""), "[redacted:access key]");
+        assert_eq!(out.str_or("Private-Key", ""), "[redacted:private key]");
+        assert_eq!(out.str_or("passwd", ""), "[redacted:password]");
+    }
+
+    #[test]
+    fn ordinary_json_strings_still_get_text_redaction() {
+        let value =
+            argent_core::json::Json::parse(r#"{"note":"use sk-testvalue123 to log in"}"#).unwrap();
+        let note = redact_json(&value).str_or("note", "");
+        assert!(!note.contains("sk-testvalue123"));
+        assert!(note.contains("[redacted:api key]"));
+    }
+
+    #[test]
+    fn raw_json_is_parsed_and_redacted() {
+        let wrapped =
+            argent_core::json::Json::parse(r#"{"outer":{"password":"raw-secret"}}"#).unwrap();
+        let raw = argent_core::json::Json::Raw(wrapped.dump());
+        let out = redact_json(&raw);
+        assert!(!out.dump().contains("raw-secret"));
+        assert_eq!(
+            out.get("outer")
+                .and_then(|v| v.get("password"))
+                .and_then(|v| v.as_str()),
+            Some("[redacted:password]")
+        );
+
+        // A Raw value held directly under a secret key is replaced as a whole.
+        let raw_secret = argent_core::json::Json::Raw(r#""raw-secret""#.to_string());
+        let entry = argent_core::json::Json::from_pairs(vec![("password", raw_secret)]);
+        assert_eq!(
+            redact_json(&entry).str_or("password", ""),
+            "[redacted:password]"
+        );
     }
 }
