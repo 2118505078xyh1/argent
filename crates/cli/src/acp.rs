@@ -753,3 +753,130 @@ mod tests {
         assert_eq!(update.get("content").unwrap().str_or("text", ""), "hi");
     }
 }
+
+/// The shared frontend contract, exercised against the ACP server.
+///
+/// argent runs three worker loops over the same agent. A rule that only holds
+/// in one of them is a bug waiting to happen: the terminal UI once left its
+/// "working" flag on when a prompt failed, because the worker reported the
+/// error but never closed the turn.
+///
+/// The rule under test lives in `argent_ui_core::turn` so every frontend
+/// checks against the same text. This module proves the ACP server honors it.
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use argent_agent::{Agent, AgentConfig};
+    use argent_ai::{OpenAiConfig, OpenAiProvider};
+    use argent_session::SessionIndex;
+    use argent_tools::{ToolCtx, ToolRegistry};
+    use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Collect the events of one turn and check them against the contract.
+    fn collect_turn(events: &std::sync::mpsc::Receiver<Event>) -> TurnEvents {
+        let mut collected = TurnEvents::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match events.recv_timeout(remaining) {
+                // Only the frontend's turn event closes the turn. The agent's
+                // own `AgentEvent::Finished` happens inside the run.
+                Ok(Event::TurnDone { reason, .. }) => collected.terminal(reason),
+                Ok(Event::Error(message)) => collected.error(message),
+                Ok(_) => {}
+                Err(_) => break,
+            }
+            if collected.has_single_terminal() {
+                let grace = std::time::Instant::now() + Duration::from_millis(200);
+                while std::time::Instant::now() < grace {
+                    match events.recv_timeout(Duration::from_millis(50)) {
+                        Ok(Event::TurnDone { reason, .. }) => collected.terminal(reason),
+                        Ok(Event::Error(message)) => collected.error(message),
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+                break;
+            }
+        }
+        collected
+    }
+
+    #[test]
+    fn a_failed_prompt_closes_the_turn_exactly_once() {
+        let base_url = argent_ui_core::failing_base_url();
+        let dir = std::env::temp_dir().join(format!("argent-acp-contract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let index = SessionIndex::new(dir.join("sessions"));
+        let path = index.create(&dir, "contract").expect("create");
+        let session = crate::session_ctx::SessionContext::open(path).expect("open");
+
+        let provider = OpenAiProvider::new(OpenAiConfig::new(base_url).with_models(vec![
+            argent_ai::ModelInfo {
+                id: "contract-model".to_string(),
+                display_name: "Contract".to_string(),
+                context_length: 32_000,
+                max_output: 0,
+                supports_tools: true,
+                supports_reasoning: false,
+                supports_vision: false,
+                reasoning_levels: Vec::new(),
+            },
+        ]));
+        let agent = Agent::new(
+            Box::new(provider),
+            Arc::new(ToolRegistry::with_core()),
+            AgentConfig::new("contract-model"),
+            ToolCtx::new(dir.clone()),
+            "system",
+        );
+
+        let (command_tx, command_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let worker_dir = dir.clone();
+        std::thread::spawn(move || {
+            worker(
+                agent,
+                session,
+                argent_core::config::Config::default(),
+                index,
+                argent_hooks::HookConfig::default(),
+                worker_dir,
+                command_rx,
+                event_tx,
+            )
+        });
+
+        // Drain the startup notices before the turn begins.
+        while event_rx.try_recv().is_ok() {}
+        let _ = command_tx.send(Command::Prompt("hello".to_string()));
+
+        let events = collect_turn(&event_rx);
+        assert_eq!(
+            events.terminal.len(),
+            1,
+            "the turn must close with exactly one terminal event"
+        );
+        assert!(
+            matches!(events.terminal[0], argent_agent::FinishReason::Error(_)),
+            "a refused request must be reported as an error turn: {:?}",
+            events.terminal[0]
+        );
+        let _ = command_tx.send(Command::Shutdown);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_contract_rejects_a_turn_without_a_terminal_event() {
+        // The shared rule itself, so a frontend test that forgets to close the
+        // turn fails with a contract violation rather than a bare count.
+        let mut events = TurnEvents::default();
+        events.error("the provider is down");
+        assert!(check_turn(&events).is_err());
+        assert!(check_turn(&failed_turn("the provider is down", false)).is_ok());
+    }
+}

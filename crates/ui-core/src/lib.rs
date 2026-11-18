@@ -8,15 +8,21 @@
 //! writing a new view, not re-deriving the state machine.
 
 pub mod command;
+#[cfg(any(test, feature = "test-support"))]
+pub mod failing_provider;
 pub mod icon;
 pub mod metrics;
 pub mod palette;
 pub mod transcript;
+pub mod turn;
 pub mod ui_request;
 
 pub use command::Command;
+#[cfg(any(test, feature = "test-support"))]
+pub use failing_provider::failing_base_url;
 pub use icon::{rgba as icon_rgba, write_ico};
 pub use metrics::{format_duration, format_tokens, progress_bar, Metrics};
 pub use palette::{Palette, Rgb, Role};
 pub use transcript::{Entry, NoticeKind, ToolRun, ToolState, Transcript};
+pub use turn::{check_turn, failed_turn, finished_turn, ContractViolation, TurnEvents};
 pub use ui_request::{UiBridge, UiMethod, UiRequest, UiResponse};

@@ -46,3 +46,6 @@ argent-device = { path = "../device" }
 argent-lsp = { path = "../lsp" }
 argent-jobs = { path = "../jobs" }
 argent-pty = { path = "../pty" }
+
+[dev-dependencies]
+argent-ui-core = { path = "../ui-core", features = ["test-support"] }

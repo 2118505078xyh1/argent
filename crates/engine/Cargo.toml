@@ -32,3 +32,6 @@ argent-hooks = { path = "../hooks" }
 argent-lsp = { path = "../lsp" }
 argent-jobs = { path = "../jobs" }
 argent-automation = { path = "../automation" }
+
+[dev-dependencies]
+argent-ui-core = { path = "../ui-core", features = ["test-support"] }

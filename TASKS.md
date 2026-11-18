@@ -14,7 +14,9 @@
 - 新建文件必须**立刻 `git add`**，否则并发会话的 `git commit -a` 会漏掉，或把他方半成品卷入提交。
 - 仓库活跃写入期间：只跑 `cargo check -p <crate>` 和定向测试；**不要**跑
   `cargo fmt --all` / `cargo clippy --workspace` / 全量测试。
-- 提交格式 `<area>: <summary>`，按独立小块提交；不 push。
+- 提交格式 `<area>: <summary>`，按独立小块提交；不 push 除非明确要求（发版除外）。
+- 本地代理 smoke/集成测试优先用 `powershell -File scripts/local-4b.ps1` 拉
+  llama.cpp 本地 4B 模型；只有失败路径/确定性契约测试才用假 provider 或本地假端点。
 
 ## 二、Worktree 布局
 
@@ -53,10 +55,13 @@ cargo test --workspace --all-features --locked
 | 并发分支 `argent-work` 合并 | `6c2a3e1` | worktree 与分支已删除 |
 | delegate 走便宜 secondary model | `3e7e4d6` | — |
 | cron 定时任务暴露给模型 | `a10bf60` `d9051b9` | — |
-| 导入 Claude Code / Codex 会话记录 | `0033fbd` | 最近一次提交（09:12） |
+| 导入 Claude Code / Codex 会话记录 | `0033fbd` | — |
+| 安全与会话加固批次 | `30b5c7b` | 插件名/路径、审计脱敏、session import、终态事件 |
+| 手机远程同步优化 | `6238bce` | prompt JSON ack、SSE 续传/心跳、页面批处理 |
 
-最近一次**全量验证**在 `747ef8f` 合并后：70 个测试二进制全绿；`2b98f13` 时
-clippy 全量 0 警告。之后的提交（含 secondaryModel / cron / import）尚未全量重跑。
+最近一次**全量验证**在 `6238bce` 后：`cargo fmt --all -- --check`、
+`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`
+全绿（1125 passed, 70 suites, 2 ignored）。
 
 ## 四、待办（按优先级）
 
@@ -74,7 +79,9 @@ clippy 全量 0 警告。之后的提交（含 secondaryModel / cron / import）
 
 ## 五、当前状态快照
 
-- 分支：`master` @ `984a788`（本文件提交），ahead 22 / behind 0。
-- 工作区：2 个已跟踪文件修改（见待办），无 staged 内容。
-- Worktree：`argent`（主树）、`argent-wt2`（`agent2`，本次新建）。
-- 并发：有 3 个 ZCode app-server 会话运行；推进慢的主因是同树协作开销，不是编译或机器本身。
+- 分支：`master` @ `6238bce`，与 `origin/master` 同步。
+- 当前工作：共享前端回合契约 + TUI/engine/ACP 契约测试（待提交）。
+- Worktree：`D:/code/mpi/argent`（master）、`argent-wt2`（agent2）。
+- 本地 git 作者：`寒弦问月夜未阑 <hanxian@local>`（仓库级配置，旧提交保持原样）。
+- 每轮提交结束后自动 `git push origin master`。
+- 本地二进制 `~/.local/bin/argent.exe` 仍待统一 release 构建后重装。

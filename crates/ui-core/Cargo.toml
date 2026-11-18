@@ -9,6 +9,10 @@ description = "Frontend-neutral view model for argent: transcript, metrics and u
 [lints]
 workspace = true
 
+[features]
+default = []
+test-support = []
+
 [dependencies]
 argent-core = { path = "../core" }
 argent-ai = { path = "../ai" }

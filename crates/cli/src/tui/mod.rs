@@ -28,6 +28,9 @@ mod run;
 mod session;
 mod worker;
 
+#[cfg(test)]
+mod contract_test;
+
 pub use events::{ApprovalRequest, Command, RemoteLink, UiEvent};
 pub use model::{SessionRow, TreeRow};
 use model::{SessionScope, SessionSort};

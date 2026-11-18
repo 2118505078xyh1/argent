@@ -1243,6 +1243,9 @@ pub fn catalog(config: &Config) -> (usize, Vec<(String, usize)>) {
 }
 
 #[cfg(test)]
+mod contract_test;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
