@@ -18,6 +18,9 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 - **Smaller core schema.** Trimmed read/write descriptions and parameter text,
   freeing roughly 175 characters from every request while keeping the 1700-char
   budget test.
+- **Reproducible Windows archive.** `scripts/build-release.ps1` now builds with
+  `--locked`, sorts archive entries, fixes timestamps and two consecutive
+  builds produce the same sha256.
 - **Seen-line provenance for anchored edits.** `edit` now tracks the exact
   `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
   range is rejected even if its hash happens to match, and compaction clears

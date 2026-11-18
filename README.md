@@ -717,8 +717,9 @@ argent eval evals/core.json
 powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 ```
 
-该脚本构建两个二进制，把文档和示例拷到
-`dist/argent-<version>-windows-x64/`，生成 `SHA256SUMS`，并打包 zip。
+该脚本用 `--locked` 构建两个二进制，把文档和示例拷到
+`dist/argent-<version>-windows-x64/`，生成排序后的 `SHA256SUMS`，并打包 zip。
+zip 使用固定 1980-01-01 时间戳和排序条目；同一源码连续构建两次 sha256 相同。
 
 ## 安全
 
