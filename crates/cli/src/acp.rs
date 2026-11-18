@@ -776,6 +776,7 @@ mod contract_tests {
     use argent_session::SessionIndex;
     use argent_tools::{ToolCtx, ToolRegistry};
     use argent_ui_core::approval::{check_approval, ApprovalEvents};
+    use argent_ui_core::session::{check_session_switch, SessionEvents};
     use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
     use std::sync::Arc;
     use std::time::Duration;
@@ -931,5 +932,77 @@ mod contract_tests {
         contract.request("bash");
         contract.decision(true);
         assert!(check_approval(&contract).is_ok());
+    }
+
+    #[test]
+    fn a_new_session_emits_one_change_notification() {
+        let base_url = argent_ui_core::failing_base_url();
+        let dir = std::env::temp_dir().join(format!(
+            "argent-acp-session-contract-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let index = SessionIndex::new(dir.join("sessions"));
+        let path = index.create(&dir, "contract").expect("create");
+        let session = crate::session_ctx::SessionContext::open(path).expect("open");
+
+        let provider = OpenAiProvider::new(OpenAiConfig::new(base_url).with_models(vec![
+            argent_ai::ModelInfo {
+                id: "contract-model".to_string(),
+                display_name: "Contract".to_string(),
+                context_length: 32_000,
+                max_output: 0,
+                supports_tools: true,
+                supports_reasoning: false,
+                supports_vision: false,
+                reasoning_levels: Vec::new(),
+            },
+        ]));
+        let agent = Agent::new(
+            Box::new(provider),
+            Arc::new(ToolRegistry::with_core()),
+            AgentConfig::new("contract-model"),
+            ToolCtx::new(dir.clone()),
+            "system",
+        );
+
+        let (command_tx, command_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let worker_dir = dir.clone();
+        std::thread::spawn(move || {
+            worker(
+                agent,
+                session,
+                argent_core::config::Config::default(),
+                index,
+                argent_hooks::HookConfig::default(),
+                worker_dir,
+                command_rx,
+                event_tx,
+            )
+        });
+        while event_rx.try_recv().is_ok() {}
+
+        let _ = command_tx.send(Command::NewSession);
+
+        let mut events = SessionEvents::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            match event_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Event::SessionChanged { id }) => events.change(id),
+                Ok(Event::Error(message)) => events.error(message),
+                Ok(_) => {}
+                Err(_) => {}
+            }
+            if events.has_single_change() {
+                break;
+            }
+        }
+        assert_eq!(events.changes.len(), 1, "new session emits one change");
+        assert!(check_session_switch(&events).is_ok());
+
+        let _ = command_tx.send(Command::Shutdown);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use argent_core::config::Config;
 use argent_ui_core::approval::{check_approval, ApprovalEvents};
+use argent_ui_core::session::{check_session_switch, SessionEvents};
 use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
 
 use super::{start_session, Command, UiEvent};
@@ -136,6 +137,67 @@ fn an_approval_channel_request_is_answered_exactly_once() {
     contract.decision(true);
     assert_eq!(reply_rx.recv_timeout(Duration::from_secs(1)), Ok(true));
     assert!(check_approval(&contract).is_ok());
+
+    let _ = engine.commands.send(Command::Shutdown);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn opening_a_session_emits_one_change_notification() {
+    let dir = std::env::temp_dir().join(format!(
+        "argent-engine-session-contract-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let index = argent_session::SessionIndex::new(dir.join("sessions"));
+    let first = index.create(&dir, "first").expect("first");
+    let second = index.create(&dir, "second").expect("second");
+
+    let config = Config {
+        session_dir: dir.clone(),
+        ..Config::default()
+    };
+    let engine = start_session(
+        config,
+        dir.clone(),
+        Some(first.clone()),
+        Arc::new(AtomicU64::new(1)),
+    );
+    // The worker emits Ready, then Loaded/Sessions/Session for the initial
+    // file. Wait for that specific Session event before issuing the switch;
+    // a bare try_recv drain races with the worker's startup sequence.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match engine.events.recv_timeout(Duration::from_millis(500)) {
+            Ok(UiEvent::Session { path }) if path == first => break,
+            Ok(_) => {}
+            Err(_) if std::time::Instant::now() >= deadline => panic!("worker never opened first"),
+            Err(_) => {}
+        }
+    }
+    while engine.events.try_recv().is_ok() {}
+
+    let _ = engine.commands.send(Command::OpenSession(second.clone()));
+
+    let mut events = SessionEvents::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        match engine.events.recv_timeout(Duration::from_millis(500)) {
+            Ok(UiEvent::Session { path }) => events.change(path.display().to_string()),
+            Ok(UiEvent::Loaded(_)) => events.load(),
+            Ok(UiEvent::TurnDone { .. }) => events.turn_done(),
+            Ok(UiEvent::Error(message)) => events.error(message),
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        if events.has_single_change() {
+            break;
+        }
+    }
+    assert_eq!(events.changes.len(), 1, "one open emits one session change");
+    assert_eq!(events.changes[0], second.display().to_string());
+    assert!(check_session_switch(&events).is_ok());
 
     let _ = engine.commands.send(Command::Shutdown);
     let _ = std::fs::remove_dir_all(&dir);

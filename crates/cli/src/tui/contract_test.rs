@@ -18,6 +18,7 @@ use argent_core::error::Result as CoreResult;
 use argent_session::SessionIndex;
 use argent_tools::{ToolCtx, ToolRegistry};
 use argent_ui_core::approval::{check_approval, ApprovalEvents};
+use argent_ui_core::session::{check_session_switch, SessionEvents};
 use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
 
 use super::{Command, UiEvent};
@@ -185,4 +186,54 @@ fn an_approval_reply_is_sent_exactly_once() {
     contract.decision(true);
     assert!(check_approval(&contract).is_ok());
     let _ = command_rx;
+}
+
+#[test]
+fn opening_a_session_emits_one_change_notification() {
+    let dir = scratch("open-session");
+    let index = SessionIndex::new(dir.join("sessions"));
+    let first = index.create(&dir, "first").expect("first");
+    let second = index.create(&dir, "second").expect("second");
+    let session = crate::session_ctx::SessionContext::open(first).expect("open");
+
+    let agent = Agent::new(
+        Box::new(FailingProvider),
+        Arc::new(ToolRegistry::with_core()),
+        AgentConfig::new("failing-model"),
+        ToolCtx::new(dir.clone()),
+        "system",
+    );
+    let worker = super::spawn(
+        agent,
+        session,
+        argent_tools::CheckpointStore::detached(),
+        argent_core::config::Config::default(),
+        index,
+        dir.clone(),
+        argent_hooks::HookConfig::default(),
+        argent_i18n::Locale::En,
+    );
+    while worker.events.try_recv().is_ok() {}
+
+    let _ = worker.commands.send(Command::OpenSession(second.clone()));
+
+    let mut events = SessionEvents::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        match worker.events.recv_timeout(Duration::from_millis(500)) {
+            Ok(UiEvent::SessionOpened { path, .. }) => events.change(path),
+            Ok(UiEvent::Error(message)) => events.error(message),
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        if events.has_single_change() {
+            break;
+        }
+    }
+    assert_eq!(events.changes.len(), 1, "one open emits one session change");
+    assert_eq!(events.changes[0], second.display().to_string());
+    assert!(check_session_switch(&events).is_ok());
+
+    let _ = worker.commands.send(Command::Shutdown);
+    let _ = std::fs::remove_dir_all(&dir);
 }
