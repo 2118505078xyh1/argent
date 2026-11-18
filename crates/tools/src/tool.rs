@@ -167,6 +167,8 @@ pub fn approval_preview(tool: &str, args: &Json) -> String {
             let path = args.str_or("path", "");
             let old = args.str_or("oldText", "");
             let new = args.str_or("newText", "");
+            let start = args.str_or("start", "");
+            let end = args.str_or("end", "");
             let mut removed = 0usize;
             let mut added = 0usize;
             let mut changed: Vec<String> = Vec::new();
@@ -183,7 +185,19 @@ pub fn approval_preview(tool: &str, args: &Json) -> String {
                     }
                 }
             }
-            let mut out = format!("edit {} (+{} -{})", path, added, removed);
+            let mut out = if start.is_empty() {
+                format!("edit {} (+{} -{})", path, added, removed)
+            } else {
+                let last = if end.is_empty() {
+                    start.as_str()
+                } else {
+                    end.as_str()
+                };
+                format!(
+                    "edit {} lines {}..{} (+{} -{})",
+                    path, start, last, added, removed
+                )
+            };
             let total = changed.len();
             for line in changed.into_iter().take(24) {
                 out.push('\n');

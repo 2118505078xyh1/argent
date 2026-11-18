@@ -3,6 +3,19 @@
 All notable changes to argent are documented here. The format is a loose
 Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
+## 0.3.1 — 2026-11-18
+
+- **Hash-anchored edits.** `read hash=true` now feeds `edit` directly:
+  `start`/`end` accept `LINE#HASH` anchors and replace an inclusive line
+  range. A stale hash is rejected with the current hash instead of writing
+  through a changed file; CRLF and UTF-8 BOM content are preserved.
+- **Dead code and dependency cleanup.** Removed unused mouse-click wiring,
+  a dead highlighter, an always-false job truncation flag, an empty FFI
+  block, and four unused `argent-ai` dependencies. `cargo machete` is clean.
+- **More aggressive releases.** The threshold drops from 5% to 2% of current
+  Rust lines (`ARGENT_RELEASE_THRESHOLD` overrides it); small cleanup batches
+  ship instead of waiting for a large line delta.
+
 ## 0.3.0 — 2026-11-18
 
 - **Mobile remote sync is resumable and cheaper.** `/v1/prompt` accepts

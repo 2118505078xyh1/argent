@@ -258,7 +258,6 @@ impl App {
                     cwd,
                     session,
                     session_path,
-                    approval,
                 });
             }
             UiEvent::Loaded(entries) => {
@@ -604,15 +603,6 @@ impl App {
                         }
                     }
                 }
-                return;
-            }
-            Key::MouseClick { row, col } => {
-                if let Some(cursor) = self.cursor_at(row, col) {
-                    self.cursor = cursor;
-                } else {
-                    self.toggle_thinking_at(row);
-                }
-                self.dirty = true;
                 return;
             }
             _ => {}

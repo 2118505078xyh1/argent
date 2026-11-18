@@ -216,6 +216,131 @@ fn to_crlf(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
+/// Parse `LINE#HASH` anchors emitted by `read hash=true`.
+fn parse_anchor(anchor: &str) -> std::result::Result<(usize, String), String> {
+    let (line, hash) = anchor
+        .trim()
+        .split_once('#')
+        .ok_or_else(|| format!("invalid anchor '{}': expected LINE#HASH", anchor))?;
+    let number = line
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| format!("invalid line number in anchor '{}'", anchor))?;
+    if number == 0 {
+        return Err(format!("line numbers are 1-based; got '{}'", anchor));
+    }
+    let hash = hash.trim().to_ascii_lowercase();
+    if hash.len() != 8 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "invalid hash in anchor '{}': expected 8 hex characters",
+            anchor
+        ));
+    }
+    Ok((number, hash))
+}
+
+/// Replace an inclusive line range after checking both anchors against the
+/// current file. The hash covers the line text as `read` showed it, excluding
+/// the line terminator (and excluding the BOM except on line 1, where `read`
+/// includes it).
+fn apply_anchored_edit(
+    ctx: &ToolCtx,
+    target: &Path,
+    bom: &str,
+    body: &str,
+    start: &str,
+    end: Option<&str>,
+    new_text: &str,
+    replace_all: bool,
+) -> Result<ToolResult> {
+    if replace_all {
+        return Ok(ToolResult::error(
+            "replaceAll cannot be combined with start/end anchors",
+        ));
+    }
+    let (start_line, start_hash) = match parse_anchor(start) {
+        Ok(anchor) => anchor,
+        Err(error) => return Ok(ToolResult::error(error)),
+    };
+    let (end_line, end_hash) = match end {
+        Some(end) => match parse_anchor(end) {
+            Ok(anchor) => anchor,
+            Err(error) => return Ok(ToolResult::error(error)),
+        },
+        None => (start_line, start_hash.clone()),
+    };
+    if end_line < start_line {
+        return Ok(ToolResult::error(format!(
+            "end line {} is before start line {}",
+            end_line, start_line
+        )));
+    }
+
+    let lines: Vec<&str> = body.lines().collect();
+    if start_line > lines.len() || end_line > lines.len() {
+        return Ok(ToolResult::error(format!(
+            "line range {}..{} is outside the file ({} lines)",
+            start_line,
+            end_line,
+            lines.len()
+        )));
+    }
+    for (number, expected) in [
+        (start_line, start_hash.as_str()),
+        (end_line, end_hash.as_str()),
+    ] {
+        let actual = if number == 1 && !bom.is_empty() {
+            short_hash(format!("{}{}", bom, lines[0]).as_bytes(), 8)
+        } else {
+            short_hash(lines[number - 1].as_bytes(), 8)
+        };
+        if actual != expected {
+            return Ok(ToolResult::error(format!(
+                "stale hash anchor at line {}: expected {}, current {}; re-read with hash=true",
+                number, expected, actual
+            )));
+        }
+    }
+
+    let old_span = lines[start_line - 1..end_line].join("\n");
+    let replacement = new_text.replace("\r\n", "\n");
+    let ending = if body.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut updated_lines: Vec<&str> = Vec::with_capacity(lines.len());
+    updated_lines.extend_from_slice(&lines[..start_line - 1]);
+    updated_lines.extend(replacement.lines());
+    updated_lines.extend_from_slice(&lines[end_line..]);
+
+    let mut updated_body = updated_lines.join(ending);
+    if !updated_lines.is_empty() && body.ends_with('\n') {
+        updated_body.push_str(ending);
+    }
+    let updated = format!("{}{}", bom, updated_body);
+
+    if let Some(checkpoints) = &ctx.checkpoints {
+        checkpoints.record(target);
+    }
+    argent_core::write_text_file(target, &updated)?;
+    ctx.forget_read(target);
+
+    let diff = diff_lines(&old_span, &replacement);
+    let added = diff
+        .iter()
+        .filter(|line| matches!(line, argent_core::text::DiffLine::Added(_)))
+        .count();
+    let removed = diff
+        .iter()
+        .filter(|line| matches!(line, argent_core::text::DiffLine::Removed(_)))
+        .count();
+    Ok(ToolResult::ok(format!(
+        "edited {} (lines {}..{}, +{} -{} lines)",
+        target.display(),
+        start_line,
+        end_line,
+        added,
+        removed
+    )))
+}
+
 /// Replace an exact text span in a file.
 pub struct EditTool;
 
@@ -225,18 +350,20 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Replace an exact text span in a file. The old text must appear exactly once unless replace_all is set."
+        "Replace text or a LINE#HASH range."
     }
 
     fn parameters(&self) -> Json {
         schema_object(
             vec![
-                ("path", "string", "Absolute or relative path to the file"),
+                ("path", "string", "File path"),
                 ("oldText", "string", "Exact text to replace"),
-                ("newText", "string", "Replacement text"),
-                ("replaceAll", "boolean", "Replace every occurrence"),
+                ("start", "string", "Start LINE#HASH from read hash=true"),
+                ("end", "string", "Optional end LINE#HASH"),
+                ("newText", "string", "New text"),
+                ("replaceAll", "boolean", "Replace all matches"),
             ],
-            vec!["path", "oldText", "newText"],
+            vec!["path", "newText"],
         )
     }
 
@@ -251,9 +378,25 @@ impl Tool for EditTool {
 
     fn execute(&self, ctx: &ToolCtx, args: &Json) -> Result<ToolResult> {
         let raw_path = arg_str(args, "path")?;
-        let old_text = arg_str(args, "oldText")?;
+        let old_text = arg_str_opt(args, "oldText");
+        let start_anchor = arg_str_opt(args, "start");
+        let end_anchor = arg_str_opt(args, "end");
         let new_text = arg_str(args, "newText")?;
         let replace_all = arg_bool_opt(args, "replaceAll").unwrap_or(false);
+
+        if start_anchor.is_none() && end_anchor.is_some() {
+            return Ok(ToolResult::error("end requires start"));
+        }
+        if start_anchor.is_some() && old_text.is_some() {
+            return Ok(ToolResult::error(
+                "pass either oldText or start/end, not both",
+            ));
+        }
+        if start_anchor.is_none() && old_text.is_none() {
+            return Ok(ToolResult::error(
+                "pass oldText, or start/end anchors from read hash=true",
+            ));
+        }
 
         let target = resolve(&ctx.cwd, Path::new(&expand_home(Path::new(&raw_path))));
         if let Err(error) = ctx.check_write(&target) {
@@ -273,6 +416,21 @@ impl Tool for EditTool {
             Some(rest) => ("\u{FEFF}", rest),
             None => ("", content.as_str()),
         };
+
+        if let Some(start) = start_anchor {
+            return apply_anchored_edit(
+                ctx,
+                &target,
+                bom,
+                body,
+                &start,
+                end_anchor.as_deref(),
+                &new_text,
+                replace_all,
+            );
+        }
+
+        let old_text = old_text.expect("checked above");
         let old_text = old_text.strip_prefix('\u{FEFF}').unwrap_or(&old_text);
 
         // Windows 文件多为 CRLF，而 read 工具把它们展示成 LF，模型据此写出的
@@ -978,5 +1136,124 @@ mod tests {
         assert!(out.is_error);
         // 校验失败的 edit 没有改动文件，也就不该进 manifest。
         assert!(!dir.join("checkpoints").join("manifest.jsonl").exists());
+    }
+
+    #[test]
+    fn read_hash_output_is_accepted_by_edit() {
+        let dir = temp_dir("hashline-read");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("h.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+
+        let read_args = format!(r#"{{"path":"{}","hash":true}}"#, json_path(&path));
+        let read = ReadTool
+            .execute(&ctx, &Json::parse(&read_args).unwrap())
+            .unwrap();
+        assert!(!read.is_error, "{}", read.content);
+        let anchor = read
+            .content
+            .lines()
+            .find(|line| line.starts_with("2#"))
+            .and_then(|line| line.split('\t').next())
+            .expect("line 2 anchor")
+            .to_string();
+        assert_eq!(anchor, format!("2#{}", short_hash(b"beta", 8)));
+
+        let edit_args = format!(
+            r#"{{"path":"{}","start":"{}","newText":"BETA"}}"#,
+            json_path(&path),
+            anchor
+        );
+        let out = EditTool
+            .execute(&ctx, &Json::parse(&edit_args).unwrap())
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nBETA\ngamma\n");
+    }
+
+    #[test]
+    fn hash_anchored_edit_replaces_a_line() {
+        let dir = temp_dir("hashline-single");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("h.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        let hash = short_hash(b"beta", 8);
+        let args = format!(
+            r#"{{"path":"{}","start":"2#{}","newText":"BETA"}}"#,
+            json_path(&path),
+            hash
+        );
+        let out = EditTool
+            .execute(&ctx, &Json::parse(&args).unwrap())
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nBETA\ngamma\n");
+    }
+
+    #[test]
+    fn hash_anchored_edit_replaces_a_range() {
+        let dir = temp_dir("hashline-range");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("h.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        let start = short_hash(b"alpha", 8);
+        let end = short_hash(b"beta", 8);
+        let args = format!(
+            r#"{{"path":"{}","start":"1#{}","end":"2#{}","newText":"first\nsecond"}}"#,
+            json_path(&path),
+            start,
+            end
+        );
+        let out = EditTool
+            .execute(&ctx, &Json::parse(&args).unwrap())
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\ngamma\n");
+    }
+
+    #[test]
+    fn hash_anchored_edit_rejects_a_stale_hash() {
+        let dir = temp_dir("hashline-stale");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("h.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        let stale = short_hash(b"beta", 8);
+        fs::write(&path, "alpha\nchanged\ngamma\n").unwrap();
+        let args = format!(
+            r#"{{"path":"{}","start":"2#{}","newText":"BETA"}}"#,
+            json_path(&path),
+            stale
+        );
+        let out = EditTool
+            .execute(&ctx, &Json::parse(&args).unwrap())
+            .unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("stale hash anchor at line 2"));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "alpha\nchanged\ngamma\n"
+        );
+    }
+
+    #[test]
+    fn hash_anchored_edit_preserves_crlf_and_bom() {
+        let dir = temp_dir("hashline-crlf-bom");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("h.txt");
+        fs::write(&path, "\u{FEFF}alpha\r\nbeta\r\ngamma\r\n").unwrap();
+        let hash = short_hash(b"beta", 8);
+        let args = format!(
+            r#"{{"path":"{}","start":"2#{}","newText":"BETA"}}"#,
+            json_path(&path),
+            hash
+        );
+        let out = EditTool
+            .execute(&ctx, &Json::parse(&args).unwrap())
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "\u{FEFF}alpha\r\nBETA\r\ngamma\r\n"
+        );
     }
 }

@@ -853,7 +853,6 @@ mod tests {
     use super::*;
     use crate::message::{Message, MessageCache};
     use crate::provider::ChatRequest;
-    #[allow(unused_imports)]
     use std::io::BufReader;
     use std::io::{BufRead, Write};
 

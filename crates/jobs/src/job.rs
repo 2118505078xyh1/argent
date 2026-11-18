@@ -57,9 +57,6 @@ pub struct Job {
     cancelled: Arc<AtomicBool>,
     /// The child handle, present until the job is reaped.
     child: Option<Child>,
-    /// Whether the log has been capped already.
-    #[allow(dead_code)]
-    truncated: bool,
 }
 
 impl Job {
@@ -156,7 +153,6 @@ impl Job {
             exit_code: None,
             cancelled,
             child: Some(child),
-            truncated: false,
         })
     }
 
@@ -234,11 +230,6 @@ impl Job {
             Ok(text) => argent_core::text::truncate_bytes(&text, max_bytes),
             Err(_) => "(no output yet)".to_string(),
         }
-    }
-
-    /// True once the log hit its size cap.
-    pub fn log_truncated(&self) -> bool {
-        self.truncated
     }
 }
 

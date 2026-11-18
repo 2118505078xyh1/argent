@@ -30,7 +30,6 @@ iced = { version = "0.14", default-features = false, features = [
 ] }
 argent-core = { path = "../core" }
 argent-config = { path = "../config" }
-argent-ai = { path = "../ai" }
 argent-agent = { path = "../agent" }
 argent-session = { path = "../session" }
 argent-engine = { path = "../engine" }

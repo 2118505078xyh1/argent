@@ -253,58 +253,6 @@ fn idle_esc_jumps_back_to_the_last_user_message() {
 }
 
 #[test]
-fn clicking_the_fold_row_expands_the_thinking_block() {
-    let mut app = app();
-    app.transcript.push_entry(Entry::Thinking(
-        (0..10)
-            .map(|i| format!("思考 {i}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    ));
-    let joined = |app: &mut App| {
-        app.frame(80, 24)
-            .iter()
-            .map(|l| strip_ansi(l))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let collapsed = joined(&mut app);
-    assert!(
-        collapsed.contains("Thinking"),
-        "流式中只显示 Thinking：{}",
-        collapsed
-    );
-    assert!(
-        !collapsed.contains("思考 3"),
-        "折叠态不应露出正文：{}",
-        collapsed
-    );
-    assert!(!app.visible_fold_rows.is_empty(), "思考标题行应被记录");
-    assert!(!app.expand);
-    let worker = test_worker();
-    let (row, _) = app.visible_fold_rows[0];
-    app.handle_key(&worker, Key::MouseClick { row, col: 0 });
-    let expanded = joined(&mut app);
-    assert!(
-        expanded.contains("Thinking"),
-        "展开后仍有标题：{}",
-        expanded
-    );
-    assert!(expanded.contains("思考 3"), "点击后正文可见：{}", expanded);
-    // 点展开后的正文行（不是标题）也要能收起——整块可点。
-    let (body_row, _) = app.visible_fold_rows.last().copied().expect("content row");
-    app.handle_key(
-        &worker,
-        Key::MouseClick {
-            row: body_row,
-            col: 0,
-        },
-    );
-    let collapsed = joined(&mut app);
-    assert!(!collapsed.contains("思考 3"), "点正文应收起：{}", collapsed);
-}
-
-#[test]
 fn thinking_is_grouped_before_the_answer_of_its_turn() {
     let mut app = app();
     app.transcript.push_user("问题");
@@ -574,7 +522,6 @@ fn the_ready_event_keeps_the_context_window() {
         cwd: "/tmp".to_string(),
         session: "s".to_string(),
         session_path: "/tmp/s.jsonl".to_string(),
-
         approval: "sensible".to_string(),
     });
     assert_eq!(app.metrics.context_max, 960_000);
@@ -591,7 +538,6 @@ fn turn_done_prints_a_dim_summary_line() {
         cwd: "/tmp".to_string(),
         session: "s".to_string(),
         session_path: "/tmp/s.jsonl".to_string(),
-
         approval: "sensible".to_string(),
     });
     app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 0 }));
@@ -635,7 +581,6 @@ fn summaries_print_right_after_their_own_turn() {
         cwd: "/tmp".to_string(),
         session: "s".to_string(),
         session_path: "/tmp/s.jsonl".to_string(),
-
         approval: "sensible".to_string(),
     });
     let turn = |app: &mut App, q: &str, a: &str| {
@@ -706,7 +651,6 @@ fn turn_done_without_a_model_call_stays_quiet() {
         cwd: "/tmp".to_string(),
         session: "s".to_string(),
         session_path: "/tmp/s.jsonl".to_string(),
-
         approval: "sensible".to_string(),
     });
     app.handle_ui(UiEvent::TurnDone {
@@ -872,20 +816,6 @@ fn pressing_inside_the_input_area_toggles_no_thinking_block() {
         app.expanded_thinking.is_empty(),
         "input press must not toggle a thinking block"
     );
-    // 正文里的思考块点击仍然有效（对照）。
-    let (fold_row, _) = app
-        .visible_fold_rows
-        .first()
-        .copied()
-        .expect("thinking title row");
-    app.handle_key(
-        &worker,
-        Key::MouseClick {
-            row: fold_row,
-            col: 0,
-        },
-    );
-    assert!(!app.expanded_thinking.is_empty());
 }
 
 #[test]
@@ -991,28 +921,4 @@ fn selection_highlights_only_the_selected_cells() {
     assert_eq!(line.spans.len(), 2);
     assert!(!line.spans[0].style.reverse);
     assert!(line.spans[1].style.reverse);
-}
-
-#[test]
-fn search_hits_are_highlighted_in_the_session_picker() {
-    let base = Style::plain();
-    let spans = highlight_spans("alpha beta", "bet", base);
-    let joined: String = spans.iter().map(|s| s.text.as_str()).collect();
-    assert_eq!(joined, "alpha beta");
-    // 命中在 6..9：前后各一段 + 命中段，共 3 个 span。
-    assert_eq!(spans.len(), 3);
-    assert_eq!(spans[0].text, "alpha ");
-    assert_eq!(spans[1].text, "bet");
-    assert_eq!(spans[2].text, "a");
-    let accent = crate::theme::current().accent;
-    assert_eq!(spans[1].style.fg, Some(accent));
-    assert!(spans[1].style.bold);
-    assert!(!spans[0].style.bold);
-
-    // 空查询原样返回；命中大小写不敏感。
-    assert_eq!(highlight_spans("x", "", base).len(), 1);
-    let hits = highlight_spans("ABC", "b", base);
-    assert_eq!(hits.len(), 3);
-    assert_eq!(hits[1].text, "B");
-    assert!(hits[1].style.bold);
 }

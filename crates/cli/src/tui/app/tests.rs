@@ -158,7 +158,6 @@ fn at_file_expands_into_the_prompt() {
         cwd: dir.display().to_string(),
         session: "s".to_string(),
         session_path: String::new(),
-        approval: "sensible".to_string(),
     });
     let (prompt, attached, images) = app.expand_attachments("@a.txt summarize this");
     assert!(prompt.contains("attached body"), "{}", prompt);
@@ -259,7 +258,6 @@ fn reload_resources_rebinds_keys_from_disk() {
         cwd: dir.display().to_string(),
         session: String::new(),
         session_path: String::new(),
-        approval: "sensible".to_string(),
     });
     assert_eq!(
         app.bindings.action(&Key::CtrlP),
@@ -314,7 +312,6 @@ fn image_attachments_become_vision_content() {
         cwd: dir.display().to_string(),
         session: "s".to_string(),
         session_path: String::new(),
-        approval: "sensible".to_string(),
     });
     let (_prompt, attached, images) = app.expand_attachments("@pixel.png what is this");
     assert_eq!(attached, vec!["pixel.png".to_string()]);
@@ -478,7 +475,6 @@ fn the_session_picker_filters_scopes_and_sorts() {
     );
     app.ready = Some(ReadyInfo {
         cwd: "/work/a".to_string(),
-        approval: "sensible".to_string(),
         ..Default::default()
     });
     app.sessions = vec![
@@ -556,7 +552,6 @@ fn dump_a_representative_frame() {
         cwd: "D:\\code\\mpi\\argent".to_string(),
         session: "demo-session".to_string(),
         session_path: "C:\\Users\\demo\\.argent".to_string(),
-        approval: "sensible".to_string(),
     });
     app.transcript
         .push_user("帮我看看 src/main.rs 里的启动逻辑");

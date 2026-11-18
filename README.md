@@ -491,6 +491,8 @@ argent --sessions               列出已有会话
   thinking delta、usage/cache 统计。
 - 核心工具（`read`、`write`、`edit`、`bash`）加上 explore、plan、memory、
   skills、web、codeintel、jobs、subagents、device 工具。
+- 锚点编辑：`read hash=true` 为每行输出 `LINE#HASH`；`edit` 可用
+  `start`/`end` 锚点按行替换，哈希过期直接拒绝，避免把旧行号写进已变化的文件。
 - 可续传的手机/远程同步：`/v1/events` 带事件 id、`Last-Event-ID` 回放、
   15 秒心跳和 200 帧尾部；`/v1/prompt` 支持 `stream=false` JSON ack，
   内置 `/` 页面按帧合并 DOM。

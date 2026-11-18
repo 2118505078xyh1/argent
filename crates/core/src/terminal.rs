@@ -7,14 +7,8 @@ use std::io::Write;
 use std::time::Duration;
 
 /// `(DWORD)-10`: the console input handle.
-///
-/// The Windows headers define these as negative pseudo-handles; as `u32` they
-/// are `0xFFFFFFF6` (input) and `0xFFFFFFF5` (output). Getting them mixed up
-/// silently applies the console mode to the wrong stream.
-#[allow(dead_code)]
 const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6;
 /// `(DWORD)-11`: the console output handle.
-#[allow(dead_code)]
 const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5;
 
 /// Terminal dimensions in character cells.
