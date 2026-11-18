@@ -152,6 +152,20 @@ impl CacheWarming {
     }
 }
 
+/// Optional table decision that overrides the default approval policy.
+pub trait PolicyApproval: Send + Sync {
+    fn approval(&self, tool: &str, args: &Json) -> Option<bool>;
+}
+
+impl<F> PolicyApproval for F
+where
+    F: Fn(&str, &Json) -> Option<bool> + Send + Sync,
+{
+    fn approval(&self, tool: &str, args: &Json) -> Option<bool> {
+        self(tool, args)
+    }
+}
+
 /// Tuning knobs for one agent run.
 #[derive(Clone)]
 pub struct AgentConfig {
@@ -181,6 +195,10 @@ pub struct AgentConfig {
     /// a human, and a policy answers on its own. A mistake in one layer must
     /// not open the other.
     pub policy: Option<argent_core::hooks::PolicyHook>,
+    /// Optional table decision that overrides the default approval policy:
+    /// `Some(true)` forces approval, `Some(false)` skips it, `None` keeps
+    /// the tool's own `needs_approval` behavior.
+    pub policy_approval: Option<Arc<dyn PolicyApproval>>,
     /// Called for every tool call with the name, the arguments, the decision
     /// (`allowed`, `blocked`, `failed`) and the reason for a block.
     pub audit: Option<argent_core::hooks::AuditHook>,
@@ -210,6 +228,7 @@ impl std::fmt::Debug for AgentConfig {
             .field("approval_scope", &self.approval_scope)
             .field("budget", &self.budget.is_some())
             .field("policy", &self.policy.is_some())
+            .field("policy_approval", &self.policy_approval.is_some())
             .field("audit", &self.audit.is_some())
             .field("approve", &self.approve.is_some())
             .field("on_run_start", &self.on_run_start.is_some())
@@ -232,6 +251,7 @@ impl AgentConfig {
             approval_scope: ApprovalScope::DestructiveOnly,
             budget: None,
             policy: None,
+            policy_approval: None,
             audit: None,
             approve: None,
             pre_tool: None,

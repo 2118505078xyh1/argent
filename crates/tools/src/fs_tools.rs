@@ -584,7 +584,18 @@ pub enum EditMode {
 }
 
 /// Pick a conservative edit mode for a model family.
+///
+/// `ARGENT_EDIT_MODE=hashline|replace` overrides the heuristic, which is
+/// useful for benchmarks and for users who know their model behaves better
+/// with one wire format.
 pub fn edit_mode_for_model(model: &str) -> EditMode {
+    if let Ok(forced) = std::env::var("ARGENT_EDIT_MODE") {
+        match forced.to_ascii_lowercase().as_str() {
+            "hashline" => return EditMode::Hashline,
+            "replace" => return EditMode::Replace,
+            _ => {}
+        }
+    }
     let model = model.to_ascii_lowercase();
     let weak = [
         "qwen", "deepseek", "kimi", "minimax", "glm", "spark-4b", "llama", "local", "phi", "gemma",

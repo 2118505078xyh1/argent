@@ -303,8 +303,13 @@ impl Agent {
             }
         }
 
-        if let Some(approve) = &self.config.approve {
-            let needs = match self.config.approval_scope {
+        let table_approval = self
+            .config
+            .policy_approval
+            .as_ref()
+            .and_then(|decide| decide.approval(&call.name, args));
+        if table_approval != Some(false) {
+            let mut needs = match self.config.approval_scope {
                 ApprovalScope::DestructiveOnly => self.registry.needs_approval(&call.name, args),
                 ApprovalScope::AllMutating => self
                     .registry
@@ -312,21 +317,36 @@ impl Agent {
                     .map(|tool| tool.is_mutating())
                     .unwrap_or(false),
             };
-            if needs && !approve(&call.name, args) {
-                self.audit(&call.name, args, "declined", None);
-                let post = self.config.post_tool.clone();
-                if let Some(post) = post {
-                    post(&call.name, args, true);
+            if table_approval == Some(true) {
+                needs = true;
+            }
+            if needs {
+                if let Some(approve) = &self.config.approve {
+                    if !approve(&call.name, args) {
+                        self.audit(&call.name, args, "declined", None);
+                        let post = self.config.post_tool.clone();
+                        if let Some(post) = post {
+                            post(&call.name, args, true);
+                        }
+                        return Some(ToolOutcome {
+                            content: format!(
+                                "The operator declined this {} call. Do not attempt the same effect \
+                                 through a different command; stop and ask the operator how to proceed.",
+                                call.name
+                            ),
+                            is_error: true,
+                            images: Vec::new(),
+                        });
+                    }
+                } else if table_approval == Some(true) {
+                    let reason = "the permissions table requires approval, but no approval channel is available";
+                    self.audit(&call.name, args, "blocked", Some(reason.to_string()));
+                    return Some(ToolOutcome {
+                        content: format!("{}: {}", call.name, reason),
+                        is_error: true,
+                        images: Vec::new(),
+                    });
                 }
-                return Some(ToolOutcome {
-                    content: format!(
-                        "The operator declined this {} call. Do not attempt the same effect \
-                         through a different command; stop and ask the operator how to proceed.",
-                        call.name
-                    ),
-                    is_error: true,
-                    images: Vec::new(),
-                });
             }
         }
         None

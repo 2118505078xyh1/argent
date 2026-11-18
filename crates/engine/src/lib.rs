@@ -1035,10 +1035,24 @@ fn build_agent(
     if let Some(settings) = &settings {
         let policy = argent_security::Policy::from_settings(settings);
         if !policy.is_empty() {
+            let deny_policy = policy.clone();
+            let approval_policy = policy.clone();
             let cwd = cwd.clone();
+            let approval_cwd = cwd.clone();
             agent_config.policy = Some(std::sync::Arc::new(move |name, args| {
-                policy.check_tool(name, args, &cwd)
+                deny_policy.check_tool(name, args, &cwd)
             }));
+            agent_config.policy_approval = Some(std::sync::Arc::new(
+                move |name: &str, args: &argent_core::Json| match approval_policy.decision(
+                    name,
+                    args,
+                    &approval_cwd,
+                ) {
+                    Some(argent_security::Decision::Allow) => Some(false),
+                    Some(argent_security::Decision::Ask) => Some(true),
+                    _ => None,
+                },
+            ));
         }
         // The audit trail answers "what did this agent do to my machine".
         let audit = std::sync::Arc::new(argent_security::AuditLog::new(settings.paths().storage()));

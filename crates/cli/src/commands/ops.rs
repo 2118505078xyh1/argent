@@ -635,6 +635,25 @@ pub(super) fn policy(args: &[String]) -> Result<i32> {
     for rule in &policy.deny_tools {
         println!("  {rule}");
     }
+    if !policy.rules.is_empty() {
+        println!("ordered rules:");
+        for rule in &policy.rules {
+            let decision = match rule.decision {
+                argent_security::Decision::Allow => "allow",
+                argent_security::Decision::Ask => "ask",
+                argent_security::Decision::Deny => "deny",
+            };
+            let tool = rule.tool.as_deref().unwrap_or("*");
+            let mut line = format!("  {decision} tool={tool}");
+            if let Some(path) = &rule.path {
+                line.push_str(&format!(" path={path}"));
+            }
+            if let Some(command) = &rule.command {
+                line.push_str(&format!(" command={command}"));
+            }
+            println!("{line}");
+        }
+    }
     Ok(0)
 }
 

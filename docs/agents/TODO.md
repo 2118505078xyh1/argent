@@ -187,6 +187,8 @@ OMP 的强项不是功能数量，而是编辑安全和批处理。argent 0.3.1 
    模型族回退；4B/弱模型退回 `replace`，避免输出锚点语法失败。
 5. **P1 hashline 基准**：本地 4B 跑“同文件多处修改、并发漂移、CRLF”三组，
    记录成功率/轮数/token，和精确文本替换对比。
+   已完成（1 次基准，`scripts/bench-edit.ps1`）：hashline 24.0s / 11,829 tokens；
+   replace 316.9s / 19,566 tokens；两者均成功。
 6. **P2 block anchors**：用现有 AST 把 `start` 扩展到函数/块级，减少行号脆弱性。
 7. **P2 multi-file rollback**：把批量编辑纳入单次 checkpoint 事务，`/rewind`
    一次回滚整批。

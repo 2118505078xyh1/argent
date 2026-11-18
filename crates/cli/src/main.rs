@@ -589,11 +589,24 @@ pub fn run(raw: &[String]) -> Result<i32> {
     // not something a mis-click waves through.
     let policy = argent_security::Policy::from_settings(&settings);
     if !policy.is_empty() {
-        let policy = policy.clone();
+        let deny_policy = policy.clone();
+        let approval_policy = policy.clone();
         let cwd = cli.cwd.clone();
+        let approval_cwd = cwd.clone();
         agent_config.policy = Some(Arc::new(move |name, args| {
-            policy.check_tool(name, args, &cwd)
+            deny_policy.check_tool(name, args, &cwd)
         }));
+        agent_config.policy_approval = Some(Arc::new(
+            move |name: &str, args: &argent_core::Json| match approval_policy.decision(
+                name,
+                args,
+                &approval_cwd,
+            ) {
+                Some(argent_security::Decision::Allow) => Some(false),
+                Some(argent_security::Decision::Ask) => Some(true),
+                _ => None,
+            },
+        ));
     }
 
     // The audit log answers "what did this agent do to my machine". It is

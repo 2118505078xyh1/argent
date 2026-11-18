@@ -731,6 +731,16 @@ zip 使用固定 1980-01-01 时间戳和排序条目；同一源码连续构建�
   （白名单之外的路径全部拒绝）、`denyCommands`、`denyCommandPaths`
   （如 `~/.ssh`）和 `denyTools`。被拒的调用第二次重试时直接结束运行，
   而不是循环 40 次。`argent policy` 显示当前生效的规则。
+- **声明式规则表**：`permissions.rules` 按顺序匹配，支持
+  `allow` / `ask` / `deny`，可组合 `tool`、`path`、`command`：
+  ```json
+  {"permissions":{"rules":[
+    {"decision":"deny","tool":"read","path":"**/.env"},
+    {"decision":"allow","tool":"read","path":"src/**"},
+    {"decision":"ask","tool":"bash","command":"git push*"}
+  ]}}
+  ```
+  硬 deny 列表仍先执行，`allow` 不会绕过 `denyPaths`/`denyTools`。
 - **审计日志（默认开启）**：每次工具调用的决定（`allowed` / `blocked` /
   `blocked-again` / `declined` / `failed`）与**脱敏后的**参数写入
   `~/.argent/audit/<day>.jsonl`。`argent audit` 查看最近 50 条。

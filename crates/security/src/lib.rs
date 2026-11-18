@@ -22,6 +22,24 @@ pub mod redact;
 
 pub use redact::{redact_json, redact_text};
 
+/// One row in the declarative permission table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    Allow,
+    Ask,
+    Deny,
+}
+
+/// First matching rule wins; deny rules and the legacy deny/allow lists still
+/// act as hard guards.
+#[derive(Debug, Clone)]
+pub struct Rule {
+    pub decision: Decision,
+    pub tool: Option<String>,
+    pub path: Option<String>,
+    pub command: Option<String>,
+}
+
 /// One rule set.
 #[derive(Debug, Clone, Default)]
 pub struct Policy {
@@ -37,6 +55,8 @@ pub struct Policy {
     pub deny_command_paths: Vec<String>,
     /// Tools that are never allowed, whatever else the rules say.
     pub deny_tools: Vec<String>,
+    /// Ordered allow/ask/deny table.
+    pub rules: Vec<Rule>,
 }
 
 impl Policy {
@@ -65,6 +85,7 @@ impl Policy {
             deny_commands: string_list(value.get("denyCommands")),
             deny_command_paths: string_list(value.get("denyCommandPaths")),
             deny_tools: string_list(value.get("denyTools")),
+            rules: parse_rules(value.get("rules")),
         }
     }
 
@@ -75,6 +96,57 @@ impl Policy {
             && self.deny_commands.is_empty()
             && self.deny_command_paths.is_empty()
             && self.deny_tools.is_empty()
+            && self.rules.is_empty()
+    }
+
+    /// Evaluate the ordered allow/ask/deny table. The first matching row wins.
+    pub fn decision(&self, tool: &str, args: &Json, cwd: &Path) -> Option<Decision> {
+        for rule in &self.rules {
+            if let Some(required) = &rule.tool {
+                if required != "*" && required != tool {
+                    continue;
+                }
+            }
+            let mut matched = true;
+            if let Some(pattern) = &rule.path {
+                let mut found = false;
+                for key in ["path", "file", "dir", "directory", "target"] {
+                    if let Some(value) = args.get(key).and_then(Json::as_str) {
+                        let resolved = resolve(cwd, value);
+                        let lexical = normalize(&resolved);
+                        if glob_matches(pattern, &lexical)
+                            || canonical_with_tail(&resolved)
+                                .map(|canonical| glob_matches(pattern, &normalize(&canonical)))
+                                .unwrap_or(false)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                matched &= found;
+            }
+            if let Some(pattern) = &rule.command {
+                let Some(command) = args.get("command").and_then(Json::as_str) else {
+                    continue;
+                };
+                matched &= command_matches(pattern, command);
+            }
+            if matched {
+                return Some(rule.decision);
+            }
+        }
+        None
+    }
+
+    /// True when the table explicitly asks for operator approval.
+    pub fn requires_approval(&self, tool: &str, args: &Json, cwd: &Path) -> bool {
+        self.decision(tool, args, cwd) == Some(Decision::Ask)
+    }
+
+    /// True when the table explicitly allows the call without approval.
+    pub fn allows_without_approval(&self, tool: &str, args: &Json, cwd: &Path) -> bool {
+        self.decision(tool, args, cwd) == Some(Decision::Allow)
     }
 
     /// Check one tool call. `Some(reason)` blocks it.
@@ -99,6 +171,12 @@ impl Policy {
             if let Some(reason) = self.check_command(command) {
                 return Some(reason);
             }
+        }
+        if self.decision(tool, args, cwd) == Some(Decision::Deny) {
+            return Some(format!(
+                "the {} call is denied by the permissions table",
+                tool
+            ));
         }
         None
     }
@@ -447,6 +525,45 @@ fn match_chars(pattern: &[char], text: &[char]) -> bool {
     }
 }
 
+/// Parse the ordered allow/ask/deny table.
+fn parse_rules(value: Option<&Json>) -> Vec<Rule> {
+    let Some(items) = value.and_then(Json::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let decision = match item.str_or("decision", "").to_ascii_lowercase().as_str() {
+                "allow" => Decision::Allow,
+                "ask" => Decision::Ask,
+                "deny" => Decision::Deny,
+                _ => return None,
+            };
+            let field = |name: &str| {
+                let text = item.str_or(name, "");
+                (!text.trim().is_empty()).then_some(text)
+            };
+            Some(Rule {
+                decision,
+                tool: field("tool"),
+                path: field("path"),
+                command: field("command"),
+            })
+        })
+        .collect()
+}
+
+fn command_matches(pattern: &str, command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    let needle = pattern.to_ascii_lowercase();
+    if lowered.contains(&needle) {
+        return true;
+    }
+    let pattern: Vec<char> = needle.chars().collect();
+    let text: Vec<char> = lowered.chars().collect();
+    match_chars(&pattern, &text)
+}
+
 /// Collect a string list from a JSON value.
 fn string_list(value: Option<&Json>) -> Vec<String> {
     match value {
@@ -659,6 +776,35 @@ mod tests {
         assert_eq!(entries[0].str_or("tool", ""), "bash");
         assert_eq!(entries[0].str_or("decision", ""), "denied");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ordered_rule_table_allows_asks_and_denies() {
+        let policy = Policy::from_json(
+            &Json::parse(
+                r#"{"rules":[
+                    {"decision":"deny","tool":"read","path":"**/.env"},
+                    {"decision":"allow","tool":"read","path":"src/**"},
+                    {"decision":"ask","tool":"bash","command":"git push*"},
+                    {"decision":"deny","tool":"bash","command":"rm -rf*"}
+                ]}"#,
+            )
+            .unwrap(),
+        );
+        let cwd = Path::new("/work");
+        let env = Json::parse(r#"{"path":".env"}"#).unwrap();
+        let src = Json::parse(r#"{"path":"src/main.rs"}"#).unwrap();
+        let push = Json::parse(r#"{"command":"git push origin main"}"#).unwrap();
+        let rm = Json::parse(r#"{"command":"rm -rf /"}"#).unwrap();
+
+        assert_eq!(policy.decision("read", &env, cwd), Some(Decision::Deny));
+        assert!(policy.check_tool("read", &env, cwd).is_some());
+        assert_eq!(policy.decision("read", &src, cwd), Some(Decision::Allow));
+        assert!(policy.allows_without_approval("read", &src, cwd));
+        assert!(policy.check_tool("read", &src, cwd).is_none());
+        assert!(policy.requires_approval("bash", &push, cwd));
+        assert!(policy.check_tool("bash", &push, cwd).is_none());
+        assert!(policy.check_tool("bash", &rm, cwd).is_some());
     }
 
     #[test]
