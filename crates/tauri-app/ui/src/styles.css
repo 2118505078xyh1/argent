@@ -329,6 +329,13 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
+.transcript > * {
+  /* Long transcripts skip layout/paint for offscreen rows without a JS
+     windowing layer that would break variable-height tool cards. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
+}
+
 .transcript > * + * {
   margin-top: 14px;
 }
