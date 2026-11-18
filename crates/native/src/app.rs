@@ -5,14 +5,6 @@
 //! uses: commands go in, events and approval requests come out. A short timer
 //! drains those channels, so streaming text appears without blocking the
 //! renderer.
-            Message::SetPrompt(value) => {
-                self.input = text_editor::Content::with_text(&value);
-                return iced::widget::operation::focus(INPUT_ID);
-            }
-            Message::SetPrompt(value) => {
-                self.input = text_editor::Content::with_text(&value);
-                return iced::widget::operation::focus(INPUT_ID);
-            }
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -47,6 +39,8 @@ pub enum Message {
     /// Drain the worker's channels.
     Tick,
     Edit(text_editor::Action),
+    /// Fill the composer from an empty-state suggestion.
+    SetPrompt(String),
     Send,
     Abort,
     NewSession,
@@ -356,6 +350,10 @@ impl App {
                 }
             }
             Message::Edit(action) => self.input.perform(action),
+            Message::SetPrompt(value) => {
+                self.input = text_editor::Content::with_text(&value);
+                return iced::widget::operation::focus(INPUT_ID);
+            }
             Message::Send => return self.send(),
             Message::Abort => {
                 if let Some(worker) = &self.worker {

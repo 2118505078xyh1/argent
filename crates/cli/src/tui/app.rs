@@ -376,9 +376,6 @@ impl App {
             UiEvent::BtwDelta(text) => {
                 self.transcript.append_btw(&text);
             }
-            UiEvent::BtwDelta(text) => {
-                self.transcript.append_btw(&text);
-            }
             UiEvent::BtwDone => {}
             UiEvent::Error(text) => {
                 self.transcript.push_notice(NoticeKind::Error, text);
@@ -2184,6 +2181,10 @@ impl App {
         if let Some(row) = self.body_user_row {
             let end = row + self.frame_body_height.max(1);
             self.scroll = self.body_total.saturating_sub(end);
+            eprintln!(
+                "JUMP row={row} total={} h={} scroll={}",
+                self.body_total, self.frame_body_height, self.scroll
+            );
             self.dirty = true;
         }
     }

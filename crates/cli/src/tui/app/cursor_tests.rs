@@ -1,7 +1,5 @@
 use super::*;
 use crate::tui::run::*;
-    assert!(frame.contains("╭─ ✗ bash"), "{}", frame);
-    assert!(frame.contains("╰─ ✗"), "{}", frame);
 
 static LAST_COPIED_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
@@ -45,6 +43,8 @@ fn a_failed_tool_shows_the_reason_without_expanding() {
         });
     let frame = app.frame(100, 24).join("\n");
     assert!(frame.contains("command not found: nope"), "{}", frame);
+    assert!(frame.contains("╭─ ✗ bash"), "{}", frame);
+    assert!(frame.contains("╰─ ✗"), "{}", frame);
 }
 
 #[test]
@@ -129,9 +129,9 @@ fn streamed_text_reaches_the_frame_as_it_arrives() {
 fn an_empty_input_puts_the_cursor_after_the_prompt_mark() {
     let app = app();
     let (row, col) = app.cursor_screen_position(100, 30);
-    // The input line is the 2nd row from the bottom (status bar below it).
-    assert_eq!(row, 29);
-    assert_eq!(col, 3);
+    // The input line sits above the bottom border and the status bar.
+    assert_eq!(row, 28);
+    assert_eq!(col, 4);
 }
 
 /// ANSI 转义序列剥掉，方便在渲染后的帧上断言文本。
@@ -251,6 +251,8 @@ fn idle_esc_jumps_back_to_the_last_user_message() {
     assert!(!body_has(&mut app), "滚动到底部时正文里不该再有最早的提问");
     let worker = test_worker();
     app.handle_key(&worker, Key::Esc);
+    let dbg = app.frame(60, 12).join("\n");
+    eprintln!("AFTER ESC:\n{}", dbg);
     assert!(body_has(&mut app), "Esc 之后正文顶部应回到最早的提问");
 }
 
@@ -456,6 +458,7 @@ fn thought_duration_format_is_human_readable() {
     assert_eq!(format_thought_duration(Duration::from_secs(12)), "12s");
     assert_eq!(format_thought_duration(Duration::from_secs(65)), "1m 5s");
 }
+
 #[test]
 fn the_thinking_header_shows_the_stream_duration() {
     let mut app = app();
@@ -510,6 +513,7 @@ fn the_first_message_survives_the_auto_rename() {
         "transcript keeps the user entry"
     );
 }
+
 #[test]
 fn the_ready_event_keeps_the_context_window() {
     let mut app = app();
@@ -526,6 +530,7 @@ fn the_ready_event_keeps_the_context_window() {
     });
     assert_eq!(app.metrics.context_max, 960_000);
 }
+
 #[test]
 fn turn_done_prints_a_dim_summary_line() {
     let mut app = app();
@@ -537,6 +542,7 @@ fn turn_done_prints_a_dim_summary_line() {
         cwd: "/tmp".to_string(),
         session: "s".to_string(),
         session_path: "/tmp/s.jsonl".to_string(),
+        approval: "sensible".to_string(),
     });
     app.handle_ui(UiEvent::Agent(AgentEvent::TurnStart { index: 0 }));
     app.handle_ui(UiEvent::Agent(AgentEvent::AssistantText(
@@ -637,6 +643,7 @@ fn summaries_print_right_after_their_own_turn() {
     );
     assert_eq!(app.turn_summaries.len(), 2);
 }
+
 #[test]
 fn turn_done_without_a_model_call_stays_quiet() {
     let mut app = app();
@@ -648,6 +655,7 @@ fn turn_done_without_a_model_call_stays_quiet() {
         cwd: "/tmp".to_string(),
         session: "s".to_string(),
         session_path: "/tmp/s.jsonl".to_string(),
+        approval: "sensible".to_string(),
     });
     app.handle_ui(UiEvent::TurnDone {
         reason: FinishReason::Aborted,
@@ -678,13 +686,14 @@ fn the_user_message_block_fills_the_row_with_bg() {
         assert_eq!(line.width(), 40, "the row is padded to full width");
     }
 }
+
 #[test]
 fn wide_characters_advance_the_cursor_by_two_cells() {
     let mut app = app();
     app.input = "你好".chars().collect();
     app.cursor = 2;
     let (_, col) = app.cursor_screen_position(100, 30);
-    assert_eq!(col, 3 + 4);
+    assert_eq!(col, 2 + 2 + 4);
 }
 
 #[test]
@@ -694,11 +703,12 @@ fn the_input_window_wraps_a_long_line() {
     app.input = "a".repeat(200).chars().collect();
     app.cursor = 200;
     let (row, col) = app.cursor_screen_position(100, 30);
-    assert_eq!(row, 29, "three input rows above the status bar");
-    assert_eq!(col, 1 + text_width(USER_MARK) + 8);
+    assert_eq!(row, 28, "three input rows above the status bar");
+    assert_eq!(col, INPUT_PAD + text_width(USER_MARK) + 8);
     // The frame still has exactly the requested height.
     assert_eq!(app.frame(100, 30).len(), 30);
 }
+
 #[test]
 fn a_long_input_window_keeps_the_cursor_visible() {
     let mut app = app();
@@ -721,8 +731,8 @@ fn explicit_newlines_split_the_input_window() {
     assert_eq!(rows[1].text, "cd");
     assert_eq!(cursor_row, 1);
     let (row, col) = app.cursor_screen_position(40, 20);
-    assert_eq!(row, 19);
-    assert_eq!(col, 1 + text_width(USER_MARK) + 1);
+    assert_eq!(row, 18);
+    assert_eq!(col, INPUT_PAD + text_width(USER_MARK) + 1);
 }
 
 #[test]
@@ -732,7 +742,7 @@ fn pressing_inside_the_input_area_positions_the_cursor() {
     app.input = "ab\ncd".chars().collect();
     app.cursor = 0;
     app.frame(40, 20);
-    // 16 行正文 + 输入顶线 + 两行输入 + 状态栏。
+    // 16 行正文 + 输入顶线 + 两行输入 + 输入底线 + 状态栏。
     let second = app
         .input_hit_rows
         .iter()
@@ -741,12 +751,12 @@ fn pressing_inside_the_input_area_positions_the_cursor() {
         .expect("second input row");
     let (row, start, _) = second;
     assert_eq!(start, 3);
-    // 第二行标记占 2 格，点第 2 格（col=3）落在 "d" 上。
-    app.handle_key(&worker, Key::MousePress { row, col: 3 });
+    // 第二行从边框后第 2 格开始，点 "d" 的单元格（col=4）。
+    app.handle_key(&worker, Key::MousePress { row, col: 5 });
     assert_eq!(app.cursor, start + 1);
     assert!(app.selection.is_none(), "input press starts no selection");
     // 松开只收尾：不复制、不切思考块。
-    app.handle_key(&worker, Key::MouseRelease { row, col: 3 });
+    app.handle_key(&worker, Key::MouseRelease { row, col: 6 });
     assert!(app.selection.is_none());
     assert_eq!(app.cursor, start + 1);
 }
@@ -773,12 +783,12 @@ fn dragging_in_the_input_area_copies_the_selected_text() {
     app.input = "abcd".chars().collect();
     app.frame(40, 20);
     let (row, _, _) = app.input_hit_rows[0].clone();
-    // 文本从第 2 格开始：按下 "b"（col 3），拖到 "c"（col 4）→ 选 "bc"。
-    app.handle_key(&worker, Key::MousePress { row, col: 3 });
-    app.handle_key(&worker, Key::MouseDrag { row, col: 4 });
+    // 文本从边框后的第 4 格开始：按下 "b"（col 5），拖到 "c"（col 6）→ 选 "bc"。
+    app.handle_key(&worker, Key::MousePress { row, col: 5 });
+    app.handle_key(&worker, Key::MouseDrag { row, col: 6 });
     let (start, end) = app.selection.expect("drag promotes to a selection");
     assert_eq!(app.selected_text(start, end), "bc");
-    app.handle_key(&worker, Key::MouseRelease { row, col: 4 });
+    app.handle_key(&worker, Key::MouseRelease { row, col: 6 });
     assert!(app.selection.is_none(), "release clears the selection");
     assert!(app.input_press.is_none());
     let status = app
