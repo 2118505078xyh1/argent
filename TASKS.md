@@ -7,7 +7,7 @@
 
 ## 一、仓库与协作规则
 
-- 仓库：`D:/code/mpi/argent`；`master` 跟踪 `origin/master`，**领先 22 个提交，未 push**
+- 仓库：`D:/work/argent`；`master` 跟踪 `origin/master`，**领先 22 个提交，未 push**
   （截至本文件提交时；origin 疑似共享远端，push 需用户批准）。
 - **同一工作树同一时间只允许一个 agent 写。** 要并行就用独立 worktree（见下节），
   合并时由用户统一 review。
@@ -22,20 +22,20 @@
 
 | 路径 | 分支 | 用途 |
 |---|---|---|
-| `D:/code/mpi/argent` | `master` | 主树，只留一个写入者 |
-| `D:/code/mpi/argent-wt2` | `agent2` | 并行任务用；用完 `git worktree remove` 并删分支 |
+| `D:/work/argent` | `master` | 主树，只留一个写入者 |
+| `D:/work/argent-wt2` | `agent2` | 并行任务用；用完 `git worktree remove` 并删分支 |
 
 再开一个：
 
 ```bash
-cd D:/code/mpi/argent
+cd D:/work/argent
 git worktree add -b agent3 ../argent-wt3 HEAD
 ```
 
 合并回主树（先验证再合）：
 
 ```bash
-cd D:/code/mpi/argent
+cd D:/work/argent
 git merge --no-ff agent2
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -81,7 +81,7 @@ cargo test --workspace --all-features --locked
 
 - 分支：`master` @ `6238bce`，与 `origin/master` 同步。
 - 当前工作：共享前端回合契约 + TUI/engine/ACP 契约测试（待提交）。
-- Worktree：`D:/code/mpi/argent`（master）、`argent-wt2`（agent2）。
+- Worktree：`D:/work/argent`（master）、`argent-wt2`（agent2）。
 - 本地 git 作者：`寒弦问月夜未阑 <hanxian@local>`（仓库级配置，旧提交保持原样）。
 - 每轮提交结束后自动 `git push origin master`。
 - 本地二进制 `~/.local/bin/argent.exe` 仍待统一 release 构建后重装。

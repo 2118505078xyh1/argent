@@ -581,7 +581,7 @@ fn dump_a_representative_frame() {
         thinking: "high".to_string(),
         provider: "anthropic".to_string(),
         protocol: "anthropic-messages".to_string(),
-        cwd: "D:\\code\\mpi\\argent".to_string(),
+        cwd: "D:\\work\\argent".to_string(),
         session: "demo-session".to_string(),
         session_path: "C:\\Users\\demo\\.argent".to_string(),
     });

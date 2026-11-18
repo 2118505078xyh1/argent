@@ -194,7 +194,7 @@ CLI、TUI 和图形端共用同一份自动化存储：运行、启停、看日�
 ### 构建并安装到 PATH
 
 ```powershell
-cd D:\code\mpi\argent
+cd D:\work\argent
 cargo build --release -p argent-cli
 
 # 装到用户 PATH 已包含的目录（Windows 用 .local\bin，Unix 用 ~/.local/bin）
@@ -368,7 +368,7 @@ GUI 二进制是 `argent-native.exe`（iced 原生窗口，无 WebView）；`arg
 ### 升级
 
 ```powershell
-cd D:\code\mpi\argent
+cd D:\work\argent
 cargo build --release -p argent-cli
 copy target\release\argent.exe $HOME\.local\bin\argent.exe
 ```

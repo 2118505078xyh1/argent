@@ -1,6 +1,6 @@
 # argent 与 pi / Codex / Claude Code / OpenCode / ZCode / Kimi / DeepSeek Harness 对比
 
-- argent 版本：**0.2.0**（本机 `D:/code/mpi/argent`，基准 tag `v0.2.0`）
+- argent 版本：**0.2.0**（本机 `D:/work/argent`，基准 tag `v0.2.0`）
 - 对照版本：pi 1.5.2、Codex CLI 0.169.0、Claude Code 2.1.325、OpenCode 2.3.0、
   ZCode CLI 0.17.1 / GUI 3.18.2、Kimi Code CLI 2.6.3、DeepSeek Harness 0.2.1-rc.5
 - 判定：● 原生完整支持；◐ 部分/需扩展/实验性；○ 无内建；**待补** = 本机无法核实
