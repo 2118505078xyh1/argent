@@ -11,98 +11,30 @@ import { invoke } from "@tauri-apps/api/core";
 import Markdown from "./Markdown";
 import Automations from "./Automations";
 import Documents from "./Documents";
-import ToolCard, { type Tool } from "./ToolCard";
+import ToolCard from "./ToolCard";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   asNumber,
   asRecord,
   asString,
+  parseIncoming,
   parseReady,
   THINKING_LEVELS,
+  type AgentEvent,
+  type Approval,
+  type Incoming,
+  type Item,
+  type LoadedEntry,
   type ModelInfo,
   type Ready,
+  type SessionRow,
+  type TextItem,
   type UnknownRecord,
 } from "./ipc";
 import { formatCost, formatTokens, relativeStamp, sessionGroup } from "./format";
 import { detectLocale, t, type Locale } from "./i18n";
 
-type TextItem = {
-  id: number;
-  kind: "user" | "assistant" | "thinking" | "notice";
-  text: string;
-};
-
-type ToolItem = { id: number; kind: "tool"; tool: Tool };
-type Item = TextItem | ToolItem;
-
-type Approval = { id: number; name: string; arguments: string; sid?: string };
-
 type SearchHit = { path: string; title: string; line: number; snippet: string };
-
-type SessionRow = {
-  path: string;
-  title: string;
-  updated: string;
-  cwd: string;
-};
-
-type LoadedEntry =
-  | { kind: "user" | "assistant" | "thinking"; text: string }
-  | { kind: "notice"; level: "info" | "warning" | "error"; text: string }
-  | {
-      kind: "tool";
-      callId: string;
-      name: string;
-      arguments: string;
-      output: string;
-      state: "running" | "ok" | "error";
-      durationMs?: number;
-    };
-
-type AgentEvent =
-  | { type: "turn_start" }
-  | { type: "turn_end" }
-  | { type: "assistant_text"; text: string }
-  | { type: "thinking"; text: string }
-  | {
-      type: "tool_requested";
-      id: string;
-      name: string;
-      arguments: string;
-    }
-  | {
-      type: "tool_finished";
-      id: string;
-      name: string;
-      output: string;
-      isError: boolean;
-      durationMs?: number;
-    }
-  | { type: "finished"; reason: string }
-  | { type: "notice"; text: string }
-  | { type: "aborted" };
-
-type Incoming = (
-  | ({ kind: "ready" } & Ready)
-  | { kind: "agent"; event: AgentEvent }
-  | {
-      kind: "turn_done";
-      reason: string;
-      promptTokens?: number;
-      completionTokens?: number;
-      totalTokens?: number;
-      cachedTokens?: number;
-      requests?: number;
-      cost?: number;
-      priced?: boolean;
-    }
-  | Approval & { kind: "approval" }
-  | { kind: "session"; path: string }
-  | { kind: "session_cleared" }
-  | { kind: "sessions"; sessions: SessionRow[] }
-  | { kind: "loaded"; entries: LoadedEntry[] }
-  | { kind: "error"; message: string }
-) & { sid?: string };
 
 function storageGet(key: string): string | null {
   try {
@@ -117,77 +49,6 @@ function storageSet(key: string, value: string): void {
     localStorage.setItem(key, value);
   } catch {
     // Private modes can deny storage; selection still works for this run.
-  }
-}
-
-function parseAgentEvent(raw: unknown): AgentEvent | null {
-  const value = asRecord(raw);
-  if (!value) return null;
-  switch (value.type) {
-    case "turn_start":
-      return { type: "turn_start" };
-    case "turn_end":
-      return { type: "turn_end" };
-    case "assistant_text":
-      return { type: "assistant_text", text: asString(value.text) };
-    case "thinking":
-      return { type: "thinking", text: asString(value.text) };
-    case "tool_requested":
-      return {
-        type: "tool_requested",
-        id: asString(value.id),
-        name: asString(value.name),
-        arguments: asString(value.arguments),
-      };
-    case "tool_finished":
-      return {
-        type: "tool_finished",
-        id: asString(value.id),
-        name: asString(value.name),
-        output: asString(value.output),
-        isError: value.isError === true,
-        durationMs: asNumber(value.durationMs),
-      };
-    case "finished":
-      return { type: "finished", reason: asString(value.reason, "ready") };
-    case "notice":
-      return { type: "notice", text: asString(value.text) };
-    case "aborted":
-      return { type: "aborted" };
-    default:
-      return null;
-  }
-}
-
-function parseLoadedEntry(raw: unknown): LoadedEntry | null {
-  const value = asRecord(raw);
-  if (!value) return null;
-  const text = asString(value.text);
-  switch (value.kind) {
-    case "user":
-    case "assistant":
-    case "thinking":
-      return { kind: value.kind, text };
-    case "notice": {
-      const level =
-        value.level === "warning" || value.level === "error" ? value.level : "info";
-      return { kind: "notice", level, text };
-    }
-    case "tool": {
-      const state =
-        value.state === "running" || value.state === "error" ? value.state : "ok";
-      return {
-        kind: "tool",
-        callId: asString(value.callId),
-        name: asString(value.name),
-        arguments: asString(value.arguments),
-        output: asString(value.output),
-        state,
-        durationMs: asNumber(value.durationMs),
-      };
-    }
-    default:
-      return null;
   }
 }
 
@@ -209,70 +70,6 @@ function loadedItems(entries: LoadedEntry[]): Item[] {
     }
     return { id: nextId++, kind: entry.kind, text: entry.text };
   });
-}
-
-function parseIncoming(raw: unknown): Incoming | null {
-  const value = asRecord(raw);
-  if (!value) return null;
-  switch (value.kind) {
-    case "ready":
-      return { kind: "ready", ...parseReady(value) };
-    case "agent": {
-      const event = parseAgentEvent(value.event);
-      return event ? { kind: "agent", event } : null;
-    }
-    case "turn_done":
-      return {
-        kind: "turn_done",
-        reason: asString(value.reason, "ready"),
-        promptTokens: asNumber(value.promptTokens),
-        completionTokens: asNumber(value.completionTokens),
-        totalTokens: asNumber(value.totalTokens),
-        cachedTokens: asNumber(value.cachedTokens),
-        requests: asNumber(value.requests),
-        cost: asNumber(value.cost),
-        priced: value.priced === true,
-      };
-    case "approval":
-      return {
-        kind: "approval",
-        id: asNumber(value.id) ?? 0,
-        name: asString(value.name),
-        arguments: asString(value.arguments),
-      };
-    case "session":
-      return { kind: "session", path: asString(value.path) };
-    case "session_cleared":
-      return { kind: "session_cleared" };
-    case "loaded": {
-      const entries = Array.isArray(value.entries) ? value.entries : [];
-      return {
-        kind: "loaded",
-        entries: entries
-          .map(parseLoadedEntry)
-          .filter((entry): entry is LoadedEntry => entry !== null),
-      };
-    }
-    case "sessions": {
-      const rows = Array.isArray(value.sessions) ? value.sessions : [];
-      return {
-        kind: "sessions",
-        sessions: rows.map((raw) => {
-          const row = asRecord(raw) ?? {};
-          return {
-            path: asString(row.path),
-            title: asString(row.title),
-            updated: asString(row.updated),
-            cwd: asString(row.cwd),
-          };
-        }),
-      };
-    }
-    case "error":
-      return { kind: "error", message: asString(value.message, "unknown error") };
-    default:
-      return null;
-  }
 }
 
 const STATUS_SEGMENTS = [

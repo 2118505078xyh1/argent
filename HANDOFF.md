@@ -160,6 +160,9 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
 16. **P3 第六轮 ✅（2026-11-19）**：跨会话搜索（Ctrl+Shift+F 面板）、外部
     JSONL 会话导入、状态栏分段自定义、ToolCard 组件拆分。clippy/typecheck/
     build/CDP 冒烟全部通过。
+17. **IPC 契约测试 ✅（2026-11-19）**：所有事件类型与解析函数迁到
+    `ui/src/ipc.ts`，vitest 9 tests 覆盖 ready/agent/turn_done/approval/
+    sessions/loaded/error 与畸形 payload；CDP 冒烟通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）
