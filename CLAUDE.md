@@ -110,4 +110,18 @@ cli -> every crate except engine / native
 - Every new subsystem gets tests at the boundary it introduces.
 - Tool and hook shell commands prefer bash (Git Bash on Windows), falling back to `cmd`/`sh`.
 
+## Release policy
+
+- Trigger: when cumulative Rust line changes since the latest release tag
+  (added + deleted, committed content only) exceed **10% of the current
+  Rust line total**, a new release is due. `scripts/release-threshold.sh`
+  measures it (exit 0 = release due).
+- Release procedure (same as v0.2.0): verify fmt/clippy/tests green →
+  write the CHANGELOG section from git log (features → next minor, fixes
+  only → patch) and sync the workspace `version` → commit → push master →
+  annotated tag `vX.Y.Z` + push tag → build release binaries → GitHub
+  Release with the CHANGELOG section as notes and Windows zips attached.
+- Commit author must stay `argent-dev <dev@argent.local>`; credentials go
+  through the Windows credential manager, never into output or files.
+
 Further reading: `README.md` (feature overview), `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/PARITY.md` (component-by-component mapping to ZCode and Pi).
