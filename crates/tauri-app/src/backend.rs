@@ -602,6 +602,59 @@ pub fn delete_session(state: State<'_, Backend>, sid: String, path: String) -> R
         .map_err(|_| "agent worker is gone".to_string())
 }
 
+fn memory_store() -> Result<argent_memory::MemoryStore, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let slug = cwd
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "workspace".to_string());
+    Ok(argent_memory::MemoryStore::new(
+        argent_memory::MemoryStore::default_root(),
+        slug,
+    ))
+}
+
+#[tauri::command]
+pub fn list_memory() -> Result<Value, String> {
+    let store = memory_store()?;
+    let entries = store.all().map_err(|error| error.to_string())?;
+    Ok(json!(entries
+        .iter()
+        .map(|entry| json!({
+            "scope": entry.scope.as_str(),
+            "key": entry.key,
+            "value": entry.value,
+            "source": entry.source,
+        }))
+        .collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub fn add_memory(scope: String, key: String, value: String) -> Result<(), String> {
+    let scope = argent_memory::Scope::parse(&scope)
+        .ok_or_else(|| format!("unknown memory scope {}", scope))?;
+    let store = memory_store()?;
+    store
+        .remember(argent_memory::MemoryEntry {
+            scope,
+            key,
+            value,
+            source: None,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn forget_memory(scope: String, key: String) -> Result<(), String> {
+    let scope = argent_memory::Scope::parse(&scope)
+        .ok_or_else(|| format!("unknown memory scope {}", scope))?;
+    let store = memory_store()?;
+    store
+        .forget(scope, &key)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn import_session_text(
     state: State<'_, Backend>,

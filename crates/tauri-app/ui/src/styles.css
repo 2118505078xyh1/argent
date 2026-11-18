@@ -1007,6 +1007,7 @@ textarea:focus-visible {
 }
 
 .auto-form input,
+.auto-form select,
 .auto-form textarea {
   width: 100%;
   padding: 8px 10px;

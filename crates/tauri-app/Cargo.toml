@@ -17,6 +17,7 @@ argent-ai = { path = "../ai" }
 argent-automation = { path = "../automation" }
 argent-core = { path = "../core" }
 argent-engine = { path = "../engine" }
+argent-memory = { path = "../memory" }
 argent-session = { path = "../session" }
 argent-tools = { path = "../tools" }
 argent-ui-core = { path = "../ui-core" }

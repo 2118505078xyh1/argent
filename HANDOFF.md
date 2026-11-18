@@ -163,6 +163,8 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
 17. **IPC 契约测试 ✅（2026-11-19）**：所有事件类型与解析函数迁到
     `ui/src/ipc.ts`，vitest 9 tests 覆盖 ready/agent/turn_done/approval/
     sessions/loaded/error 与畸形 payload；CDP 冒烟通过。
+18. **命令面板与记忆页 ✅（2026-11-19）**：Ctrl+Shift+P 动作面板、记忆浏览/
+    新增/删除（`argent-memory`），CDP 冒烟加入页面切换断言并通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

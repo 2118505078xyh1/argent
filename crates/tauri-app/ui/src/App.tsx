@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import Markdown from "./Markdown";
 import Automations from "./Automations";
 import Documents from "./Documents";
+import Memory from "./Memory";
 import ToolCard from "./ToolCard";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -129,6 +130,8 @@ function App() {
   const [searchOpen, setSearchOpen] = createSignal(false);
   const [searchQuery, setSearchQuery] = createSignal("");
   const [searchResults, setSearchResults] = createSignal<SearchHit[]>([]);
+  const [paletteOpen, setPaletteOpen] = createSignal(false);
+  const [paletteQuery, setPaletteQuery] = createSignal("");
   const [approvalQueue, setApprovalQueue] = createSignal<Approval[]>([]);
   const approval = () => approvalQueue()[0] ?? null;
   const [error, setError] = createSignal<string | null>(null);
@@ -171,7 +174,7 @@ function App() {
   const [theme, setTheme] = createSignal<"dark" | "light">(
     storageGet("argent.theme") === "light" ? "light" : "dark",
   );
-  const [screen, setScreen] = createSignal<"chat" | "automations" | "documents">("chat");
+  const [screen, setScreen] = createSignal<"chat" | "automations" | "documents" | "memory">("chat");
   const [help, setHelp] = createSignal(false);
   const [locale, setLocale] = createSignal<Locale>(detectLocale());
   const [statusSegments, setStatusSegments] = createSignal<StatusSegment[]>(
@@ -515,6 +518,12 @@ function App() {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = !!target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        setPaletteOpen(true);
+        setHelp(false);
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") {
         event.preventDefault();
         setSearchOpen(true);
@@ -1072,6 +1081,67 @@ function App() {
     target.style.height = `${Math.min(target.scrollHeight, 180)}px`;
   };
 
+  const paletteActions = () => {
+    const query = paletteQuery().trim().toLowerCase();
+    const actions = [
+      { label: "新建会话标签", run: () => void addTab() },
+      { label: "当前标签新建会话", run: () => void newSession() },
+      {
+        label: "跨会话搜索",
+        run: () => {
+          setSearchOpen(true);
+          setPaletteOpen(false);
+        },
+      },
+      {
+        label: "打开定时任务",
+        run: () => {
+          setScreen("automations");
+          setPaletteOpen(false);
+        },
+      },
+      {
+        label: "打开文档",
+        run: () => {
+          setScreen("documents");
+          setPaletteOpen(false);
+        },
+      },
+      {
+        label: "导出 Markdown",
+        run: () => {
+          exportTranscript("md");
+          setPaletteOpen(false);
+        },
+      },
+      {
+        label: "压缩上下文",
+        run: () => {
+          void invoke("compact", { sid: active() });
+          setPaletteOpen(false);
+        },
+      },
+      { label: "撤销上一轮", run: () => void rewind() },
+      {
+        label: "切换主题",
+        run: () => {
+          setTheme(theme() === "dark" ? "light" : "dark");
+          setPaletteOpen(false);
+        },
+      },
+      {
+        label: "快捷键帮助",
+        run: () => {
+          setHelp(true);
+          setPaletteOpen(false);
+        },
+      },
+    ];
+    return query
+      ? actions.filter((action) => action.label.toLowerCase().includes(query)).slice(0, 10)
+      : actions;
+  };
+
   return (
     <div class="app">
       <aside class="sidebar">
@@ -1094,6 +1164,12 @@ function App() {
             onClick={() => setScreen("documents")}
           >
             {t(locale(), "documents")}
+          </button>
+          <button
+            classList={{ active: screen() === "memory" }}
+            onClick={() => setScreen("memory")}
+          >
+            记忆
           </button>
         </div>
         <div class="side-head">
@@ -1613,7 +1689,40 @@ function App() {
         <Show when={screen() === "documents"}>
           <Documents onAddToChat={addDocumentToChat} />
         </Show>
+        <Show when={screen() === "memory"}>
+          <Memory />
+        </Show>
       </main>
+
+      <Show when={paletteOpen()}>
+        <div class="overlay" onClick={() => setPaletteOpen(false)}>
+          <div class="search-panel palette" onClick={(event) => event.stopPropagation()}>
+            <div class="search-head">
+              <input
+                autofocus
+                placeholder="输入动作…"
+                value={paletteQuery()}
+                onInput={(event) => setPaletteQuery(event.currentTarget.value)}
+              />
+              <button class="icon" onClick={() => setPaletteOpen(false)}>
+                ×
+              </button>
+            </div>
+            <div class="search-results">
+              <For
+                each={paletteActions()}
+                fallback={<div class="side-empty">没有匹配的动作。</div>}
+              >
+                {(action) => (
+                  <button class="search-hit" onClick={action.run}>
+                    <strong>{action.label}</strong>
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+        </div>
+      </Show>
 
       <Show when={searchOpen()}>
         <div class="overlay" onClick={() => setSearchOpen(false)}>
@@ -1666,6 +1775,7 @@ function App() {
               <div><kbd>Shift+Enter</kbd><span>换行</span></div>
               <div><kbd>Ctrl+K</kbd><span>聚焦输入框</span></div>
               <div><kbd>Ctrl+Shift+F</kbd><span>跨会话搜索</span></div>
+              <div><kbd>Ctrl+Shift+P</kbd><span>命令面板</span></div>
               <div><kbd>Esc</kbd><span>中止当前回合 / 关闭面板 / 拒绝审批</span></div>
               <div><kbd>Y / N</kbd><span>允许 / 拒绝工具审批</span></div>
               <div><kbd>/help</kbd><span>查看斜杠命令</span></div>

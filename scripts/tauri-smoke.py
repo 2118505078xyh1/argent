@@ -197,6 +197,21 @@ async def run(args):
                     "document.querySelectorAll('.chat-tab').length === 1", label="tab closed"
                 )
 
+                # Secondary screens must mount without blocking the chat worker.
+                await cdp.eval(
+                    "Array.from(document.querySelectorAll('.side-tabs button'))"
+                    ".find((b) => b.textContent.includes('记忆')).click()"
+                )
+                await cdp.wait_for(
+                    "document.querySelector('.page h2')?.textContent.includes('长期记忆')",
+                    label="memory page",
+                )
+                await cdp.eval(
+                    "Array.from(document.querySelectorAll('.side-tabs button'))"
+                    ".find((b) => b.textContent.includes('聊天')).click()"
+                )
+                await cdp.wait_for("!!document.querySelector('textarea')", label="chat restored")
+
                 shot = await cdp.call("Page.captureScreenshot", {"format": "png"})
                 args.out.parent.mkdir(parents=True, exist_ok=True)
                 args.out.write_bytes(base64.b64decode(shot["data"]))
