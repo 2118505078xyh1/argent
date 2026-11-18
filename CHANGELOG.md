@@ -33,6 +33,8 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 - **`/btw` side chat.** A side question runs in a separate one-shot process
   with the last 12 messages as context; its `[btw]` answer is shown without
   entering the main session history.
+- **Shared task-board prototype.** `workflow::board::Board` turns workflow
+  steps into dependency-aware claim/complete/block tasks for agent teams.
 - **Seen-line provenance for anchored edits.** `edit` now tracks the exact
   `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
   range is rejected even if its hash happens to match, and compaction clears

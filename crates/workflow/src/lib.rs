@@ -21,6 +21,8 @@ use argent_core::error::{Error, Result};
 use argent_core::json::Json;
 use argent_tools::{DelegateBatch, DelegateRequest, TaskOutcome};
 
+pub mod board;
+
 /// 判断是不是声明式 TypeScript 工作流文件。
 pub fn is_typescript_workflow(path: &Path) -> bool {
     let name = path
