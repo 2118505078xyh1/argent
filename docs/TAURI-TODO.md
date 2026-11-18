@@ -210,7 +210,7 @@ server，`ARGENT_BASE_URL` 指过去；新增 `scripts/tauri-smoke.py`，用 CDP
 
 > 2026-11-19 已落地的部分：T1.1（基础 Markdown：标题/列表/粗体/行内码/安全链接）、
 > T1.2（代码块复制，未做语法高亮）、T1.6（回到底部按钮，未做新消息计数）、
-> T1.11、T1.15（风险标签，未做 always-allow）、T1.18、T1.22（深/浅色，未做系统跟随）。
+> T1.11、T1.15（风险标签 + always-allow）、T1.18、T1.22（深/浅色，未做系统跟随）。
 > 另新增 `tsconfig.json` + `bun run typecheck`（T2.10 的一半）。
 > 2026-11-19 续：T1.4（工具卡折叠/展开全部/原始参数）、T1.10（快捷键 +
 > 帮助面板）、T1.19（错误重试）、T1.20（完成通知）、T1.26（首次使用引导）、
@@ -218,6 +218,9 @@ server，`ARGENT_BASE_URL` 指过去；新增 `scripts/tauri-smoke.py`，用 CDP
 > P2 已完成：T2.3（map_event 契约测试 8 个）、T2.10（纯函数抽到 `ipc.ts`/
 > `format.ts` + vitest 6 tests）、T2.12（独立 tauri CI）、T2.13（两个 workspace
 > clippy -D warnings 通过）、T2.14（`scripts/check-tauri-version.py`）。
+> 2026-11-19 再续：T1.16（本次会话总是允许）、T1.13（斜杠补全）、T1.8（按 tab
+> 记住滚动位置）、T2.6（关闭窗口优雅退出）、T2.9（CSP 收紧）、T2.8
+> （tauri-plugin-single-instance）。每次改动后 CDP 冒烟均通过。
 
 | ID | 项 | 说明 / 落点 | 量级 | 验收 |
 |---|---|---|---|---|

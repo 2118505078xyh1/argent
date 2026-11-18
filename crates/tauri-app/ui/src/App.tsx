@@ -280,6 +280,18 @@ function parseIncoming(raw: unknown): Incoming | null {
   }
 }
 
+const SLASH_COMMANDS = [
+  "/new",
+  "/rename",
+  "/rewind",
+  "/compact",
+  "/model",
+  "/thinking",
+  "/cost",
+  "/copy",
+  "/help",
+];
+
 let nextId = 1;
 
 function App() {
@@ -342,6 +354,8 @@ function App() {
   const [completionTokens, setCompletionTokens] = createSignal(0);
   const [totalTokens, setTotalTokens] = createSignal(0);
   const [follow, setFollow] = createSignal(true);
+  const [scrollByTab, setScrollByTab] = createSignal<Record<string, number>>({});
+  const [restoring, setRestoring] = createSignal(false);
   const [expandedTools, setExpandedTools] = createSignal<Record<string, boolean>>({});
   const [expandAllTools, setExpandAllTools] = createSignal(false);
 
@@ -365,6 +379,13 @@ function App() {
   const thinkingOptions = createMemo(() => {
     const levels = ready()?.thinkingLevels ?? [];
     return levels.length > 0 ? levels : THINKING_LEVELS;
+  });
+
+  const slashMatches = createMemo(() => {
+    const value = input().trimStart();
+    if (!value.startsWith("/")) return [];
+    const query = value.slice(1).split(/\s/)[0].toLowerCase();
+    return SLASH_COMMANDS.filter((command) => command.slice(1).startsWith(query)).slice(0, 8);
   });
 
   let viewport!: HTMLDivElement;
@@ -642,7 +663,7 @@ function App() {
 
   createEffect(() => {
     items();
-    if (follow() && viewport) {
+    if (follow() && viewport && !restoring()) {
       requestAnimationFrame(() => {
         viewport.scrollTop = viewport.scrollHeight;
       });
@@ -726,13 +747,23 @@ function App() {
   const switchTab = async (sid: string) => {
     if (sid === active()) return;
     try {
+      if (viewport) {
+        setScrollByTab((prev) => ({ ...prev, [active()]: viewport.scrollTop }));
+      }
       await invoke("activate_tab", { sid });
+      setRestoring(true);
       setActive(sid);
       setApproval(null);
       setError(null);
-      setFollow(true);
       resetMetrics();
+      requestAnimationFrame(() => {
+        if (viewport) {
+          viewport.scrollTop = scrollByTab()[sid] ?? viewport.scrollHeight;
+        }
+        setRestoring(false);
+      });
     } catch (err) {
+      setRestoring(false);
       setError(String(err));
     }
   };
@@ -854,13 +885,17 @@ function App() {
     return /bash|write|edit|delete|remove|patch|move|copy|exec|apply|shell/.test(name);
   };
 
-  const answer = async (allow: boolean) => {
+  const answer = async (allow: boolean, always = false) => {
     const pending = approval();
     if (!pending) return;
+    const sid = pending.sid || active();
     setApproval(null);
     try {
+      if (always) {
+        await invoke("allow_tool", { sid, name: pending.name });
+      }
       await invoke("answer_approval", {
-        sid: pending.sid || active(),
+        sid,
         id: pending.id,
         allow,
       });
@@ -1355,6 +1390,13 @@ function App() {
                 <button class="ghost" onClick={() => void answer(false)}>
                   拒绝
                 </button>
+                <button
+                  class="ghost"
+                  title="本次会话不再询问此工具"
+                  onClick={() => void answer(true, true)}
+                >
+                  总是允许
+                </button>
                 <button class="primary" onClick={() => void answer(true)}>
                   允许
                 </button>
@@ -1384,6 +1426,22 @@ function App() {
         </Show>
 
         <footer class="composer-wrap">
+          <Show when={input().startsWith("/") && slashMatches().length > 0}>
+            <div class="slash-menu">
+              <For each={slashMatches()}>
+                {(command) => (
+                  <button
+                    onClick={() => {
+                      setInput(`${command} `);
+                      composer.focus();
+                    }}
+                  >
+                    {command}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
           <div class="composer">
             <textarea
               ref={composer}

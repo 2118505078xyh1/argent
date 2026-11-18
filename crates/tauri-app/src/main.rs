@@ -3,13 +3,27 @@
 
 mod backend;
 
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let backend = backend::Backend::start(app.handle().clone())?;
+            if let Some(window) = app.get_webview_window("main") {
+                let shutdown = backend.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { .. } = event {
+                        shutdown.shutdown_all();
+                    }
+                });
+            }
             app.manage(backend);
             Ok(())
         })
@@ -38,6 +52,7 @@ fn main() {
             backend::list_documents,
             backend::read_document,
             backend::answer_approval,
+            backend::allow_tool,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run argent-tauri");

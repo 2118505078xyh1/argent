@@ -1,6 +1,6 @@
 //! Tauri commands and the one worker that owns the Rust agent.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -20,13 +20,29 @@ use tauri::{AppHandle, Emitter, State};
 /// without a WebView: a click on "允许"/"拒绝" is just `answer(id, bool)`.
 struct ApprovalBridge {
     pending: Mutex<HashMap<u64, Sender<bool>>>,
+    /// Tools the operator chose to allow for the rest of this tab.
+    allowed: Mutex<HashSet<String>>,
 }
 
 impl ApprovalBridge {
     fn new() -> Self {
         Self {
             pending: Mutex::new(HashMap::new()),
+            allowed: Mutex::new(HashSet::new()),
         }
+    }
+
+    fn allow_tool(&self, name: &str) {
+        if let Ok(mut allowed) = self.allowed.lock() {
+            allowed.insert(name.to_string());
+        }
+    }
+
+    fn is_allowed(&self, name: &str) -> bool {
+        self.allowed
+            .lock()
+            .map(|allowed| allowed.contains(name))
+            .unwrap_or(false)
     }
 
     fn insert(&self, id: u64, reply: Sender<bool>) {
@@ -66,6 +82,7 @@ struct Shared {
 }
 
 /// Tauri-managed handle to all agent workers.
+#[derive(Clone)]
 pub struct Backend {
     shared: Arc<Shared>,
 }
@@ -82,6 +99,10 @@ fn spawn_session(app: AppHandle, shared: Arc<Shared>, sid: String, handle: Arc<S
             }
             while let Ok(approval) = engine.approvals.try_recv() {
                 let id = approval.id;
+                if handle.approvals.is_allowed(&approval.name) {
+                    let _ = approval.reply.send(true);
+                    continue;
+                }
                 handle.approvals.insert(id, approval.reply);
                 let _ = app.emit(
                     "argent://event",
@@ -134,6 +155,18 @@ impl Backend {
             .insert("1".to_string(), Arc::clone(&handle));
         spawn_session(app, Arc::clone(&shared), "1".to_string(), handle);
         Ok(Self { shared })
+    }
+
+    /// Called when the window closes so every worker can flush its session.
+    pub fn shutdown_all(&self) {
+        let Ok(sessions) = self.shared.sessions.lock() else {
+            return;
+        };
+        for handle in sessions.values() {
+            if let Ok(engine) = handle.engine.lock() {
+                let _ = engine.commands.send(Command::Shutdown);
+            }
+        }
     }
 }
 
@@ -471,6 +504,12 @@ pub fn answer_approval(
 }
 
 #[tauri::command]
+pub fn allow_tool(state: State<'_, Backend>, sid: String, name: String) -> Result<(), String> {
+    handle_for(&state, &sid)?.approvals.allow_tool(&name);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn open_session(state: State<'_, Backend>, sid: String, path: String) -> Result<(), String> {
     handle_for(&state, &sid)?
         .engine
@@ -800,6 +839,18 @@ mod tests {
         assert_eq!(payload["kind"], "prompt");
         assert_eq!(payload["action"], "review the diff");
         assert_eq!(payload["enabled"], true);
+    }
+
+    #[test]
+    fn an_allowed_tool_is_remembered_for_the_tab() {
+        let bridge = ApprovalBridge::new();
+        bridge.allow_tool("read");
+        assert!(bridge.is_allowed("read"));
+        assert!(!bridge.is_allowed("bash"));
+        let (reply_tx, reply_rx) = mpsc::channel();
+        bridge.insert(1, reply_tx);
+        bridge.answer(1, true).expect("answer delivered");
+        assert!(reply_rx.recv().unwrap());
     }
 
     #[test]

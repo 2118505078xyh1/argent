@@ -139,6 +139,10 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     （6 tests）、map_event 契约测试（8 tests）、两个 workspace 的 clippy
     `-D warnings` 通过、独立 `.github/workflows/tauri.yml`、版本一致性脚本。
     重新编译后 CDP 冒烟仍通过。
+12. **P1/P2 再续 ✅（2026-11-19）**：审批"总是允许此工具"（后端白名单 + 前端
+    按钮）、斜杠补全、按 tab 记忆滚动位置、窗口关闭时向所有 worker 发
+    Shutdown、CSP 从 null 收紧为白名单表达式、单实例插件（重开聚焦已有窗口）。
+    `cargo clippy --all-targets -D warnings` 与 CDP 冒烟均通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

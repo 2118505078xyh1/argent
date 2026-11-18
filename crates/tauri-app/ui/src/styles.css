@@ -717,9 +717,33 @@ button {
 }
 
 .composer-wrap {
+  position: relative;
   flex: none;
   padding: 8px 16px 0;
   background: var(--bg);
+}
+
+.slash-menu {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 16px;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 25%);
+}
+
+.slash-menu button {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--element);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
 }
 
 .composer {
