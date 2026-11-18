@@ -440,6 +440,16 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
+.tool-output .diff-add {
+  background: rgb(158 206 106 / 12%);
+  color: var(--ok);
+}
+
+.tool-output .diff-del {
+  background: rgb(247 118 142 / 12%);
+  color: var(--error);
+}
+
 .code-head button {
   padding: 2px 8px;
   border-radius: 5px;

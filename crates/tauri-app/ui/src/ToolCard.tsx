@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { For, Show } from "solid-js";
 
 export type Tool = {
   id: string;
@@ -52,7 +52,20 @@ export default function ToolCard(props: {
           <Show when={props.tool.output}>
             <div class="tool-detail-block">
               <span class="tool-detail-label">输出</span>
-              <pre class="tool-output">{props.tool.output}</pre>
+              <pre class="tool-output">
+                <For each={props.tool.output.split("\n")}>
+                  {(line) => (
+                    <div
+                      classList={{
+                        "diff-add": line.startsWith("+") && !line.startsWith("+++"),
+                        "diff-del": line.startsWith("-") && !line.startsWith("---"),
+                      }}
+                    >
+                      {line}
+                    </div>
+                  )}
+                </For>
+              </pre>
             </div>
           </Show>
         </div>
