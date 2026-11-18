@@ -86,6 +86,7 @@ const STATUS_SEGMENTS = [
   "cost",
   "requests",
   "warn",
+  "channel",
 ] as const;
 
 type StatusSegment = (typeof STATUS_SEGMENTS)[number];
@@ -100,7 +101,18 @@ function loadStatusSegments(): StatusSegment[] {
   } catch {
     // Fall through to defaults.
   }
-  return ["status", "session", "provider", "model", "tokens", "cache", "cost", "requests", "warn"];
+  return [
+    "status",
+    "session",
+    "provider",
+    "model",
+    "tokens",
+    "cache",
+    "cost",
+    "requests",
+    "warn",
+    "channel",
+  ];
 }
 
 const SLASH_COMMANDS = [
@@ -185,6 +197,7 @@ function App() {
   const [statusSegments, setStatusSegments] = createSignal<StatusSegment[]>(
     loadStatusSegments(),
   );
+  const [channel, setChannel] = createSignal("stable");
   const [promptTokens, setPromptTokens] = createSignal(0);
   const [cachedTokens, setCachedTokens] = createSignal(0);
   const [requests, setRequests] = createSignal(0);
@@ -476,6 +489,7 @@ function App() {
       const stateRecord = asRecord(state);
       const initialSid = asString(stateRecord?.sid, "1");
       if (initialSid) setActive(initialSid);
+      setChannel(asString(stateRecord?.channel, "stable"));
       const readyRecord = stateRecord ? asRecord(stateRecord.ready) : null;
       if (readyRecord) {
         const parsed = parseReady(readyRecord);
@@ -1700,6 +1714,10 @@ function App() {
             >
               <span class="sep">·</span>
               <span class="warn-text">上下文接近上限 · /compact</span>
+            </Show>
+            <Show when={showSegment("channel") && channel() !== "stable"}>
+              <span class="sep">·</span>
+              <span class="warn-text">{channel()}</span>
             </Show>
           </div>
         </footer>

@@ -351,7 +351,12 @@ pub fn get_state(state: State<'_, Backend>) -> Value {
         .expect("ready poisoned")
         .get(&sid)
         .cloned();
-    json!({ "sid": sid, "ready": ready })
+    json!({
+        "sid": sid,
+        "ready": ready,
+        "channel": std::env::var("ARGENT_RELEASE_CHANNEL")
+            .unwrap_or_else(|_| "stable".to_string()),
+    })
 }
 
 #[tauri::command]
