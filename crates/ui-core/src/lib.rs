@@ -7,6 +7,7 @@
 //! frontend share one description of a run. Swapping the renderer then means
 //! writing a new view, not re-deriving the state machine.
 
+pub mod approval;
 pub mod command;
 #[cfg(any(test, feature = "test-support"))]
 pub mod failing_provider;
@@ -17,6 +18,7 @@ pub mod transcript;
 pub mod turn;
 pub mod ui_request;
 
+pub use approval::{check_approval, ApprovalEvents, ApprovalViolation};
 pub use command::Command;
 #[cfg(any(test, feature = "test-support"))]
 pub use failing_provider::failing_base_url;

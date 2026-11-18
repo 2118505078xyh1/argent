@@ -17,6 +17,7 @@ use argent_ai::{ChatRequest, ModelInfo, Provider, StreamEvent};
 use argent_core::error::Result as CoreResult;
 use argent_session::SessionIndex;
 use argent_tools::{ToolCtx, ToolRegistry};
+use argent_ui_core::approval::{check_approval, ApprovalEvents};
 use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
 
 use super::{Command, UiEvent};
@@ -140,4 +141,48 @@ fn the_contract_rejects_a_turn_without_a_terminal_event() {
     events.error("the provider is down");
     assert!(check_turn(&events).is_err());
     assert!(check_turn(&failed_turn("the provider is down", false)).is_ok());
+}
+
+#[test]
+fn an_approval_reply_is_sent_exactly_once() {
+    // The terminal UI maps one approval overlay key press to one reply on the
+    // worker's channel. A second key press after the pending request is gone
+    // must not produce a second decision.
+    let mut app = super::app::App::new(
+        Vec::new(),
+        crate::prompts::PromptLibrary::new(),
+        argent_i18n::Locale::En,
+        Vec::new(),
+        crate::keybindings::Bindings::default(),
+    );
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    app.handle_approval(super::ApprovalRequest {
+        tool: "bash".to_string(),
+        args: r#"{"command":"echo hello"}"#.to_string(),
+        command: Some("echo hello".to_string()),
+        reply: reply_tx,
+    });
+
+    let (command_tx, command_rx) = std::sync::mpsc::channel();
+    let (_event_tx, event_rx) = std::sync::mpsc::channel();
+    let worker = super::Worker {
+        commands: command_tx,
+        events: event_rx,
+        abort: argent_agent::AbortHandle::new(),
+        steering: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+    };
+
+    app.handle_key(&worker, super::Key::Char('y'));
+    assert_eq!(reply_rx.recv_timeout(Duration::from_secs(1)), Ok(true));
+    assert!(reply_rx.try_recv().is_err(), "one key press is one reply");
+    assert!(app.pending.is_none());
+    // A second key press after the request closed must not send again.
+    app.handle_key(&worker, super::Key::Char('n'));
+    assert!(reply_rx.try_recv().is_err(), "no second reply");
+
+    let mut contract = ApprovalEvents::default();
+    contract.request("bash");
+    contract.decision(true);
+    assert!(check_approval(&contract).is_ok());
+    let _ = command_rx;
 }

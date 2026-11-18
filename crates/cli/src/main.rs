@@ -35,6 +35,8 @@ use argent_tools::{
 use session_ctx::SessionContext;
 
 mod acp;
+#[cfg(test)]
+mod acp_test_output;
 mod approve;
 mod args;
 mod attach;

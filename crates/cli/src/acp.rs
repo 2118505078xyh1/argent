@@ -714,6 +714,11 @@ fn write_notification(method: &str, params: Json) {
 }
 
 fn write_message(message: Json) {
+    #[cfg(test)]
+    if let Some(sink) = crate::acp_test_output::sink() {
+        sink.lock().unwrap().push(message.dump());
+        return;
+    }
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
     let _ = stdout.write_all(message.dump().as_bytes());
@@ -770,6 +775,7 @@ mod contract_tests {
     use argent_ai::{OpenAiConfig, OpenAiProvider};
     use argent_session::SessionIndex;
     use argent_tools::{ToolCtx, ToolRegistry};
+    use argent_ui_core::approval::{check_approval, ApprovalEvents};
     use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
     use std::sync::Arc;
     use std::time::Duration;
@@ -878,5 +884,52 @@ mod contract_tests {
         events.error("the provider is down");
         assert!(check_turn(&events).is_err());
         assert!(check_turn(&failed_turn("the provider is down", false)).is_ok());
+    }
+
+    #[test]
+    fn a_permission_request_is_answered_exactly_once() {
+        let mut state = State {
+            session_id: "contract".to_string(),
+            pending_prompt: None,
+            pending_new_session: None,
+            pending_permissions: HashMap::new(),
+            next_request_id: 1,
+            steering: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+        };
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let (_, written) = crate::acp_test_output::with_sink(|| {
+            state.request_permission(ApprovalRequest {
+                tool: "bash".to_string(),
+                args: r#"{"command":"echo hello"}"#.to_string(),
+                command: Some("echo hello".to_string()),
+                reply: reply_tx,
+            });
+        });
+        assert_eq!(state.pending_permissions.len(), 1);
+        assert!(
+            written
+                .iter()
+                .any(|line| line.contains("session/request_permission")),
+            "the request must be sent to the client"
+        );
+
+        let id = Json::num(1.0);
+        let mut outcome = Json::obj();
+        outcome.set("optionId", Json::string("allow_once"));
+        let mut result = Json::obj();
+        result.set("outcome", outcome);
+        state.resolve_permission(&id, &result, None);
+
+        assert_eq!(reply_rx.recv_timeout(Duration::from_secs(1)), Ok(true));
+        assert!(reply_rx.try_recv().is_err(), "one resolution is one reply");
+        assert!(state.pending_permissions.is_empty());
+        // A second resolution of the same id cannot produce another decision.
+        state.resolve_permission(&id, &result, None);
+        assert!(reply_rx.try_recv().is_err());
+
+        let mut contract = ApprovalEvents::default();
+        contract.request("bash");
+        contract.decision(true);
+        assert!(check_approval(&contract).is_ok());
     }
 }

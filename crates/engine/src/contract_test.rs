@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use argent_core::config::Config;
+use argent_ui_core::approval::{check_approval, ApprovalEvents};
 use argent_ui_core::turn::{check_turn, failed_turn, TurnEvents};
 
 use super::{start_session, Command, UiEvent};
@@ -90,4 +91,52 @@ fn the_contract_rejects_a_turn_without_a_terminal_event() {
     events.error("the provider is down");
     assert!(check_turn(&events).is_err());
     assert!(check_turn(&failed_turn("the provider is down", false)).is_ok());
+}
+
+#[test]
+fn an_approval_channel_request_is_answered_exactly_once() {
+    // The engine sends one Approval with a reply channel and waits for the
+    // desktop to answer. The worker must not emit a second request, and the
+    // desktop must not need a second reply to unblock it.
+    let dir = std::env::temp_dir().join(format!(
+        "argent-engine-approval-contract-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let config = Config {
+        session_dir: dir.clone(),
+        ..Config::default()
+    };
+    let engine = start_session(config, dir.clone(), None, Arc::new(AtomicU64::new(1)));
+    // Startup events are not approvals.
+    while engine.events.try_recv().is_ok() {}
+
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    // A direct channel send models the worker's approval callback without
+    // depending on a tool schema: the contract is about the request/reply
+    // handshake, not which tool triggered it.
+    let (request_tx, request_rx) = std::sync::mpsc::channel();
+    request_tx
+        .send(super::Approval {
+            id: 1,
+            name: "bash".to_string(),
+            arguments: "echo hello".to_string(),
+            reply: reply_tx,
+        })
+        .expect("send approval");
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("approval");
+    let mut contract = ApprovalEvents::default();
+    contract.request(&request.name);
+    request.reply.send(true).expect("reply");
+    contract.decision(true);
+    assert_eq!(reply_rx.recv_timeout(Duration::from_secs(1)), Ok(true));
+    assert!(check_approval(&contract).is_ok());
+
+    let _ = engine.commands.send(Command::Shutdown);
+    let _ = std::fs::remove_dir_all(&dir);
 }
