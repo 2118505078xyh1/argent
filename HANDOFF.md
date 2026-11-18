@@ -170,6 +170,8 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     `openSession/newSession` 在 invoke 返回后本地清空 transcript，与后端
     `Loaded/SessionCleared` 事件交错。改为完全由引擎事件驱动，并让冒烟在切回
     标签时显式检查激活态；连续 3 次冒烟通过。
+20. **一键验证 ✅（2026-11-19）**：`scripts/verify-tauri.ps1` 串起版本一致性、
+    前端 typecheck/vitest/build、Rust fmt/test/clippy/build 与 CDP 冒烟，实测全绿。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

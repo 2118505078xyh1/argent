@@ -5,6 +5,14 @@ Tauri 2 + SolidJS 桌面外壳，桥接 `argent-engine`。**独立 Cargo workspa
 
 ## 构建 / 验证
 
+一键跑完所有检查（版本一致性、typecheck、vitest、fmt、Rust 测试/clippy/build、CDP 冒烟）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-tauri.ps1
+```
+
+单步命令：
+
 ```powershell
 cd crates\tauri-app\ui
 bun install
