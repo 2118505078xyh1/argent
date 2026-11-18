@@ -5,9 +5,25 @@
 模型/思考选择器、ctx/cache 状态栏。
 关联：`HANDOFF.md`、`docs/FRONTEND.md`、`docs/ROADMAP.md`、`docs/PARITY.md`。
 
-验证命令（每次改动至少跑前两条）：
+## 完成度总览（2026-11-19）
+
+- **P0 15/15 完成**：审批、会话列表、模型/思考、ctx/cost、Loaded 重放、
+  steering、rewind、compact、自动/文档、多会话标签、打包（NSIS+MSI 实测）、
+  真 CDP 冒烟。
+- **P1 26/28 完成**：仅 T1.7（虚拟滚动）、T1.29（更新提示）未做；T1.3 为
+  轻量 +/- 着色，非完整 diff 渲染。
+- **P2 17/20 完成**：未做 T2.17（遥测同意）、T2.18（发布通道）、
+  T2.19（崩溃上报）；T2.11 的 E2E 已进独立 CI 但为 `continue-on-error`。
+- **P3 11/24 完成**：已做只读扩展/MCP/记忆/用量/Git、搜索、导出、导入、
+  状态栏自定义、命令面板、日程预览；其余为大块集成（browser-use、CUA、
+  workflow、移动端等），按优先级排后。
+- 一键验证：`powershell -File scripts/verify-tauri.ps1`（全绿）。
+
+验证命令（一键脚本已覆盖下列全部步骤）：
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-tauri.ps1
+
 cd crates\tauri-app
 cargo check
 cargo test --bin argent-tauri
