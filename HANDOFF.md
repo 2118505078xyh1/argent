@@ -99,9 +99,15 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
 - native：欢迎卡真正垂直居中（当前 `Length::Shrink` 靠 padding 近似）
 
 ### 交接时的 git 状态
-- 全部改动**未提交**（14 个修改文件 + 3 个未跟踪路径）
-- 若要提交建议拆两个：`ui: titanium palette and card-based TUI/native polish`、`docs+prototype: Tauri 2 + SolidJS frontend migration`
-- `crates/tauri-app/Cargo.lock` 与 `ui/bun.lock` 应一起提交
+- **已全部提交**，工作区干净。提交序列（2026-11-19）：
+  - `fb36534` ui: titanium redesign + Tauri/SolidJS migration prototype
+  - `693da2f` ui: fix duplicated Cargo.toml tail and restore titanium view edits
+  - `6e13f44` ui: remove duplicated match arms left by partial-line merges
+  - `654ce8f` chore: ignore tauri codegen output
+- 提交后最终验证：`cargo test --workspace` 1190 passed / 0 failed；工作区 `git status` 干净。
+- 注意：当时工作区曾出现重复 match 分支（tui `BtwDelta`、native `SetPrompt` 各两份）与
+  `Cargo.toml` 尾部重复段，是交错编辑合并留下的；已按现状提交修复。若复现类似"半文件回退"，
+  先 `git diff --ignore-cr-at-eol` 核对再决定提交内容。
 
 ---
 
