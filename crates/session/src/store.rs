@@ -1196,6 +1196,31 @@ mod tests {
     }
 
     #[test]
+    fn round_trips_events_and_headers() {
+        let dir = std::env::temp_dir().join(format!("argent-session-extra-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("s.jsonl");
+        let mut store = SessionStore::open(path.clone()).expect("open");
+        let mut event = Json::obj();
+        event.set("type", Json::string("tool_finished"));
+        event.set("duration_ms", Json::num(12.0));
+        let mut header = Json::obj();
+        header.set("version", Json::string("0.3.1"));
+        store.append(&Entry::Event(event.clone())).expect("event");
+        store
+            .append(&Entry::Header(header.clone()))
+            .expect("header");
+        store.close();
+
+        let entries = SessionStore::read_all(&path).expect("read");
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(&entries[0], Entry::Event(value) if value == &event));
+        assert!(matches!(&entries[1], Entry::Header(value) if value == &header));
+        assert!(Entry::from_json(&Json::parse(r#"{"kind":"unknown"}"#).unwrap()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn lists_sessions_newest_first() {
         let dir = std::env::temp_dir().join(format!("argent-index-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
