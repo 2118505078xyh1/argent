@@ -463,6 +463,60 @@ mod tests {
     }
 
     #[test]
+    fn applies_multiple_hunks_against_the_original_file() {
+        let dir = temp_dir("multi-hunk");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("file.txt");
+        fs::write(&path, "a\nb\nc\nd\ne\n").unwrap();
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n-b\n+B\n@@\n-d\n+D\n*** End Patch",
+            path.display()
+        );
+        let result = run(&ctx, &patch);
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a\nB\nc\nD\ne\n");
+    }
+
+    #[test]
+    fn malformed_update_lines_are_rejected_without_writing() {
+        let dir = temp_dir("malformed");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("file.txt");
+        fs::write(&path, "a\n").unwrap();
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\nthis is not a hunk line\n*** End Patch",
+            path.display()
+        );
+        let result = run(&ctx, &patch);
+        assert!(result.is_error);
+        assert!(result.content.contains("unsupported update line"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a\n");
+    }
+
+    #[test]
+    fn duplicate_move_destinations_are_rejected() {
+        let dir = temp_dir("move-collision");
+        let ctx = ToolCtx::new(dir.clone());
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        let dest = dir.join("dest.txt");
+        fs::write(&first, "a\n").unwrap();
+        fs::write(&second, "b\n").unwrap();
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n-a\n+A\n*** Move to: {}\n*** Update File: {}\n@@\n-b\n+B\n*** Move to: {}\n*** End Patch",
+            first.display(),
+            dest.display(),
+            second.display(),
+            dest.display()
+        );
+        let result = run(&ctx, &patch);
+        assert!(result.is_error);
+        assert!(result.content.contains("move destination"));
+        assert_eq!(fs::read_to_string(&first).unwrap(), "a\n");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "b\n");
+    }
+
+    #[test]
     fn add_refuses_to_overwrite_an_existing_file() {
         let dir = temp_dir("add-existing");
         let ctx = ToolCtx::new(dir.clone());
