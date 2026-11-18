@@ -5007,7 +5007,12 @@ mod cursor_tests {
             .as_ref()
             .map(|(text, _)| text.clone())
             .unwrap_or_default();
-        assert!(status.starts_with("copy"), "{}", status);
+        // 成功 "copied N chars" / 失败 "copy failed: ..." 两种都接受，机器剪贴板不可靠。
+        assert!(
+            status.starts_with("copied") || status.starts_with("copy failed"),
+            "{}",
+            status
+        );
     }
 
     #[test]
