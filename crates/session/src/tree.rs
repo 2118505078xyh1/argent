@@ -532,6 +532,44 @@ mod tests {
         assert!(tree.append_to("nope", user("x")).is_err());
     }
 
+    #[test]
+    fn chain_and_branch_round_trip_for_many_lengths() {
+        for len in 1..=16 {
+            let mut tree = SessionTree::new();
+            for index in 0..len {
+                tree.append(user(&format!("m{index}"))).expect("append");
+            }
+            let ids = tree.ids().to_vec();
+            assert_eq!(tree.active(), ids.last().map(String::as_str));
+            assert_eq!(tree.active_path().len(), len);
+
+            let raw = tree.to_json();
+            let restored = SessionTree::from_json(&raw).expect("restore");
+            assert_eq!(restored.active_path().len(), len);
+            let texts: Vec<String> = restored.messages().iter().map(|m| m.text()).collect();
+            let expected: Vec<String> = (0..len).map(|index| format!("m{index}")).collect();
+            assert_eq!(texts, expected);
+
+            // Branch at every position, then return to the original leaf.
+            for position in 0..len {
+                tree.append_to(&ids[position], user("branch"))
+                    .expect("branch");
+                let branch_leaf = tree.ids().last().expect("branch id").clone();
+                let expected_children = if position + 1 < len { 2 } else { 1 };
+                assert_eq!(tree.children(&ids[position]).len(), expected_children);
+                assert_eq!(tree.active_path().len(), position + 2);
+                assert_eq!(
+                    tree.messages().last().map(|m| m.text()),
+                    Some("branch".to_string())
+                );
+                tree.set_active(&ids[len - 1]).expect("return to chain");
+                assert_eq!(tree.messages().len(), len);
+                tree.set_active(&branch_leaf).expect("return to branch");
+                tree.set_active(&ids[len - 1]).expect("return to chain");
+            }
+        }
+    }
+
     fn message_line(id: &str, parent: Option<&str>, text: &str) -> Json {
         let mut line = user(text).to_json();
         line.set("id", Json::string(id));

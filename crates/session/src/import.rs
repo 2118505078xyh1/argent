@@ -296,6 +296,40 @@ mod tests {
     }
 
     #[test]
+    fn many_claude_turns_preserve_order_and_skip_sidechains() {
+        for turns in 1..=12 {
+            let mut jsonl = String::new();
+            for index in 0..turns {
+                jsonl.push_str(&format!(
+                    "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"u{index}\"}}}}\n"
+                ));
+                if index % 3 == 0 {
+                    jsonl.push_str(
+                        "{\"type\":\"user\",\"isSidechain\":true,\"message\":{\"role\":\"user\",\"content\":\"sidechain\"}}\n",
+                    );
+                }
+                jsonl.push_str(&format!(
+                    "{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"thinking\",\"thinking\":\"t{index}\"}},{{\"type\":\"text\",\"text\":\"a{index}\"}}]}}}}\n"
+                ));
+            }
+            let parsed = parse(&jsonl).expect("parse");
+            assert_eq!(parsed.len(), turns * 2);
+            for index in 0..turns {
+                assert_eq!(parsed[index * 2].role, Role::User);
+                assert_eq!(parsed[index * 2].text, format!("u{index}"));
+                assert_eq!(parsed[index * 2].thinking, None);
+                assert_eq!(parsed[index * 2 + 1].role, Role::Assistant);
+                assert_eq!(parsed[index * 2 + 1].text, format!("a{index}"));
+                let thinking = format!("t{index}");
+                assert_eq!(
+                    parsed[index * 2 + 1].thinking.as_deref(),
+                    Some(thinking.as_str())
+                );
+            }
+        }
+    }
+
+    #[test]
     fn unrecognized_jsonl_is_rejected() {
         let err = parse("{\"hello\":\"world\"}").expect_err("reject");
         assert!(err.to_string().contains("unrecognized"));
