@@ -91,6 +91,8 @@ fn main() {
             backend::delete_automation,
             backend::run_automation,
             backend::automation_log,
+            backend::import_session_text,
+            backend::search_sessions,
             backend::list_files,
             backend::list_documents,
             backend::read_document,

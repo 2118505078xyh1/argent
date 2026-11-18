@@ -157,6 +157,9 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     根 `cargo test --workspace` 296 passed / 1 failed：失败项
     `notification_hook_carries_its_message_into_the_environment` 依赖 Git Bash
     的 `printf`，本机未装 Git Bash（AGENTS.md 已记录该陷阱），与本次改动无关。
+16. **P3 第六轮 ✅（2026-11-19）**：跨会话搜索（Ctrl+Shift+F 面板）、外部
+    JSONL 会话导入、状态栏分段自定义、ToolCard 组件拆分。clippy/typecheck/
+    build/CDP 冒烟全部通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

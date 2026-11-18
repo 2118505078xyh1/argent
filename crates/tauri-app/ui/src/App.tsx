@@ -37,6 +37,8 @@ type Item = TextItem | ToolItem;
 
 type Approval = { id: number; name: string; arguments: string; sid?: string };
 
+type SearchHit = { path: string; title: string; line: number; snippet: string };
+
 type SessionRow = {
   path: string;
   title: string;
@@ -273,6 +275,33 @@ function parseIncoming(raw: unknown): Incoming | null {
   }
 }
 
+const STATUS_SEGMENTS = [
+  "status",
+  "session",
+  "provider",
+  "model",
+  "tokens",
+  "cache",
+  "cost",
+  "requests",
+  "warn",
+] as const;
+
+type StatusSegment = (typeof STATUS_SEGMENTS)[number];
+
+function loadStatusSegments(): StatusSegment[] {
+  try {
+    const raw = JSON.parse(storageGet("argent.statusline") ?? "null");
+    if (Array.isArray(raw)) {
+      const valid = raw.filter((key): key is StatusSegment => STATUS_SEGMENTS.includes(key));
+      if (valid.length) return valid;
+    }
+  } catch {
+    // Fall through to defaults.
+  }
+  return ["status", "session", "provider", "model", "tokens", "cache", "cost", "requests", "warn"];
+}
+
 const SLASH_COMMANDS = [
   "/new",
   "/rename",
@@ -300,9 +329,14 @@ function App() {
   const [input, setInput] = createSignal("");
   const [lastPrompt, setLastPrompt] = createSignal("");
   const [dragging, setDragging] = createSignal(false);
+  const [searchOpen, setSearchOpen] = createSignal(false);
+  const [searchQuery, setSearchQuery] = createSignal("");
+  const [searchResults, setSearchResults] = createSignal<SearchHit[]>([]);
   const [approvalQueue, setApprovalQueue] = createSignal<Approval[]>([]);
   const approval = () => approvalQueue()[0] ?? null;
   const [error, setError] = createSignal<string | null>(null);
+
+  const showSegment = (key: StatusSegment) => statusSegments().includes(key);
 
   const items = () => tabItems()[active()] ?? [];
   const setItemsFor = (sid: string, value: Item[] | ((prev: Item[]) => Item[])) =>
@@ -343,6 +377,9 @@ function App() {
   const [screen, setScreen] = createSignal<"chat" | "automations" | "documents">("chat");
   const [help, setHelp] = createSignal(false);
   const [locale, setLocale] = createSignal<Locale>(detectLocale());
+  const [statusSegments, setStatusSegments] = createSignal<StatusSegment[]>(
+    loadStatusSegments(),
+  );
   const [promptTokens, setPromptTokens] = createSignal(0);
   const [cachedTokens, setCachedTokens] = createSignal(0);
   const [requests, setRequests] = createSignal(0);
@@ -404,8 +441,26 @@ function App() {
       .catch(() => setFileOptions([]));
   });
 
+  createEffect(() => {
+    const query = searchQuery();
+    if (!searchOpen() || query.trim().length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
+    void invoke<SearchHit[]>("search_sessions", { query, limit: 30 })
+      .then((hits) => {
+        if (!cancelled) setSearchResults(hits);
+      })
+      .catch(() => setSearchResults([]));
+  });
+
   let viewport!: HTMLDivElement;
   let composer!: HTMLTextAreaElement;
+  let importInput!: HTMLInputElement;
 
   const append = (kind: TextItem["kind"], text: string, stream = false, sid = active()) => {
     setItemsFor(sid, (prev) => {
@@ -663,6 +718,12 @@ function App() {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = !!target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setSearchOpen(true);
+        setHelp(false);
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setScreen("chat");
@@ -706,6 +767,7 @@ function App() {
     document.documentElement.lang = locale();
     storageSet("argent.theme", theme());
     storageSet("argent.locale", locale());
+    storageSet("argent.statusline", JSON.stringify(statusSegments()));
   });
 
   createEffect(() => {
@@ -775,7 +837,7 @@ function App() {
     }
   };
 
-  const addTab = async () => {
+  const addTab = async (): Promise<string | undefined> => {
     try {
       const sid = await invoke<string>("new_tab");
       setTabs((prev) => [...prev, { id: sid, title: "新任务", path: "" }]);
@@ -786,6 +848,50 @@ function App() {
       setApprovalQueue([]);
       setError(null);
       resetMetrics();
+      return sid;
+    } catch (err) {
+      setError(String(err));
+      return undefined;
+    }
+  };
+
+  const importSession = async (event: Event) => {
+    const element = event.currentTarget as HTMLInputElement;
+    const file = element.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const title = file.name.replace(/\.jsonl?$/i, "");
+      const path = await invoke<string>("import_session_text", { text, title });
+      const sid = await addTab();
+      if (sid) {
+        await invoke("open_session", { sid, path });
+        setTabs((prev) =>
+          prev.map((tab) => (tab.id === sid ? { ...tab, path, title } : tab)),
+        );
+      }
+      setHelp(false);
+    } catch (err) {
+      setError(String(err));
+    }
+    element.value = "";
+  };
+
+  const openSearchHit = async (hit: SearchHit) => {
+    setSearchOpen(false);
+    const existing = tabs().find((tab) => tab.path === hit.path);
+    const sid = existing?.id ?? (await addTab());
+    if (!sid) return;
+    try {
+      await invoke("open_session", { sid, path: hit.path });
+      if (!existing) {
+        setTabs((prev) =>
+          prev.map((tab) =>
+            tab.id === sid ? { ...tab, path: hit.path, title: hit.title } : tab,
+          ),
+        );
+      }
+      await switchTab(sid);
     } catch (err) {
       setError(String(err));
     }
@@ -1654,35 +1760,46 @@ function App() {
           </div>
           <div class="statusbar">
             <span class="dot" classList={{ live: busy() }} />
-            <span role="status" aria-live="polite">
-              {status()}
-            </span>
-            <span class="sep">·</span>
-            <span>{currentRow()?.title || (sessionPath() ? "未命名会话" : "新任务")}</span>
-            <span class="sep">·</span>
-            <span>{ready()?.provider || "—"}</span>
-            <span class="sep">·</span>
-            <span>{ready()?.model || "—"}</span>
+            <Show when={showSegment("status")}>
+              <span role="status" aria-live="polite">
+                {status()}
+              </span>
+            </Show>
+            <Show when={showSegment("session")}>
+              <span class="sep">·</span>
+              <span>{currentRow()?.title || (sessionPath() ? "未命名会话" : "新任务")}</span>
+            </Show>
+            <Show when={showSegment("provider")}>
+              <span class="sep">·</span>
+              <span>{ready()?.provider || "—"}</span>
+            </Show>
+            <Show when={showSegment("model")}>
+              <span class="sep">·</span>
+              <span>{ready()?.model || "—"}</span>
+            </Show>
             <span class="spacer" />
-            <span>
-              ctx {formatTokens(promptTokens())} / {formatTokens(ready()?.contextMax ?? 0)}
-            </span>
-            <Show when={cachedTokens() > 0 && promptTokens() > 0}>
+            <Show when={showSegment("tokens")}>
+              <span>
+                ctx {formatTokens(promptTokens())} / {formatTokens(ready()?.contextMax ?? 0)}
+              </span>
+            </Show>
+            <Show when={showSegment("cache") && cachedTokens() > 0 && promptTokens() > 0}>
               <span class="sep">·</span>
               <span>
                 cache {Math.min((cachedTokens() * 100) / promptTokens(), 100).toFixed(0)}%
               </span>
             </Show>
-            <Show when={requests() > 0}>
+            <Show when={showSegment("requests") && requests() > 0}>
               <span class="sep">·</span>
               <span>{requests()} req</span>
             </Show>
-            <Show when={cost() > 0}>
+            <Show when={showSegment("cost") && cost() > 0}>
               <span class="sep">·</span>
               <span>{formatCost(cost())}</span>
             </Show>
             <Show
               when={
+                showSegment("warn") &&
                 (ready()?.contextMax ?? 0) > 0 &&
                 (promptTokens() * 100) / (ready()?.contextMax ?? 1) >= 80
               }
@@ -1700,6 +1817,37 @@ function App() {
           <Documents onAddToChat={addDocumentToChat} />
         </Show>
       </main>
+
+      <Show when={searchOpen()}>
+        <div class="overlay" onClick={() => setSearchOpen(false)}>
+          <div class="search-panel" onClick={(event) => event.stopPropagation()}>
+            <div class="search-head">
+              <input
+                autofocus
+                placeholder="搜索所有会话…"
+                value={searchQuery()}
+                onInput={(event) => setSearchQuery(event.currentTarget.value)}
+              />
+              <button class="icon" onClick={() => setSearchOpen(false)}>
+                ×
+              </button>
+            </div>
+            <div class="search-results">
+              <For
+                each={searchResults()}
+                fallback={<div class="side-empty">输入至少两个字符开始搜索。</div>}
+              >
+                {(hit) => (
+                  <button class="search-hit" onClick={() => void openSearchHit(hit)}>
+                    <strong>{hit.title}</strong>
+                    <span>{hit.snippet}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+        </div>
+      </Show>
 
       <Show when={help()}>
         <div class="overlay" onClick={() => setHelp(false)}>
@@ -1720,6 +1868,7 @@ function App() {
               <div><kbd>Enter</kbd><span>发送；运行中改为插话</span></div>
               <div><kbd>Shift+Enter</kbd><span>换行</span></div>
               <div><kbd>Ctrl+K</kbd><span>聚焦输入框</span></div>
+              <div><kbd>Ctrl+Shift+F</kbd><span>跨会话搜索</span></div>
               <div><kbd>Esc</kbd><span>中止当前回合 / 关闭面板 / 拒绝审批</span></div>
               <div><kbd>Y / N</kbd><span>允许 / 拒绝工具审批</span></div>
               <div><kbd>/help</kbd><span>查看斜杠命令</span></div>
@@ -1732,8 +1881,39 @@ function App() {
                 </div>
               </Show>
             </div>
+            <div class="status-settings">
+              <span>状态栏分段</span>
+              <For each={STATUS_SEGMENTS}>
+                {(key) => (
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={showSegment(key)}
+                      onChange={() =>
+                        setStatusSegments((prev) =>
+                          prev.includes(key)
+                            ? prev.filter((item) => item !== key)
+                            : [...prev, key],
+                        )
+                      }
+                    />
+                    {key}
+                  </label>
+                )}
+              </For>
+            </div>
             <div class="diag">
               <div class="diag-actions">
+                <input
+                  ref={importInput}
+                  type="file"
+                  accept=".jsonl,.json,application/json"
+                  style={{ display: "none" }}
+                  onChange={(event) => void importSession(event)}
+                />
+                <button class="ghost" onClick={() => importInput.click()}>
+                  导入会话 JSONL
+                </button>
                 <button class="ghost" onClick={() => exportTranscript("md")}>
                   导出 Markdown
                 </button>

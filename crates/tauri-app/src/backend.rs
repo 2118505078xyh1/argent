@@ -73,6 +73,7 @@ struct SessionHandle {
 }
 
 struct Shared {
+    session_dir: std::path::PathBuf,
     sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
     active: Mutex<String>,
     ready: Mutex<HashMap<String, Value>>,
@@ -143,6 +144,7 @@ impl Backend {
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
         let config = prepare_config(&cwd)?;
         let shared = Arc::new(Shared {
+            session_dir: config.session_dir.clone(),
             sessions: Mutex::new(HashMap::new()),
             active: Mutex::new("1".to_string()),
             ready: Mutex::new(HashMap::new()),
@@ -598,6 +600,69 @@ pub fn delete_session(state: State<'_, Backend>, sid: String, path: String) -> R
         .commands
         .send(Command::DeleteSession(std::path::PathBuf::from(path)))
         .map_err(|_| "agent worker is gone".to_string())
+}
+
+#[tauri::command]
+pub fn import_session_text(
+    state: State<'_, Backend>,
+    text: String,
+    title: String,
+) -> Result<String, String> {
+    let turns = argent_session::import::parse(&text).map_err(|error| error.to_string())?;
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    // The import API needs the index; reuse the same directory the workers use.
+    let index = argent_session::SessionIndex::new(state.shared.session_dir.clone());
+    let path = argent_session::import::import(&index, &cwd, &title, turns)
+        .map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn search_sessions(state: State<'_, Backend>, query: String, limit: usize) -> Result<Value, String> {
+    let needle = query.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        return Ok(json!([]));
+    }
+    let dir = state.shared.session_dir.clone();
+    let mut hits: Vec<(std::time::SystemTime, Value)> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(json!([]));
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let modified = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        for (index, line) in body.lines().enumerate() {
+            if !line.to_ascii_lowercase().contains(&needle) {
+                continue;
+            }
+            let snippet: String = line.chars().take(180).collect();
+            hits.push((
+                modified,
+                json!({
+                    "path": path.to_string_lossy(),
+                    "title": path.file_stem().map(|name| name.to_string_lossy()).unwrap_or_default(),
+                    "line": index,
+                    "snippet": snippet,
+                }),
+            ));
+            break; // one hit per session is enough for navigation
+        }
+    }
+    hits.sort_by_key(|hit| std::cmp::Reverse(hit.0));
+    Ok(json!(hits
+        .into_iter()
+        .take(limit.min(100))
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>()))
 }
 
 fn collect_documents(dir: &std::path::Path, depth: usize, out: &mut Vec<Value>) {
