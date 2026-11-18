@@ -160,8 +160,9 @@ Kimi 把"后台任务、定时任务、子代理"都做成了模型工具，DSH 
     teardown 保护脏 worktree"。等 delegate 稳定后评估。
 - [ ] **视频输入**：`ReadMediaFile` 抽帧 → 现有 vision 管道。本地 4B 模型吃不动，
     优先级低。
-- [ ] **`/goal` 目标队列**：与 follow_ups 重叠度高，先观察 Kimi 的实际用法再决定
-    是否值得。
+- [x] **`/goal` 目标队列评估**：与 follow_ups 重叠度高，暂不单独立项。
+  - 结论：跨回合目标用 `todo` + follow-up + workflow 组合表达；Kimi 的
+    pause/resume/next 队列没有足够独立价值，先不增加新的会话状态机。
 
 ### OMP 对照补充（2026-11-18）
 
