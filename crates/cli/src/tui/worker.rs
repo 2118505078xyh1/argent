@@ -163,7 +163,10 @@ pub fn spawn(
                     let event_tx = event_tx.clone();
                     std::thread::spawn(move || {
                         let Some(exe) = exe else {
-                            let _ = event_tx.send(UiEvent::Btw("cannot locate argent".to_string()));
+                            let _ = event_tx.send(UiEvent::BtwStart);
+                            let _ = event_tx
+                                .send(UiEvent::BtwDelta("cannot locate argent\n".to_string()));
+                            let _ = event_tx.send(UiEvent::BtwDone);
                             return;
                         };
                         let mut command = std::process::Command::new(exe);
@@ -187,26 +190,41 @@ pub fn spawn(
                         if let Some(key) = api_key {
                             command.arg("--api-key").arg(key);
                         }
-                        let output = command.arg(prompt).output();
-                        let text = match output {
-                            Ok(output) if output.status.success() => {
-                                let stdout =
-                                    String::from_utf8_lossy(&output.stdout).trim().to_string();
-                                if stdout.is_empty() {
-                                    "empty response".to_string()
-                                } else {
-                                    stdout
-                                }
+                        command
+                            .stdout(std::process::Stdio::piped())
+                            .stderr(std::process::Stdio::null());
+                        let _ = event_tx.send(UiEvent::BtwStart);
+                        let mut child = match command.arg(prompt).spawn() {
+                            Ok(child) => child,
+                            Err(error) => {
+                                let _ =
+                                    event_tx.send(UiEvent::BtwDelta(format!("failed: {error}\n")));
+                                let _ = event_tx.send(UiEvent::BtwDone);
+                                let _ = std::fs::remove_dir_all(&btw_storage);
+                                return;
                             }
-                            Ok(output) => {
-                                let stderr =
-                                    String::from_utf8_lossy(&output.stderr).trim().to_string();
-                                format!("failed: {stderr}")
-                            }
-                            Err(error) => format!("failed: {error}"),
                         };
+                        if let Some(stdout) = child.stdout.take() {
+                            let tx = event_tx.clone();
+                            std::thread::spawn(move || {
+                                use std::io::BufRead;
+                                let reader = std::io::BufReader::new(stdout);
+                                for line in reader.lines().map_while(Result::ok) {
+                                    let _ = tx.send(UiEvent::BtwDelta(format!("{line}\n")));
+                                }
+                            });
+                        }
+                        let status = child.wait();
+                        if let Ok(status) = status {
+                            if !status.success() {
+                                let _ = event_tx.send(UiEvent::BtwDelta(format!(
+                                    "failed: exit {}\n",
+                                    status.code().unwrap_or(-1)
+                                )));
+                            }
+                        }
+                        let _ = event_tx.send(UiEvent::BtwDone);
                         let _ = std::fs::remove_dir_all(&btw_storage);
-                        let _ = event_tx.send(UiEvent::Btw(text));
                     });
                 }
                 Command::Shell(command) => {

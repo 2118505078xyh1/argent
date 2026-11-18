@@ -99,8 +99,10 @@ pub enum UiEvent {
     Models(Vec<String>),
     Tools(Vec<(String, String)>),
     Notice(String),
-    /// A side chat answer from `/btw`; rendered separately from the main turn.
-    Btw(String),
+    /// A side-chat answer from `/btw`; rendered separately from the main turn.
+    BtwStart,
+    BtwDelta(String),
+    BtwDone,
     Error(String),
 }
 

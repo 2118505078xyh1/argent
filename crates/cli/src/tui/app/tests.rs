@@ -416,7 +416,9 @@ fn btw_routes_to_the_worker_and_renders_a_separate_answer() {
         _ => panic!("expected Command::Btw"),
     }
 
-    app.handle_ui(UiEvent::Btw("side answer".to_string()));
+    app.handle_ui(UiEvent::BtwStart);
+    app.handle_ui(UiEvent::BtwDelta("side answer".to_string()));
+    app.handle_ui(UiEvent::BtwDone);
     assert!(app
         .transcript
         .entries()

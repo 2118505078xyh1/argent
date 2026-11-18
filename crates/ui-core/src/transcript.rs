@@ -223,6 +223,23 @@ impl Transcript {
         self.entries.push(Entry::Notice(kind, text.into()));
     }
 
+    /// Open a side-chat row.
+    pub fn push_btw_start(&mut self) {
+        self.version += 1;
+        self.entries.push(Entry::Assistant("[btw] ".to_string()));
+    }
+
+    /// Append a streamed side-chat chunk to the open row.
+    pub fn append_btw(&mut self, chunk: &str) {
+        if let Some(Entry::Assistant(text)) = self.entries.last_mut() {
+            text.push_str(chunk);
+        } else {
+            self.entries
+                .push(Entry::Assistant(format!("[btw] {chunk}")));
+        }
+        self.version += 1;
+    }
+
     /// Fold one agent event into the list.
     pub fn apply(&mut self, event: &AgentEvent) {
         match event {

@@ -370,10 +370,13 @@ impl App {
             UiEvent::Notice(text) => {
                 self.transcript.push_notice(NoticeKind::Info, text);
             }
-            UiEvent::Btw(text) => {
-                self.transcript
-                    .push_entry(Entry::Assistant(format!("[btw] {}", text)));
+            UiEvent::BtwStart => {
+                self.transcript.push_btw_start();
             }
+            UiEvent::BtwDelta(text) => {
+                self.transcript.append_btw(&text);
+            }
+            UiEvent::BtwDone => {}
             UiEvent::Error(text) => {
                 self.transcript.push_notice(NoticeKind::Error, text);
             }
