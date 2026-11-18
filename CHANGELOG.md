@@ -5,6 +5,10 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
 ## Unreleased
 
+- **Batch anchored edits.** `edit` accepts an `edits` JSON array of
+  `{path,start,end,newText}` entries. Anchors, ranges, overlaps and paths are
+  validated for every file before the first write; a stale anchor aborts the
+  whole batch.
 - **Seen-line provenance for anchored edits.** `edit` now tracks the exact
   `LINE#HASH` anchors shown by `read hash=true`; a line outside that visible
   range is rejected even if its hash happens to match, and compaction clears

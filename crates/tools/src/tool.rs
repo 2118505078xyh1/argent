@@ -207,6 +207,14 @@ pub fn approval_preview(tool: &str, args: &Json) -> String {
         }
         "edit" => {
             let path = args.str_or("path", "");
+            let edits = args.str_or("edits", "");
+            if !edits.is_empty() {
+                let count = Json::parse(&edits)
+                    .ok()
+                    .and_then(|value| value.as_array().map(|items| items.len()))
+                    .unwrap_or(0);
+                return format!("edit batch ({} range(s))", count);
+            }
             let old = args.str_or("oldText", "");
             let new = args.str_or("newText", "");
             let start = args.str_or("start", "");

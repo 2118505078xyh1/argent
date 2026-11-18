@@ -175,6 +175,7 @@ OMP 的强项不是功能数量，而是编辑安全和批处理。argent 0.3.1 
 
 1. **P0 多范围/多文件原子编辑**：一个调用里提交多个 `{path,start,end,newText}`，
    先全部校验锚点/重叠/路径，再统一写盘；写失败保留已落前缀并报告。
+   **已完成（Unreleased）**：`edit.edits` JSON 批量入口 + 三组测试。
 2. **P0 `apply_patch` 兼容入口**：给 Codex/OpenCode 模型熟悉的
    `*** Begin Patch` 外壳；内部先复用 hashline，避免新增一套文本匹配。
 3. **P1 编辑后 LSP 诊断**：成功写入后对目标文件取一次 `diagnostics`，作为

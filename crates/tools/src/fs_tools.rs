@@ -1,5 +1,6 @@
 //! File-system tools: read, write, edit, grep, find, ls.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use argent_ai::ToolSchema;
@@ -359,6 +360,207 @@ fn apply_anchored_edit(
     )))
 }
 
+struct BatchRange {
+    start: usize,
+    end: usize,
+    new_text: String,
+}
+
+struct BatchFile {
+    target: PathBuf,
+    bom: String,
+    ending: &'static str,
+    trailing: bool,
+    lines: Vec<String>,
+    edits: Vec<BatchRange>,
+}
+
+/// Apply a JSON array of anchored edits as one validated batch.
+///
+/// Every anchor, range and path is checked before the first write. Files are
+/// then written in stable path order; an I/O failure after that point reports
+/// how many files already landed instead of pretending the batch rolled back.
+fn apply_edit_batch(ctx: &ToolCtx, default_path: &str, raw: &str) -> Result<ToolResult> {
+    let parsed =
+        Json::parse(raw).map_err(|error| Error::tool(format!("invalid edits JSON: {}", error)))?;
+    let items = match parsed.as_array() {
+        Some(items) if !items.is_empty() => items,
+        _ => return Ok(ToolResult::error("edits must be a non-empty JSON array")),
+    };
+
+    let mut files: BTreeMap<PathBuf, BatchFile> = BTreeMap::new();
+    for item in items {
+        let raw_path = item
+            .get("path")
+            .and_then(Json::as_str)
+            .unwrap_or(default_path);
+        let target = resolve(&ctx.cwd, Path::new(&expand_home(Path::new(raw_path))));
+        if !files.contains_key(&target) {
+            if let Err(error) = ctx.check_write(&target) {
+                return Ok(ToolResult::error(error));
+            }
+            if !target.is_file() {
+                return Ok(ToolResult::error(format!(
+                    "file not found: {}",
+                    target.display()
+                )));
+            }
+            let content = std::fs::read_to_string(&target)
+                .map_err(|e| Error::io(format!("read {} failed: {}", target.display(), e)))?;
+            let (bom, body) = match content.strip_prefix('\u{FEFF}') {
+                Some(rest) => ("\u{FEFF}", rest),
+                None => ("", content.as_str()),
+            };
+            files.insert(
+                target.clone(),
+                BatchFile {
+                    target: target.clone(),
+                    bom: bom.to_string(),
+                    ending: if body.contains("\r\n") { "\r\n" } else { "\n" },
+                    trailing: body.ends_with('\n'),
+                    lines: body.lines().map(str::to_string).collect(),
+                    edits: Vec::new(),
+                },
+            );
+        }
+
+        let start = match item.get("start").and_then(Json::as_str) {
+            Some(start) => start,
+            None => return Ok(ToolResult::error("each edit needs start")),
+        };
+        let end = item.get("end").and_then(Json::as_str);
+        let new_text = match item.get("newText").and_then(Json::as_str) {
+            Some(text) => text.to_string(),
+            None => return Ok(ToolResult::error("each edit needs newText")),
+        };
+        let (start_line, start_hash) = match parse_anchor(start) {
+            Ok(anchor) => anchor,
+            Err(error) => return Ok(ToolResult::error(error)),
+        };
+        let (end_line, end_hash) = match end {
+            Some(end) => match parse_anchor(end) {
+                Ok(anchor) => anchor,
+                Err(error) => return Ok(ToolResult::error(error)),
+            },
+            None => (start_line, start_hash.clone()),
+        };
+        if end_line < start_line {
+            return Ok(ToolResult::error(format!(
+                "end line {} is before start line {}",
+                end_line, start_line
+            )));
+        }
+        let file = files.get_mut(&target).expect("inserted above");
+        if start_line > file.lines.len() || end_line > file.lines.len() {
+            return Ok(ToolResult::error(format!(
+                "line range {}..{} is outside {} ({} lines)",
+                start_line,
+                end_line,
+                target.display(),
+                file.lines.len()
+            )));
+        }
+        for (number, expected) in [
+            (start_line, start_hash.as_str()),
+            (end_line, end_hash.as_str()),
+        ] {
+            if let Some(false) = ctx.anchor_seen(&target, number, expected) {
+                return Ok(ToolResult::error(format!(
+                    "line {} anchor in {} was not in a hash=true read; re-read that range",
+                    number,
+                    target.display()
+                )));
+            }
+            let actual = if number == 1 && !file.bom.is_empty() {
+                short_hash(format!("{}{}", file.bom, file.lines[0]).as_bytes(), 8)
+            } else {
+                short_hash(file.lines[number - 1].as_bytes(), 8)
+            };
+            if actual != expected {
+                return Ok(ToolResult::error(format!(
+                    "stale hash anchor at {}:{}: expected {}, current {}; re-read with hash=true",
+                    target.display(),
+                    number,
+                    expected,
+                    actual
+                )));
+            }
+        }
+        file.edits.push(BatchRange {
+            start: start_line,
+            end: end_line,
+            new_text,
+        });
+    }
+
+    for file in files.values_mut() {
+        file.edits.sort_by_key(|edit| edit.start);
+        let mut previous_end = 0usize;
+        for edit in &file.edits {
+            if edit.start <= previous_end {
+                return Ok(ToolResult::error(format!(
+                    "overlapping edits in {}: line {} overlaps the previous range",
+                    file.target.display(),
+                    edit.start
+                )));
+            }
+            previous_end = edit.end;
+        }
+    }
+
+    let mut updates: Vec<(PathBuf, String)> = Vec::with_capacity(files.len());
+    let mut total_added = 0usize;
+    let mut total_removed = 0usize;
+    for file in files.values() {
+        let mut out: Vec<String> = Vec::with_capacity(file.lines.len());
+        let mut cursor = 0usize;
+        for edit in &file.edits {
+            out.extend_from_slice(&file.lines[cursor..edit.start - 1]);
+            let replacement = edit.new_text.replace("\r\n", "\n");
+            out.extend(replacement.lines().map(str::to_string));
+            let old_span = file.lines[edit.start - 1..edit.end].join("\n");
+            let diff = diff_lines(&old_span, &replacement);
+            total_added += diff
+                .iter()
+                .filter(|line| matches!(line, argent_core::text::DiffLine::Added(_)))
+                .count();
+            total_removed += diff
+                .iter()
+                .filter(|line| matches!(line, argent_core::text::DiffLine::Removed(_)))
+                .count();
+            cursor = edit.end;
+        }
+        out.extend_from_slice(&file.lines[cursor..]);
+        let mut body = out.join(file.ending);
+        if !out.is_empty() && file.trailing {
+            body.push_str(file.ending);
+        }
+        updates.push((file.target.clone(), format!("{}{}", file.bom, body)));
+    }
+
+    let total_files = updates.len();
+    for (written, (target, updated)) in updates.iter().enumerate() {
+        if let Some(checkpoints) = &ctx.checkpoints {
+            checkpoints.record(target);
+        }
+        if let Err(error) = argent_core::write_text_file(target, updated) {
+            return Ok(ToolResult::error(format!(
+                "applied {} of {} file(s); failed {}: {}",
+                written,
+                total_files,
+                target.display(),
+                error
+            )));
+        }
+        ctx.forget_read(target);
+    }
+
+    Ok(ToolResult::ok(format!(
+        "edited {} file(s) (+{} -{} lines)",
+        total_files, total_added, total_removed
+    )))
+}
+
 /// Replace an exact text span in a file.
 pub struct EditTool;
 
@@ -368,7 +570,7 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Replace text or a LINE#HASH range."
+        "Replace text or LINE#HASH range."
     }
 
     fn parameters(&self) -> Json {
@@ -376,12 +578,13 @@ impl Tool for EditTool {
             vec![
                 ("path", "string", "File path"),
                 ("oldText", "string", "Exact text to replace"),
-                ("start", "string", "Start LINE#HASH from read hash=true"),
-                ("end", "string", "Optional end LINE#HASH"),
+                ("start", "string", "Start LINE#HASH anchor"),
+                ("end", "string", "End LINE#HASH"),
                 ("newText", "string", "New text"),
-                ("replaceAll", "boolean", "Replace all matches"),
+                ("replaceAll", "boolean", "Replace all"),
+                ("edits", "string", "JSON batch edits"),
             ],
-            vec!["path", "newText"],
+            vec!["path"],
         )
     }
 
@@ -399,8 +602,19 @@ impl Tool for EditTool {
         let old_text = arg_str_opt(args, "oldText");
         let start_anchor = arg_str_opt(args, "start");
         let end_anchor = arg_str_opt(args, "end");
-        let new_text = arg_str(args, "newText")?;
+        let new_text = arg_str_opt(args, "newText");
         let replace_all = arg_bool_opt(args, "replaceAll").unwrap_or(false);
+
+        if let Some(edits) = arg_str_opt(args, "edits") {
+            if old_text.is_some() || start_anchor.is_some() || end_anchor.is_some() || replace_all {
+                return Ok(ToolResult::error(
+                    "edits cannot be combined with oldText, start/end, or replaceAll",
+                ));
+            }
+            return apply_edit_batch(ctx, &raw_path, &edits);
+        }
+        let new_text = new_text
+            .ok_or_else(|| Error::tool("missing required argument 'newText' (or pass edits)"))?;
 
         if start_anchor.is_none() && end_anchor.is_some() {
             return Ok(ToolResult::error("end requires start"));
@@ -1215,6 +1429,96 @@ mod tests {
         assert!(out.is_error);
         assert!(out.content.contains("not in a hash=true read"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nbeta\ngamma\n");
+    }
+
+    #[test]
+    fn batch_edit_changes_two_files_in_one_call() {
+        let dir = temp_dir("batch-two-files");
+        let ctx = ToolCtx::new(dir.clone());
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        fs::write(&a, "alpha\n").unwrap();
+        fs::write(&b, "beta\n").unwrap();
+        for path in [&a, &b] {
+            let args = format!(r#"{{"path":"{}","hash":true}}"#, json_path(path));
+            ReadTool
+                .execute(&ctx, &Json::parse(&args).unwrap())
+                .unwrap();
+        }
+
+        let edits = format!(
+            r#"[{{"path":"{}","start":"1#{}","newText":"ALPHA"}},{{"path":"{}","start":"1#{}","newText":"BETA"}}]"#,
+            json_path(&a),
+            short_hash(b"alpha", 8),
+            json_path(&b),
+            short_hash(b"beta", 8)
+        );
+        let mut args = Json::obj();
+        args.set("path", Json::string(a.to_string_lossy().into_owned()));
+        args.set("edits", Json::string(edits));
+        let out = EditTool.execute(&ctx, &args).unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(fs::read_to_string(&a).unwrap(), "ALPHA\n");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "BETA\n");
+    }
+
+    #[test]
+    fn batch_edit_rejects_overlap_before_writing() {
+        let dir = temp_dir("batch-overlap");
+        let ctx = ToolCtx::new(dir.clone());
+        let path = dir.join("a.txt");
+        fs::write(&path, "alpha\nbeta\n").unwrap();
+        let read_args = format!(r#"{{"path":"{}","hash":true}}"#, json_path(&path));
+        ReadTool
+            .execute(&ctx, &Json::parse(&read_args).unwrap())
+            .unwrap();
+
+        let edits = format!(
+            r#"[{{"start":"1#{}","end":"2#{}","newText":"first"}},{{"start":"2#{}","newText":"second"}}]"#,
+            short_hash(b"alpha", 8),
+            short_hash(b"beta", 8),
+            short_hash(b"beta", 8)
+        );
+        let mut args = Json::obj();
+        args.set("path", Json::string(path.to_string_lossy().into_owned()));
+        args.set("edits", Json::string(edits));
+        let out = EditTool.execute(&ctx, &args).unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("overlapping"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nbeta\n");
+    }
+
+    #[test]
+    fn batch_edit_validates_every_file_before_writing_any() {
+        let dir = temp_dir("batch-atomic");
+        let ctx = ToolCtx::new(dir.clone());
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        fs::write(&a, "alpha\n").unwrap();
+        fs::write(&b, "beta\n").unwrap();
+        for path in [&a, &b] {
+            let args = format!(r#"{{"path":"{}","hash":true}}"#, json_path(path));
+            ReadTool
+                .execute(&ctx, &Json::parse(&args).unwrap())
+                .unwrap();
+        }
+        // b drifts after the read, so the whole batch must stop before a is written.
+        fs::write(&b, "changed\n").unwrap();
+        let edits = format!(
+            r#"[{{"path":"{}","start":"1#{}","newText":"ALPHA"}},{{"path":"{}","start":"1#{}","newText":"BETA"}}]"#,
+            json_path(&a),
+            short_hash(b"alpha", 8),
+            json_path(&b),
+            short_hash(b"beta", 8)
+        );
+        let mut args = Json::obj();
+        args.set("path", Json::string(a.to_string_lossy().into_owned()));
+        args.set("edits", Json::string(edits));
+        let out = EditTool.execute(&ctx, &args).unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("stale hash anchor"));
+        assert_eq!(fs::read_to_string(&a).unwrap(), "alpha\n");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "changed\n");
     }
 
     #[test]
