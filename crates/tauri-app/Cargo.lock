@@ -214,6 +214,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "argent-pty"
+version = "0.3.2"
+dependencies = [
+ "argent-core",
+ "argent-tools",
+]
+
+[[package]]
 name = "argent-security"
 version = "0.3.2"
 dependencies = [
@@ -242,6 +250,7 @@ dependencies = [
  "argent-engine",
  "argent-jobs",
  "argent-memory",
+ "argent-pty",
  "argent-session",
  "argent-tools",
  "argent-ui-core",

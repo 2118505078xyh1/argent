@@ -20,6 +20,7 @@ argent-engine = { path = "../engine" }
 argent-memory = { path = "../memory" }
 argent-jobs = { path = "../jobs" }
 argent-workflow = { path = "../workflow" }
+argent-pty = { path = "../pty" }
 argent-session = { path = "../session" }
 argent-tools = { path = "../tools" }
 argent-ui-core = { path = "../ui-core" }

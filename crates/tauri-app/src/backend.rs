@@ -74,6 +74,8 @@ struct SessionHandle {
 
 struct Shared {
     jobs: Mutex<argent_jobs::JobManager>,
+    ptys: Mutex<HashMap<String, argent_pty::PtySession>>,
+    next_pty: AtomicU64,
     session_dir: std::path::PathBuf,
     sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
     active: Mutex<String>,
@@ -146,6 +148,8 @@ impl Backend {
         let config = prepare_config(&cwd)?;
         let shared = Arc::new(Shared {
             jobs: Mutex::new(argent_jobs::JobManager::new(argent_jobs::JobManager::default_log_dir())),
+            ptys: Mutex::new(HashMap::new()),
+            next_pty: AtomicU64::new(1),
             session_dir: config.session_dir.clone(),
             sessions: Mutex::new(HashMap::new()),
             active: Mutex::new("1".to_string()),
@@ -733,6 +737,75 @@ fn list_markdown_names(dir: &std::path::Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+#[tauri::command]
+pub fn pty_spawn(
+    state: State<'_, Backend>,
+    command: String,
+    cols: u16,
+    rows: u16,
+) -> Result<String, String> {
+    if command.trim().is_empty() {
+        return Err("command is empty".to_string());
+    }
+    if !argent_pty::is_supported() {
+        return Err("pty is not supported on this platform".to_string());
+    }
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let session = argent_pty::PtySession::spawn(command.trim(), &cwd, cols.max(20), rows.max(6))
+        .map_err(|error| error.to_string())?;
+    let id = state.shared.next_pty.fetch_add(1, Ordering::Relaxed).to_string();
+    state
+        .shared
+        .ptys
+        .lock()
+        .map_err(|_| "pty lock poisoned".to_string())?
+        .insert(id.clone(), session);
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn pty_write(state: State<'_, Backend>, id: String, text: String) -> Result<(), String> {
+    let mut ptys = state.shared.ptys.lock().map_err(|_| "pty lock poisoned".to_string())?;
+    let session = ptys.get_mut(&id).ok_or_else(|| format!("pty {} not found", id))?;
+    session.write(&text).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn pty_read(state: State<'_, Backend>, id: String) -> Result<String, String> {
+    let mut ptys = state.shared.ptys.lock().map_err(|_| "pty lock poisoned".to_string())?;
+    let session = ptys.get_mut(&id).ok_or_else(|| format!("pty {} not found", id))?;
+    Ok(session.read())
+}
+
+#[tauri::command]
+pub fn pty_kill(state: State<'_, Backend>, id: String) -> Result<(), String> {
+    let mut ptys = state.shared.ptys.lock().map_err(|_| "pty lock poisoned".to_string())?;
+    match ptys.get_mut(&id) {
+        Some(session) => {
+            session.kill();
+            Ok(())
+        }
+        None => Err(format!("pty {} not found", id)),
+    }
+}
+
+#[tauri::command]
+pub fn pty_list(state: State<'_, Backend>) -> Result<Value, String> {
+    let mut ptys = state.shared.ptys.lock().map_err(|_| "pty lock poisoned".to_string())?;
+    let rows = ptys
+        .iter_mut()
+        .map(|(id, session)| {
+            json!({
+                "id": id,
+                "closed": session.is_closed(),
+                "exited": session.has_exited(),
+                "elapsed": session.elapsed().as_secs(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!(rows))
 }
 
 #[tauri::command]

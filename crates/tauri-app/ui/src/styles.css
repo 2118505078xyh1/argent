@@ -1249,6 +1249,74 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.pty-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 14px;
+  min-height: 420px;
+}
+
+.pty-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pty-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 11px;
+}
+
+.pty-tab.active {
+  border-color: var(--accent);
+}
+
+.pty-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.pty-output {
+  flex: 1;
+  min-height: 360px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.pty-input {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pty-input input {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
 .privacy-settings {
   display: flex;
   flex-direction: column;
