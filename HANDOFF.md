@@ -199,7 +199,8 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     `docs/NEXT-PLAN.md`：建议方向 B（通用 Agent Runtime，Coding 为首个垂直场景），
     突破优先级为任务完成能力；四周排期 P0 评测体系 → P1 多 Agent + Worktree →
     P2 统一事件协议 → P3 安全/稳定性 + 0.4.0。Self-improving 闭环放在 P0–P3
-    之后，且不得绕过安全策略。战略方向待用户最终确认。
+    之后，且不得绕过安全策略。**用户已确认：B + D 双线，突破优先级 ①②③ 全要**；
+    计划已加入 D 并行研究线与性能/成本横向 gate。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

@@ -3,26 +3,26 @@
 基于外部架构评估与当前仓库现状制定。原则：**减少功能扩张，集中打磨执行可靠性**；
 核心保持极简，复杂能力通过插件/子 Agent/工作流扩展。
 
-## 0. 战略选项与建议
+## 0. 战略选项与已确认决策
 
-评估提出四个方向：
+评估提出四个方向：A 最强 Coding Agent、B 通用 Agent Runtime、C 完整 Agent 平台、
+D 自主/自我改进 Agent。
 
-- A. 最强个人 Coding Agent（对标 Codex / Claude Code / OpenCode）
-- B. 通用 Agent Runtime（其他 Agent 应用的底层引擎）
-- C. 完整 Agent 平台（桌面端 + 云端 + 插件市场 + 多 Agent）
-- D. 自主规划 / 自我改进的下一代 Agent
+**用户已确认：B + D 双线。**
 
-**建议：选 B，但以 A 为第一个垂直场景。** 理由：
+- **B 是底座**：先把 argent 做成轻量、跨模型、可插拔的通用 Agent Runtime；
+  Coding 仍是第一个垂直验证场景，但不限制 runtime 只服务编程。
+- **D 是上层演进方向**：自我改进循环作为并行研究线推进，**不进入发布路径**，
+  直到 P0 评测 gate 与人工审批同时通过。
+- C 是 B 成熟后自然长出的产品形态（桌面/云端/插件市场），本阶段不单独立项。
 
-- 仓库已有的分层（`core → ai → agent → engine → 各前端`）天然是 Runtime 形态；
-- Coding 场景是验证 Runtime 的最好试验田，不应放弃；
-- C 是 B 之上长出的产品形态，D 是 B 之上的研究课题，都不该先于可靠性。
+**突破优先级已确认：1 + 2 + 3 全要**（Agent 智能与任务完成能力 / 底层架构与
+执行引擎 / 速度-内存-Token 成本）。三者按下面的顺序落地，避免同时开工导致
+架构复杂度超过验证能力：
 
-"最希望突破什么"建议选 **Agent 智能与任务完成能力**，但用 P0 的评测体系把它变成
-可测量指标，而不是凭感觉优化。
-
-> 这两项是架构级决策。若确认选 B，则从 P1 开始落地；若选 A，则 P1 的
-> 通用编排器可降级为 Coding 专用多 Agent。其余计划不变。
+1. 先用 P0 评测把"能力"变成可测量指标；
+2. 再用 P1/P2 把"架构"做成统一执行模型与协议；
+3. 性能/成本作为贯穿所有阶段的横向轨道，每项改动都必须过 baseline gate。
 
 ## 1. 当前基线（已核对）
 
@@ -37,6 +37,30 @@
 
 **现状判断**：基础设施足够，但"能力是否稳定"缺少系统性证据；多 Agent 仍是 primitives，
 不是统一执行模型；各传输层事件形状不同，尚未形成稳定协议。
+
+## 1.5 三条突破线的落地关系
+
+| 突破线 | 主阶段 | 可交付指标 | 验收方式 |
+|---|---|---|---|
+| ① Agent 智能与任务完成 | P0 + P1 | TSR、TCA、Recovery Rate | `eval-gate` CI 对比 baseline |
+| ② 底层架构与执行引擎 | P1 + P2 | TaskGraph 调度正确率、协议一致性 | conformance suite + worktree 隔离测试 |
+| ③ 速度/内存/Token 成本 | 横向轨道 | 启动/工作集/Token per Task/Cost per Task | `perf-baseline` + eval 报表双 gate |
+
+**③ 的当前基线**（`docs/PERF-BASELINE.md`）：启动到 CDP 813ms、主进程工作集
+29.0MB、JS 75.1KB / CSS 18.5KB、NSIS 3.49MB / MSI 5.15MB。目标：
+
+- 启动 P50 < 800ms、工作集 < 60MB、bundle 不回退；
+- Token/Task 与 Cost/Task 在 P0 baseline 之上**逐版下降**（通过模型路由、
+  prompt 精简、缓存续期、上下文压缩、重复工具结果裁剪实现）；
+- 任何性能改动不得降低 P0 的 TSR/TCA，否则回滚。
+
+**D 自改进研究线**（与 P0–P3 并行，但不发布）：
+
+- 第 2 周：轨迹采集数据结构（Observe）+ 失败分类标签；
+- 第 3 周：prompt/路由/工作流变体的自动评测脚本（Evaluate/Optimize）；
+- 第 4 周：隔离环境回归验证（Validate）+ 人工审批发布流程（Release）原型；
+- 硬约束：不得自动修改安全策略、权限边界、审批规则或生产配置；所有变更以
+  版本化 diff 提交，必须通过 P0 gate 和人工确认。
 
 ## 2. P0 — 建立有说服力的 Agent 评测体系（第 1 周，最高优先级）
 
@@ -174,12 +198,15 @@ Tauri、serve 三条路径通过；IDE 接入文档。
 
 ## 8. 四周排期
 
-| 时间 | 任务 | 交付 |
-|---|---|---|
-| 第 1 周 | Benchmark 与评测框架 | schema v2 + 五类场景 + baseline + CI gate |
-| 第 2 周 | 多 Agent 调度与 Worktree | TaskGraph + Coder/Reviewer demo + 隔离测试 |
-| 第 3 周 | Runtime 事件协议统一 | protocol crate + conformance + 3 条路径适配 |
-| 第 4 周 | 安全测试、稳定性与发布 | 安全套件 + soak 报告 + 0.4.0 |
+| 时间 | 主线任务 | 并行：D 自改进线 | 交付 |
+|---|---|---|---|
+| 第 1 周 | Benchmark 与评测框架 | 轨迹采集结构与失败分类 | schema v2 + 五类场景 + baseline + CI gate |
+| 第 2 周 | 多 Agent 调度与 Worktree | 变体自动评测脚本 | TaskGraph + Coder/Reviewer demo + 隔离测试 |
+| 第 3 周 | Runtime 事件协议统一 | 隔离环境回归验证原型 | protocol crate + conformance + 3 条路径适配 |
+| 第 4 周 | 安全测试、稳定性与发布 | 人工审批发布流程原型 | 安全套件 + soak 报告 + 0.4.0 |
+
+③ 速度/内存/Token 成本为贯穿四周的横向 gate：每周结束重跑 `perf-baseline` 与
+eval 报表，回退即阻断合并。
 
 ## 9. 立即开始（第 1 周 Day 1–3）
 
@@ -191,5 +218,4 @@ Tauri、serve 三条路径通过；IDE 接入文档。
 
 ---
 
-待确认：战略方向 B（通用 Agent Runtime）与突破优先级（任务完成能力）是否作为正式路线？
-确认后即可从第 1 周 Day 1 开始执行。
+已确认：战略方向 **B + D**，突破优先级 **①②③ 全要**。第 1 周 Day 1 立即开始执行。
