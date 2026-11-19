@@ -6,6 +6,14 @@
   "build": {
     "frontendDist": "./ui/dist"
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "name": "Argent",
+        "schemes": ["argent"]
+      }
+    }
+  },
   "app": {
     "windows": [
       {

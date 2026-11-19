@@ -495,6 +495,24 @@ function App() {
           handle({ ...payload, sid: asString(asRecord(event.payload)?.sid) });
         }
       });
+      let unlistenDeep: UnlistenFn | undefined;
+      try {
+        unlistenDeep = await listen<string[]>("deep-link://new-url", (event) => {
+          const url = event.payload?.[0];
+          if (!url) return;
+          try {
+            const path = new URL(url).searchParams.get("path");
+            if (path) {
+              void openSearchHit({ path, title: "Deep link", line: 0, snippet: "" });
+            }
+          } catch {
+            setError(`无效的 deep link：${url}`);
+          }
+        });
+      } catch {
+        // Deep-link permission may be disabled in a stripped-down build.
+      }
+      onCleanup(() => unlistenDeep?.());
       const state = await invoke<unknown>("get_state");
       const stateRecord = asRecord(state);
       const initialSid = asString(stateRecord?.sid, "1");
