@@ -665,6 +665,46 @@ fn list_markdown_names(dir: &std::path::Path) -> Vec<String> {
 }
 
 #[tauri::command]
+pub fn list_workflows() -> Result<Value, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut roots = vec![cwd.join(".argent").join("workflows")];
+    roots.push(cwd.clone());
+    let mut paths = Vec::new();
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let is_workflow = name.ends_with(".json")
+                && (name.contains("workflow") || path.to_string_lossy().contains("workflows"));
+            if is_workflow && !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    let rows = paths
+        .iter()
+        .map(|path| {
+            let validation = match argent_workflow::Workflow::load(path)
+                .and_then(|workflow| workflow.validate().map(|_| workflow))
+            {
+                Ok(workflow) => json!({ "ok": true, "steps": workflow.steps.len() }),
+                Err(error) => json!({ "ok": false, "error": error.to_string() }),
+            };
+            json!({
+                "path": path.to_string_lossy(),
+                "name": path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+                "validation": validation,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!(rows))
+}
+
+#[tauri::command]
 pub fn list_jobs(state: State<'_, Backend>) -> Result<Value, String> {
     let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
     let rows = manager.list();

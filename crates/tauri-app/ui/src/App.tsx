@@ -16,6 +16,7 @@ import Extensions from "./Extensions";
 import Usage from "./Usage";
 import Git from "./Git";
 import Jobs from "./Jobs";
+import Workflows from "./Workflows";
 import ToolCard from "./ToolCard";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -191,7 +192,15 @@ function App() {
     storageGet("argent.theme") === "light" ? "light" : "dark",
   );
   const [screen, setScreen] = createSignal<
-    "chat" | "automations" | "documents" | "memory" | "extensions" | "usage" | "git" | "jobs"
+    | "chat"
+    | "automations"
+    | "documents"
+    | "memory"
+    | "extensions"
+    | "usage"
+    | "git"
+    | "jobs"
+    | "workflows"
   >("chat");
   const [help, setHelp] = createSignal(false);
   const [locale, setLocale] = createSignal<Locale>(detectLocale());
@@ -1213,6 +1222,12 @@ function App() {
           >
             任务
           </button>
+          <button
+            classList={{ active: screen() === "workflows" }}
+            onClick={() => setScreen("workflows")}
+          >
+            工作流
+          </button>
         </div>
         <div class="side-head">
           <span>{t(locale(), "chat")}</span>
@@ -1749,6 +1764,9 @@ function App() {
         </Show>
         <Show when={screen() === "jobs"}>
           <Jobs />
+        </Show>
+        <Show when={screen() === "workflows"}>
+          <Workflows />
         </Show>
       </main>
 

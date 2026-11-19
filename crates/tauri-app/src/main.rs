@@ -92,6 +92,7 @@ fn main() {
             backend::delete_automation,
             backend::run_automation,
             backend::automation_log,
+            backend::list_workflows,
             backend::list_jobs,
             backend::start_job,
             backend::job_tail,

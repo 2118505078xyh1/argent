@@ -245,6 +245,7 @@ dependencies = [
  "argent-session",
  "argent-tools",
  "argent-ui-core",
+ "argent-workflow",
  "serde",
  "serde_json",
  "tauri",
@@ -280,6 +281,15 @@ dependencies = [
  "argent-core",
  "ed25519-dalek",
  "rand_core",
+]
+
+[[package]]
+name = "argent-workflow"
+version = "0.3.2"
+dependencies = [
+ "argent-core",
+ "argent-session",
+ "argent-tools",
 ]
 
 [[package]]

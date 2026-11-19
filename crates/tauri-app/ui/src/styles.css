@@ -1090,6 +1090,10 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
+.error-text {
+  color: var(--error);
+}
+
 .auto-actions {
   display: flex;
   gap: 6px;
