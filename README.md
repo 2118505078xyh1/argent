@@ -1,7 +1,7 @@
 # argent
 
-> **开发已转到 Go 版：[`argent-go`](https://github.com/2118505078xyh1/argent-go)。**
-> 本仓库是 Rust 实现（0.4.0），保留作为参考实现，不再加新功能。
+> **本仓库已冻结：开发转到 Go 版 [`argent-go`](https://github.com/2118505078xyh1/argent-go)。**
+> Rust 实现（0.4.0）保留作为行为参考与归档，不再更新、不再发布。
 
 个人使用的 Agent Runtime：原生 agent 循环，编程是第一个垂直场景。Rust 实现，
 桌面端使用 **Tauri 2 + SolidJS**（`argent-desktop`），终端入口是 CLI 与全屏 TUI。
@@ -37,8 +37,8 @@ Tauri 使用系统 WebView，不打包 Chromium；代价是桌面版依赖 WebVi
 
 个人项目，目标是可维护的 agent harness，不做体积对标。
 
-- 本仓库后端：Rust（workspace 见 `Cargo.toml`），0.4.0 起只修安全问题
-- 新开发后端：Go（`argent-go` 仓库），功能追平后本仓库归档
+- 本仓库后端：Rust（workspace 见 `Cargo.toml`），**已冻结**，0.4.0 为最后一版
+- 新开发后端：Go（`argent-go` 仓库），功能追平后本仓库只作归档
 - 桌面端：Tauri 2 + SolidJS，使用系统 WebView
 - 终端：CLI + 全屏 TUI，不启动浏览器引擎
 
