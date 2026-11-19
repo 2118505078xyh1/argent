@@ -3,7 +3,7 @@
 日期：2026-11-19
 基线：`crates/tauri-app` 原型已跑通流式聊天、工具卡、审批桥接、会话列表、
 模型/思考选择器、ctx/cache 状态栏。
-关联：`HANDOFF.md`、`docs/FRONTEND.md`、`docs/ROADMAP.md`、`docs/PARITY.md`。
+关联：`docs/FRONTEND.md`、`docs/ROADMAP.md`、`docs/PARITY.md`。
 
 ## 完成度总览（2026-11-19）
 
@@ -317,7 +317,7 @@ server，`ARGENT_BASE_URL` 指过去；新增 `scripts/tauri-smoke.py`，用 CDP
 | T2.17 | 遥测同意 | 与 CLI 一致的 opt-in UI | S | 默认关闭 |
 | T2.18 | 发布通道 | stable/beta + 回滚说明 | S | 通道切换可用 |
 | T2.19 | 崩溃上报 | opt-in，含版本/堆栈/最近日志 | M | 不上传会话内容 |
-| T2.20 | 文档同步 | README/FRONTEND/HANDOFF 更新 | S | 构建命令可复制运行 |
+| T2.20 | 文档同步 | README/FRONTEND 更新 | S | 构建命令可复制运行 |
 
 ---
 
@@ -408,7 +408,7 @@ server，`ARGENT_BASE_URL` 指过去；新增 `scripts/tauri-smoke.py`，用 CDP
   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9222"`
   + Python websockets。
 - 本机 PowerShell 不支持 `&&`，命令用 `;` 分隔。
-- bun 在 `C:\Users\xyh\.bun\bin\bun.exe`；前端构建产物在 `ui/dist`。
+- bun 在 PATH 中（或设 `BUN` 环境变量）；前端构建产物在 `ui/dist`。
 - `capabilities/default.json` 必须保留 `core:event:allow-listen/unlisten`。
 - Tauri 是独立 workspace，产物在 `crates/tauri-app/target/`，根 `cargo test`
   不会覆盖它。

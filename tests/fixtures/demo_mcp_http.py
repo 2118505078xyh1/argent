@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A minimal MCP server over streamable HTTP, for exercising the minzcode client.
+"""A minimal MCP server over streamable HTTP, for exercising the argent client.
 
 Two modes, chosen by path:
 

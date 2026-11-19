@@ -27,13 +27,16 @@ LOG_DIR = ROOT / "evals" / "local" / "logs"
 REPORT = ROOT / "docs" / "EVAL-LOCAL-REPORT.md"
 RESULTS = ROOT / "evals" / "local" / "results.json"
 LLAMA_LOG = Path(
-    os.environ.get("LOCAL_4B_ERR_LOG", r"D:\code\local_text\models\spark-eval.err.log")
+    os.environ.get(
+        "LOCAL_4B_ERR_LOG",
+        str(ROOT / "evals" / "local" / "logs" / "llama-server.err.log"),
+    )
 )
 
 BASE_URL = "http://127.0.0.1:8080/v1"
 MODEL = "spark-4b"
 ARGENT = ROOT / "target" / "release" / "argent.exe"
-PI_PS1 = Path(r"C:\Users\xyh\.pi\agent\bin\pi.ps1")
+PI_PS1 = Path(os.environ.get("PI_PS1", "pi.ps1"))
 PI_CONFIG = ROOT / "tests" / "fixtures" / "pi-local-eval"
 TOOLS = ["read", "write", "edit", "bash", "grep", "find", "ls", "apply_patch"]
 
@@ -52,8 +55,8 @@ def parse_args():
     return parser.parse_args()
 
 
-LLAMA_EXE = Path(r"D:\code\local_text\llama.cpp\llama-server.exe")
-LLAMA_MODEL = Path(r"D:\code\local_text\models\Spark-X2.6-4B-Q4_K_M.gguf")
+LLAMA_EXE = Path(os.environ.get("LOCAL_4B_EXE", "llama-server.exe"))
+LLAMA_MODEL = Path(os.environ.get("LOCAL_4B_MODEL", "model.gguf"))
 
 
 def server_ready() -> bool:

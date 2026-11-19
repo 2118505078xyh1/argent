@@ -131,8 +131,8 @@ fn spawn_session(app: AppHandle, shared: Arc<Shared>, sid: String, handle: Arc<S
         }
         for event in events {
             if let Some(canonical) = canonical_event(&event) {
-                let event_json: Value = serde_json::from_str(&canonical.to_json().dump())
-                    .unwrap_or(Value::Null);
+                let event_json: Value =
+                    serde_json::from_str(&canonical.to_json().dump()).unwrap_or(Value::Null);
                 let _ = app.emit(
                     "argent://runtime",
                     json!({ "sid": sid, "event": event_json }),

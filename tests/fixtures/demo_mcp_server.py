@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A minimal MCP server over stdio, used to exercise the minzcode client.
+"""A minimal MCP server over stdio, used to exercise the argent client.
 
 Implements the handshake plus tools/list and tools/call with two trivial
 tools. No dependencies beyond the standard library.

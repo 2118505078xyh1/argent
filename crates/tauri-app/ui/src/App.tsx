@@ -1441,7 +1441,7 @@ function App() {
         <header class="topbar">
           <div class="title-block">
             <div class="title">Argent</div>
-            <div class="path">{ready()?.cwd || "D:\\code\\mpi\\argent"}</div>
+            <div class="path">{ready()?.cwd || ""}</div>
           </div>
           <div class="top-meta">
             <span class="label">{t(locale(), "model")}</span>
@@ -1515,7 +1515,7 @@ function App() {
                 <div class="welcome-card">
                   <div class="welcome-mark">argent</div>
                   <p>{t(locale(), "welcome")}</p>
-                  <div class="path">{ready()?.cwd || "D:\\code\\mpi\\argent"}</div>
+                  <div class="path">{ready()?.cwd || ""}</div>
                   <p class="welcome-hint">
                     首次使用请在终端运行 <code>argent login</code> 配置模型凭据。
                   </p>

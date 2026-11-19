@@ -1,6 +1,6 @@
 # Pi 1.5.2 内核对照（源码级）
 
-来源：`C:\Users\xyh\.pi\agent\install\releases\1.5.2\node_modules\@earendil-works\pi-coding-agent\dist`
+来源：`%USERPROFILE%\.pi\agent\install\releases\<version>\node_modules\@earendil-works\pi-coding-agent\dist`
 
 ## Pi 的真实内核边界
 

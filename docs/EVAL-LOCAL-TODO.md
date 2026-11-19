@@ -7,11 +7,11 @@
 
 | 项 | 值 |
 |---|---|
-| llama-server | `D:\code\local_text\llama.cpp\llama-server.exe` |
-| 模型 | `D:\code\local_text\models\Spark-X2.6-4B-Q4_K_M.gguf` |
+| llama-server | `%LOCAL_4B_EXE%`（默认 `llama-server.exe`） |
+| 模型 | `%LOCAL_4B_MODEL%`（默认 `model.gguf`） |
 | 别名 / 端口 | `spark-4b` / `127.0.0.1:8080` |
 | 启动参数 | `-c 16384 -ngl 99 --jinja`（复用 `scripts/local-4b.ps1`） |
-| Pi | `C:\Users\xyh\.pi\agent\bin\pi.ps1`，1.5.2，隔离配置目录 |
+| Pi | `%PI_PS1%`（默认 `pi.ps1`），1.5.2，隔离配置目录 |
 | Pi 隔离 | `PI_CODING_AGENT_DIR=<temp>`，配置 `--no-extensions --no-skills --no-mcp --no-context-files --no-session --offline` |
 | argent | `target\release\argent.exe`（或 `target\debug`），参数 `--provider local --base-url http://127.0.0.1:8080/v1 -m spark-4b --thinking off` |
 | 提示词约束 | 只描述任务本身，使用"助手/assistant"，**不出现任何其他 agent 名称** |
