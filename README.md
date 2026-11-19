@@ -1,11 +1,11 @@
 # argent
 
-用 Rust 实现的轻量 Agent Runtime：一个小体积二进制、原生 agent 循环。编程是
-第一个垂直场景；主入口是 **CLI 与全屏 TUI**，桌面版是 **Tauri 2 + SolidJS**
-（`argent-desktop`），终端路径不依赖浏览器引擎。
+个人使用的 Agent Runtime：原生 agent 循环，编程是第一个垂直场景。当前实现是
+Rust；下一阶段后端计划迁移到 Go，桌面端使用 **Tauri 2 + SolidJS**
+（`argent-desktop`），终端入口是 CLI 与全屏 TUI。
 
 `argent` 是干净实现的运行时：对标 **Pi 与 OMP** 的可观察接口与能力边界
-（provider 模板、插件清单、skills、commands、hooks、MCP），用 Rust 重新实现。
+（provider 模板、插件清单、skills、commands、hooks、MCP）。
 项目中不包含其他实现的源码、压缩 JS、图标或专有资产。
 
 ## 界面
@@ -31,32 +31,16 @@
 Tauri 使用系统 WebView，不打包 Chromium；代价是桌面版依赖 WebView2（Win10+
 自带）。取舍与迁移记录见 [docs/FRONTEND.md](docs/FRONTEND.md)。
 
-## 为什么更小
+## 定位与取舍
 
-对标对象是 **Pi 与 OMP**。下表用公开可观察的本地 footprint 做对比；Pi 的安装
-目录不包含 Node 运行时本身，OMP 是服务端模型路由/调度 harness，没有本地二进制。
+个人项目，目标是可维护的 agent harness，不做体积对标。
 
-| 维度 | Pi 1.5.2 | OMP | argent |
-|---|---|---|---|
-| 定位 | 编程助手 CLI | 模型路由/调度 harness（服务端） | 轻量 Agent Runtime，编程是首个垂直场景 |
-| 本地运行时 | Node.js（未计入体积） | 无本地二进制，走 HTTP | 单二进制，无运行时依赖 |
-| 本地占用（Windows） | 安装目录约 108.7 MB | 不适用（服务端部署） | `argent.exe` 5.36 MB；发布 zip 约 6.1 MB |
-| 无头模式 | 需 Node | 通过 API 调用 | 一个 `argent.exe` 即可 |
-| 交互界面 | 终端 TUI | 不适用 | CLI/TUI + Tauri 桌面 |
-| 扩展方式 | Node 扩展 + MCP | 不适用（由 harness 侧管理） | Rust 清单 + MCP + Rhai，原生工具优先 |
+- 当前后端：Rust（workspace 见 `Cargo.toml`）
+- 下一阶段后端：Go（功能追平前，Rust 版仍是唯一可用实现）
+- 桌面端：Tauri 2 + SolidJS，使用系统 WebView
+- 终端：CLI + 全屏 TUI，不启动浏览器引擎
 
-CLI/TUI 路径不启动浏览器引擎；桌面版使用系统 WebView。整个产品只有一个
-Rust 运行时。
-
-argent 实测（0.3.1 release 构建，Windows x64）：
-
-| 进程 | 二进制 | 工作集 |
-|---|---|---|
-| `argent tui`（全屏） | 5.52 MB | 约 8.6 MB |
-| `argent-desktop`（Tauri 2 + WebView2） | 见发布包 | 约 32 MB（主进程） |
-
-发布 zip 内置 CLI/TUI、桌面版、README、docs 和 examples。  
-`argent --version` 冷/热混合 7 次：中位数 35 ms，最小 33 ms，最大 146 ms（Windows x64）。
+不追求"最小二进制"或"零运行时依赖"：Go 版体积会更大，换的是迭代速度。
 
 ## argent 独有的七个能力
 
@@ -184,7 +168,7 @@ argent --serve --serve-port 7777 --serve-token mytoken
 
 脚本定义 `arg_init`（返回工具/命令声明）和 `arg_call`（执行工具）。宿主提供 `argent_log`、`argent_call_tool`、`argent_var`、`argent_now`；`argent_call_tool` 走同一套 ToolRegistry，权限、审批与审计不会绕过。CLI 与桌面 GUI 启动时加载插件，工具在模型看到前注册完成。详见 [docs/SCRIPT-PLUGINS.md](docs/SCRIPT-PLUGINS.md)。
 
-插件功能默认关闭（保持最小体积）。启用：`cargo build --release -p argent-cli --features script-plugins`，二进制增加约 1.5 MB。
+插件功能默认关闭。启用：`cargo build --release -p argent-cli --features script-plugins`。
 
 ### 7. 自动化任务
 
