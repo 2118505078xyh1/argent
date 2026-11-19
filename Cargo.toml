@@ -37,10 +37,10 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.85"
-license = "MIT"
+license = "Apache-2.0"
 
 [workspace.lints.clippy]
 # 各前端的入口函数一次性接住整套上下文：tui::spawn、tui::run、run_repl、

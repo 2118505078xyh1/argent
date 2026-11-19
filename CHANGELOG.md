@@ -5,6 +5,23 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
 ## Unreleased
 
+## 0.4.0 — 2026-11-19
+
+- **License change.** argent is now licensed under Apache-2.0 (was MIT).
+- **Transport-neutral runtime events.** `argent-ui-core` exposes `RuntimeEvent`
+  (session, turn, stream, tool, approval, suspend/resume, completion) and the
+  Tauri bridge emits the canonical stream alongside the legacy payload, so
+  frontends can migrate independently.
+- **Agent pause/resume.** The loop can suspend between turns and resume with
+  history intact; both the TUI and the engine paths expose it.
+- **Per-session task list.** Task state is scoped to each session instead of
+  being shared process-wide.
+- **Prompt and cache tuning.** The system prompt is compacted in the same shape
+  as Pi, loopback OpenAI requests send `cache_prompt`, and the bash tool
+  description is trimmed; the local 4B evaluation now passes 12/12 scenarios.
+- **Local 4B evaluation harness.** `scripts/eval-local.py` runs the same neutral
+  scenarios against argent and a reference CLI on llama.cpp, records tokens and
+  wall time, and writes `docs/EVAL-LOCAL-REPORT.md`.
 - **TUI visual refresh.** The composer is a rounded box, tool runs are bordered
   status-coloured cards, the status line has a surface, and Markdown headings,
   links, inline code and borders use new semantic theme tokens.
@@ -13,8 +30,10 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
   larger type scale and a welcome card with quick prompts.
 - **Window sizing.** The native window defaults to 1100×720 logical pixels so
   composers and status bars remain visible on scaled laptop displays.
-- **Tauri + SolidJS prototype.** A standalone `crates/tauri-app` shell bridges
-  `argent-engine` events, prompts and approvals into a SolidJS chat surface.
+- **Tauri + SolidJS prototype (not shipped in the binary bundle).** A standalone
+  `crates/tauri-app` shell bridges `argent-engine` events, prompts and approvals
+  into a SolidJS chat surface and gains jobs, memory search, workflow inventory,
+  extensions, usage, git and PTY panels plus deep links and a command palette.
   The existing iced and TUI frontends remain the shipping paths until feature
   parity; the multi-end frontend plan is documented in `docs/FRONTEND.md`.
 

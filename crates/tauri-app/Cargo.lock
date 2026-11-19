@@ -62,7 +62,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "argent-agent"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-ai",
  "argent-core",
@@ -72,14 +72,14 @@ dependencies = [
 
 [[package]]
 name = "argent-ai"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
 ]
 
 [[package]]
 name = "argent-ast"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
  "argent-tools",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "argent-auth"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-config",
  "argent-core",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "argent-automation"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-config",
  "argent-core",
@@ -105,18 +105,18 @@ dependencies = [
 
 [[package]]
 name = "argent-config"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
 ]
 
 [[package]]
 name = "argent-core"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "argent-engine"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-agent",
  "argent-ai",
@@ -140,14 +140,14 @@ dependencies = [
 
 [[package]]
 name = "argent-hooks"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
 ]
 
 [[package]]
 name = "argent-jobs"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
  "argent-tools",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "argent-lsp"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-ast",
  "argent-core",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "argent-mcp"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-config",
  "argent-core",
@@ -173,14 +173,14 @@ dependencies = [
 
 [[package]]
 name = "argent-memory"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
 ]
 
 [[package]]
 name = "argent-plugin"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
  "argent-tools",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "argent-plugins"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-config",
  "argent-core",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "argent-profiles"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-config",
  "argent-core",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "argent-provider"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-ai",
  "argent-core",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "argent-pty"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
  "argent-tools",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "argent-security"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-config",
  "argent-core",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "argent-session"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-agent",
  "argent-ai",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "argent-tauri"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-agent",
  "argent-ai",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "argent-tools"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-ai",
  "argent-core",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "argent-ui-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-agent",
  "argent-ai",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "argent-update"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-config",
  "argent-core",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "argent-workflow"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "argent-core",
  "argent-session",

@@ -8,7 +8,9 @@
    `/session`, `/hooks`, `/skills`, multiline paste.
 6. `powershell -File scripts/install.ps1` (or `sh scripts/install.sh`), then
    reopen argent and confirm `--version` and `/about`.
-7. Tag `vX.Y.Z` and attach the binary; update CHANGELOG with the md5.
+7. Tag `vX.Y.Z` and attach the binary; update CHANGELOG with the zip's sha256
+   (the bundle ships `SHA256SUMS` and, when `ARGENT_UPDATE_KEY` is set, a
+   signed update manifest).
 
 Crash reporting is off by default and there is no uploader in this build.
 Diagnostics come from `argent logs`, `argent doctor`, and redacted audit
