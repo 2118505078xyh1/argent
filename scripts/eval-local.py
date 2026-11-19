@@ -196,9 +196,9 @@ def judge(scenario, scratch: Path, output: str, timed_out: bool):
     expect = scenario.get("expect", {})
     text = output.lower()
     reasons = []
-    for needle in expect.get("text_contains_any", []):
-        if needle.lower() not in text:
-            reasons.append(f"missing text: {needle}")
+    any_needles = expect.get("text_contains_any", [])
+    if any_needles and not any(needle.lower() in text for needle in any_needles):
+        reasons.append(f"missing any of: {', '.join(any_needles)}")
     for needle in expect.get("text_not_contains", []):
         if needle.lower() in text:
             reasons.append(f"forbidden text: {needle}")
@@ -326,10 +326,16 @@ def main():
     lines += ["", "| 场景 | 类别 | argent | Pi | 备注 |", "|---|---|---|---|---|"]
     for scenario in scenarios:
         row_a = next(r for r in results if r["id"] == scenario["id"] and r["impl"] == "argent")
-        row_p = next(r for r in results if r["id"] == scenario["id"] and r["impl"] == "pi")
+        row_p = next(
+            (r for r in results if r["id"] == scenario["id"] and r["impl"] == "pi"), None
+        )
         mark = lambda r: "✅" if r["passed"] else "❌"
-        note = ", ".join(row_a["reasons"][:1] + row_p["reasons"][:1])
-        lines.append(f"| {scenario['id']} | {scenario['category']} | {mark(row_a)} | {mark(row_p)} | {note} |")
+        reasons = list(row_a["reasons"][:1])
+        if row_p is not None:
+            reasons += row_p["reasons"][:1]
+        note = ", ".join(reasons)
+        mark_p = mark(row_p) if row_p is not None else "—"
+        lines.append(f"| {scenario['id']} | {scenario['category']} | {mark(row_a)} | {mark_p} | {note} |")
     lines += ["", "失败详情见 `evals/local/logs/`。提示词均为中性任务描述，不提及任何其他实现。"]
 
     RESULTS.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")

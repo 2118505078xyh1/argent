@@ -125,10 +125,17 @@ pub fn locate_posix_shell() -> Option<String> {
     FOUND
         .get_or_init(|| {
             let mut candidates: Vec<String> = Vec::new();
+            if let Ok(override_path) = std::env::var("ARGENT_BASH") {
+                if !override_path.trim().is_empty() {
+                    candidates.push(override_path.trim().to_string());
+                }
+            }
             if let Some(found) = argent_core::process::find_program("bash", &[]) {
                 candidates.push(found);
             }
             for candidate in [
+                "D:\\Git\\bin\\bash.exe",
+                "D:\\Git\\usr\\bin\\bash.exe",
                 "C:\\Program Files\\Git\\bin\\bash.exe",
                 "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
                 "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
