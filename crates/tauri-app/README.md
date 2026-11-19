@@ -1,7 +1,8 @@
-# argent-tauri（迁移原型）
+# argent-tauri（桌面外壳）
 
 Tauri 2 + SolidJS 桌面外壳，桥接 `argent-engine`。**独立 Cargo workspace**：
-根 `cargo test --workspace` 与 CI 不依赖 WebKit/Tauri。iced 与 TUI 仍是发布路径。
+根 `cargo test --workspace` 与 CI 不依赖 WebKit/Tauri。自 0.5.0 起它是默认桌面
+路径（`argent --gui`），终端路径仍是 CLI/TUI。
 
 ## 构建 / 验证
 
@@ -68,7 +69,7 @@ python scripts\check-tauri-version.py
   阻断 `javascript:` / `data:`。
 - **审批**：mutating 工具走阻塞审批；拒绝、超时与未知 id 都有错误路径；
   "总是允许"只作用于当前标签的 `ApprovalBridge`。
-- **无 Node/WebView 运行时依赖**：前端是构建期资产；模型请求由 Rust 发起，
+- **无 Node 运行时依赖**：前端是构建期资产；模型请求由 Rust 发起，
   WebView 只与本地 IPC 通信。
 
 ## 性能预算（原型目标）

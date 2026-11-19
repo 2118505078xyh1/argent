@@ -4,31 +4,33 @@
 
 - `argent tui` — full-screen terminal UI rendered by `crates/cli/src/tui` over the
   custom `core::screen` line model.
-- `argent-native` — iced + tiny-skia desktop window in `crates/native`.
-- `argent` — one-shot and headless CLI, plus `--serve` HTTP/SSE.
+- `argent-desktop` — Tauri 2 + SolidJS shell in `crates/tauri-app` (its own Cargo
+  workspace and bun/Vite asset pipeline). Launched by `argent --gui`.
+- `argent` — one-shot and headless CLI, plus `--serve` (HTTP/SSE), `--rpc`
+  (app-server) and `acp`.
 
-All three share `argent-agent`, `argent-engine`, `argent-session` and
-`argent-ui-core`; only the rendering and input layers differ.
+The terminal path does not depend on `argent-engine` and never starts a browser
+engine. The desktop path is a client of `engine` and renders through the system
+WebView. All paths share `argent-agent`, `argent-session` and `argent-ui-core`.
 
-## Target
+## Decision
 
-The long-running frontend target is **Tauri 2 + SolidJS**:
+One desktop GUI, one terminal UI, and headless transports:
 
-| Surface | Target |
+| Surface | Choice |
 |---|---|
 | Windows / macOS / Linux | Tauri 2 desktop shell |
-| Browser | Same SolidJS build, no Tauri APIs required for read-only surfaces |
-| iOS / Android | Tauri 2 mobile shell where a local agent is viable; otherwise a remote client |
-| Agent runtime | Unchanged Rust crates (`engine`, `agent`, `tools`, `session`) |
-| Terminal | Headless CLI remains; full-screen TUI is frozen during the migration |
+| Browser | The same SolidJS build |
+| Terminal | CLI + full-screen TUI |
+| Agent runtime | Rust crates (`engine`, `agent`, `tools`, `session`, `ui-core`) |
 
-The Tauri shell embeds the system WebView. It does not bundle Chromium and does
-not require Node at runtime. Node/Bun is a build-time tool for the SolidJS
-bundle.
+`crates/native` (iced) was removed in 0.5.0. Tauri already covered its surface,
+and keeping both forced a second windowing stack, a second MSRV and duplicate
+work on every approval/streaming/rewind change.
 
 ## Why Tauri + SolidJS
 
-- One UI codebase can serve desktop, browser and mobile shells.
+- One UI codebase can serve desktop, browser and future mobile shells.
 - System WebView keeps the shell small; no Electron-sized Chromium runtime.
 - The Web ecosystem has the component, markdown, virtualization and animation
   libraries a chat surface needs.
@@ -39,44 +41,19 @@ bundle.
 
 Dioxus was evaluated and rejected as the default: its desktop/mobile renderers
 also use the system WebView, so it is not lighter than Tauri, while its UI
-component ecosystem is smaller. It remains a valid option only if the frontend
-must be written entirely in Rust.
-
-Slint remains the option when "no WebView" is a hard requirement, but it does
-not cover the browser/mobile multi-end target.
-
-## Migration phases
-
-1. **Bridge** — a Tauri app starts one `argent-engine` session, forwards
-   `UiEvent`s and approval requests, and accepts prompt/abort/approval commands.
-2. **Chat parity** — transcript streaming, thinking, tool cards, composer,
-   status line and approvals.
-3. **Session parity** — open/new/rename/delete session, model and thinking
-   selectors, rewind, automations, documents.
-4. **Cutover** — make Tauri the default desktop entry once it covers the iced
-   window. Keep the iced crate until then.
-5. **Retire** — remove the iced window, and remove full-screen TUI only after
-   remote usage is covered by browser/HTTP access.
+component ecosystem is smaller. Slint remains the option when "no WebView" is a
+hard requirement, but it does not cover the browser/mobile target.
 
 ## Non-goals
 
 - No Electron, Chromium bundle or Node runtime in the shipped app.
 - No second agent implementation in JavaScript; the UI is a client of the Rust
   engine.
-- No simultaneous long-term maintenance of iced, Tauri and full-screen TUI.
-  During the migration iced is the fallback; after parity it is removed.
+- No long-term maintenance of a third frontend.
 
-## Current status
+## Known gaps
 
-`crates/tauri-app` is the migration prototype. It has its own Cargo workspace
-so the root `cargo test --workspace` and CI do not require Tauri/WebKit system
-dependencies. It is not the default desktop binary yet. The itemized backlog
-(P0–P4, with acceptance criteria) lives in `docs/TAURI-TODO.md`. Build it with:
-
-```bash
-cd crates/tauri-app/ui
-bun install
-bun run build
-cd ..
-cargo run
-```
+- Approval buttons in the desktop shell are wired but not yet covered by an
+  end-to-end click test.
+- The TUI keeps its own loop; shared behavior is locked by the contract tests in
+  `crates/engine/src/contract_test.rs` and `crates/cli/src/tui/contract_test.rs`.

@@ -26,6 +26,7 @@ use argent_plugin::loader::load_all as load_plugins;
 use argent_plugins::PluginManager;
 use argent_provider::ProviderCatalog;
 use argent_pty::ServiceTool;
+use argent_security::TrustStore;
 use argent_session::SessionIndex;
 use argent_tools::{
     CatalogEntry, DelegateBatch, DelegateHandle, DelegateTool, SkillRegistry, SkillTool, ToolCtx,
@@ -366,7 +367,49 @@ pub fn run(raw: &[String]) -> Result<i32> {
         ToolRegistry::with_core_mode(argent_tools::edit_mode_for_model(&config.model));
     base_registry.add_builtin_plugins();
 
-    let mut plugin_manager = PluginManager::for_workspace(&cli.cwd);
+    // P3 project trust. Project-local resources (hooks, skills, extensions) can
+    // run arbitrary code, so they are loaded only when the cwd is trusted.
+    // Precedence: CLI flag > ARGENT_PROJECT_TRUSTED > an explicit decision in
+    // the trust store > config.project_trusted (a project config file exists).
+    // Deliberately non-interactive in every mode, including the TUI: the
+    // existing TerminalApprover is a per-tool-call gate and prompting for trust
+    // at startup would hang a piped run (and fight the TUI for the terminal).
+    // An operator grants trust explicitly with --trust-project instead.
+    // See `discovery_cwd` for how global resources are kept.
+    let mut trust_store = TrustStore::load();
+    match cli.trust_project {
+        // Granting trust is an explicit, durable operator decision.
+        Some(true) => {
+            if let Err(error) = trust_store.set(&cli.cwd, true) {
+                eprintln!("warning: could not save project trust: {error}");
+            }
+            trust_store.set_session_override(&cli.cwd, true);
+        }
+        // Denying is deliberately session-only: it must not brick a later run.
+        Some(false) => trust_store.set_session_override(&cli.cwd, false),
+        None => {
+            if let Ok(value) = std::env::var("ARGENT_PROJECT_TRUSTED") {
+                match value.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" | "on" => trust_store.set_session_override(&cli.cwd, true),
+                    "0" | "false" | "no" | "off" => {
+                        trust_store.set_session_override(&cli.cwd, false)
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let project_trusted = effective_project_trust(&trust_store, &cli.cwd, config.project_trusted);
+    if !project_trusted {
+        eprintln!(
+            "note: project-local resources are disabled for {} (untrusted project); \
+             trust it with `argent --trust-project` or ARGENT_PROJECT_TRUSTED=1",
+            cli.cwd.display()
+        );
+    }
+    let discovery = discovery_cwd(&cli.cwd, project_trusted);
+
+    let mut plugin_manager = PluginManager::for_workspace(&discovery);
     plugin_manager.apply_state(&settings);
 
     // Pure-Rust script plugins contribute tools and slash commands. They are
@@ -408,7 +451,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
         );
         let _ = telemetry.record("run_start", data);
     }
-    let mut mcp_config = McpConfig::load(&cli.cwd)?;
+    let mut mcp_config = McpConfig::load(&discovery)?;
     argent_plugins::add_mcp_servers(
         &mut mcp_config,
         &plugin_manager,
@@ -433,7 +476,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
     }
 
     // Dynamic plugins contribute tools under `plugin__<plugin>__<tool>`.
-    for tool in load_plugins(&cli.cwd) {
+    for tool in load_plugins(&discovery) {
         base_registry.register(tool);
     }
 
@@ -449,7 +492,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
     // Skills are markdown procedures on disk. Only their one-line index enters
     // the prompt, and only when the plugin is loaded; the body arrives through
     // the skill tool when the model asks for it.
-    let mut skill_roots = SkillRegistry::default_roots(&cli.cwd);
+    let mut skill_roots = SkillRegistry::default_roots(&discovery);
     skill_roots.extend(plugin_manager.skill_dirs());
     let skills = Arc::new(SkillRegistry::discover(&skill_roots));
     base_registry.register_plugin_tool(
@@ -535,7 +578,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
     // Prompt templates are an operator feature, not a model feature: they
     // expand into ordinary text before the turn starts.
     let prompts =
-        prompts::PromptLibrary::discover(&prompts::PromptLibrary::default_roots(&cli.cwd));
+        prompts::PromptLibrary::discover(&prompts::PromptLibrary::default_roots(&discovery));
 
     let registry = Arc::new(base_registry);
     let provider = build_provider(&config);
@@ -631,7 +674,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
 
     // Lifecycle hooks. Only trusted hook documents run: a plugin hook is a
     // shell command with the operator's privileges.
-    let hook_config = Arc::new(load_hooks(&plugin_manager, &cli.cwd));
+    let hook_config = Arc::new(load_hooks(&plugin_manager, &discovery));
     let checkpoints_for_pre = checkpoints.clone();
     let cwd_for_checkpoint = cli.cwd.clone();
     if !hook_config.is_empty() {
@@ -2057,37 +2100,37 @@ fn print_token_breakdown(registry: &ToolRegistry, system_prompt: &str) -> Result
     Ok(0)
 }
 
-/// Start the native desktop frontend (iced, no WebView) and return.
+/// Start the desktop frontend (Tauri shell) and return.
 ///
 /// The GUI is a sibling binary on purpose: the terminal client stays free of
-/// windowing and graphics dependencies, which is what keeps it usable over SSH
+/// windowing and WebView dependencies, which is what keeps it usable over SSH
 /// and small enough to ship alone.
 fn launch_gui() -> Result<i32> {
     let exe = std::env::current_exe()
         .map_err(|e| argent_core::Error::io(format!("cannot locate argent: {}", e)))?;
-    let name = if cfg!(windows) {
-        "argent-native.exe"
-    } else {
-        "argent-native"
-    };
-    let candidate = exe.with_file_name(name);
-    if !candidate.is_file() {
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let candidate = ["argent-desktop", "argent-tauri"]
+        .iter()
+        .map(|name| exe.with_file_name(format!("{name}{suffix}")))
+        .find(|path| path.is_file());
+    let Some(candidate) = candidate else {
         eprintln!(
-            "argent-native was not found next to {}.
+            "argent-desktop was not found next to {}.
 
-             Build it first:  cargo build --release -p argent-native
+             Build it first:  cd crates/tauri-app && cargo build --release
              Expected at:     {}",
             exe.display(),
-            candidate.display()
+            exe.with_file_name(format!("argent-desktop{suffix}"))
+                .display()
         );
         return Ok(1);
-    }
+    };
     let child = std::process::Command::new(&candidate)
         .spawn()
         .map_err(|e| {
             argent_core::Error::io(format!("cannot start {}: {}", candidate.display(), e))
         })?;
-    println!("argent-native started (pid {})", child.id());
+    println!("{} started (pid {})", candidate.display(), child.id());
     Ok(0)
 }
 
@@ -2697,6 +2740,30 @@ pub fn probe_chat(config: &Config, prompt: &str) -> Result<String> {
         }
     }
     Ok(text)
+}
+
+/// Resolve the effective project-trust decision. An explicit store decision
+/// (including a CLI/env session override) wins over the config's implied trust,
+/// so `ARGENT_PROJECT_TRUSTED=0` can suppress a project that has a config file.
+fn effective_project_trust(store: &TrustStore, cwd: &Path, config_trusted: bool) -> bool {
+    store.is_trusted(cwd).unwrap_or(config_trusted)
+}
+
+/// Resource-discovery root for this run.
+///
+/// When the cwd is not trusted, point discovery at a neutral, non-existent
+/// directory under user storage. Every cwd-relative discovery path —
+/// `.argent/hooks.json`, skill/plugin roots, `.argent/mcp.json`, prompt roots —
+/// then misses, while user-storage and home resources still load. Execution
+/// context (session files, hook cwd, approval paths) keeps using the real cwd.
+fn discovery_cwd(cwd: &Path, project_trusted: bool) -> PathBuf {
+    if project_trusted {
+        cwd.to_path_buf()
+    } else {
+        Paths::new(cwd)
+            .storage()
+            .join(".argent-untrusted-workspace")
+    }
 }
 
 #[cfg(test)]

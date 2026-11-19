@@ -119,7 +119,8 @@ jobs:
           -p argent-hooks
           -p argent-eval
 
-  # iced 0.14 needs Rust 1.88, so the CLI/core MSRV excludes the GUI crate.
+  # tauri-app is a separate workspace (WebKit/Tauri deps), so it is not part
+  # of the main MSRV check.
   msrv:
     runs-on: ubuntu-latest
     steps:
@@ -127,7 +128,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
       - name: check
-        run: cargo check --workspace --exclude argent-native --all-features --locked
+        run: cargo check --workspace --all-features --locked
 
   # No Docker on the development machine: this job is the only place the
   # container image is built from scratch.

@@ -2,7 +2,9 @@
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 #
-# The CLI/TUI and the native iced window need nothing but Windows itself.
+# The CLI/TUI needs nothing but Windows itself. The desktop shell is the Tauri
+# app in crates/tauri-app (its own workspace): it needs bun for the SolidJS
+# bundle and ships as argent-desktop.exe next to argent.exe.
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -59,7 +61,19 @@ $version = (Select-String -Path "Cargo.toml" -Pattern '^version = ' |
 if (-not $version) { $version = "0.2.0" }
 
 Write-Host "building argent $version"
-cargo build --release --locked -p argent-cli -p argent-native
+cargo build --release --locked -p argent-cli
+
+$bun = if ($env:BUN) { $env:BUN } else { "bun" }
+if (-not (Get-Command $bun -ErrorAction SilentlyContinue)) {
+    throw "bun is required to build the desktop shell (set BUN to its path)"
+}
+Push-Location "crates\tauri-app\ui"
+& $bun install --frozen-lockfile
+& $bun run build
+Pop-Location
+Push-Location "crates\tauri-app"
+cargo build --release --locked
+Pop-Location
 
 $name = "argent-$version-windows-x64"
 $dist = Join-Path $root "dist\$name"
@@ -67,7 +81,7 @@ if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
 Copy-Item "target\release\argent.exe" $dist
-Copy-Item "target\release\argent-native.exe" $dist
+Copy-Item "crates\tauri-app\target\release\argent-tauri.exe" (Join-Path $dist "argent-desktop.exe")
 Copy-Item "README.md" $dist
 Copy-Item "LICENSE" $dist
 Copy-Item "docs" $dist -Recurse

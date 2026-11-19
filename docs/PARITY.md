@@ -125,6 +125,6 @@ Pi 来源：`~/.pi/agent/install/releases/1.5.2/.../slash-commands.md`、`cli.md
 
 - 产品 / 窗口 / README：**argent**
 - CLI 二进制：**argent**
-- 桌面二进制：**argent-native**
+- 桌面二进制：**argent-desktop**
 - 配置与数据根：`~/.argent`
 - 项目目录：`.argent`

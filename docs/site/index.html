@@ -28,8 +28,8 @@
         <p class="eyebrow">Rust · single binary · provider agnostic</p>
         <h1>A coding agent that fits in one process.</h1>
         <p class="lead">
-          TUI, native iced window, RPC, HTTP/SSE, ACP, MCP, LSP and workspace
-          tools. No Node, WebView or separate runtime.
+          TUI, Tauri desktop, RPC, HTTP/SSE, ACP, MCP, LSP and workspace
+          tools. One Rust runtime; no Node.
         </p>
         <div class="actions">
           <a class="button" href="#install">Build from source</a>
@@ -43,9 +43,9 @@
         <article>
           <h2>Small runtime</h2>
           <p>
-            Release binaries are about 5.5 MB (CLI) and 7.0 MB (native).
-            The CLI path starts in tens of milliseconds; the GUI is iced +
-            tiny-skia, not Chromium.
+            Release binaries are about 5.4 MB (CLI) and 10 MB (desktop).
+            The CLI path starts in tens of milliseconds and never starts a
+            browser engine; the desktop shell uses the system WebView.
           </p>
         </article>
         <article>

@@ -5,6 +5,11 @@ Keep-a-Changelog; versions track Cargo's `version.workspace`.
 
 ## Unreleased
 
+- **Breaking: iced frontend removed.** `crates/native` and the `argent-native`
+  binary are gone; `argent --gui` launches `argent-desktop.exe`, the Tauri 2 +
+  SolidJS shell. The workspace no longer needs Rust 1.88, and the release bundle
+  ships the desktop shell instead of the iced window.
+
 ## 0.4.0 — 2026-11-19
 
 - **License change.** argent is now licensed under Apache-2.0 (was MIT).

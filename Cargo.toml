@@ -31,7 +31,6 @@ members = [
     "crates/pty",
     "crates/ui-core",
     "crates/engine",
-    "crates/native",
     "crates/cli",
     "examples/plugin-demo",
 ]

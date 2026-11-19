@@ -13,8 +13,8 @@
 插件功能默认关闭（保持最小体积）：
 
 ```powershell
-# CLI + GUI 都带上纯 Rust 插件支持
-cargo build --release -p argent-cli -p argent-native --features script-plugins
+# CLI 带上纯 Rust 插件支持
+cargo build --release -p argent-cli --features script-plugins
 ```
 
 ## 清单

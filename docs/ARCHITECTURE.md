@@ -23,7 +23,7 @@ core            无依赖：JSON、HTTP/SSE、进程、终端、配置
 │   │   ├── session   JSONL 树 + compaction
 │   │   ├── ui-core   前端无关的 view model
 │   │   └── engine    窗口前端背后的 worker：会话、命令、事件、审批
-│   │       └── native   iced 原生窗口
+│   │       └── tauri-app  Tauri 2 桌面壳（独立 workspace）
 │   ├── mcp     stdio / HTTP / SSE MCP 客户端（含 OAuth）
 │   ├── plugins ZCode 兼容清单（config、mcp、hooks、update、script-plugin）
 │   ├── commands markdown 斜杠命令
@@ -56,7 +56,7 @@ argent "..." / tui 行输入
       → 工具结果进 history
       → 下一轮，或结束
   → SessionStore 把新消息记成 JSONL
-  → Renderer（终端）或 iced 窗口（native）消费同一事件流
+  → Renderer（终端）或桌面壳（tauri-app）消费同一事件流
 ```
 
 agent 与 provider 无关。Anthropic 特有的转换全部在
@@ -151,8 +151,8 @@ Hook 进程默认用 bash（Windows 上是 Git Bash），找不到可用的 bash
 
 ## 桌面
 
-`crates/native` 是 iced 原生窗口宿主：没有 WebView，没有 JavaScript，也没有
-前端构建步骤。Rust 拥有 agent，通过 `argent-engine` 的同一对 channel 通信——
+`crates/tauri-app` 是 Tauri 2 + SolidJS 桌面壳：渲染用系统 WebView，前端由 bun/Vite
+构建成静态资源。Rust 拥有 agent，通过 `argent-engine` 的同一对 channel 通信——
 命令进去，事件和审批请求出来；一个短周期 timer 排空 channel，流式文本不阻塞
 渲染。UI 只负责像素，对工具策略没有决定权。
 
@@ -168,7 +168,7 @@ Hook 进程默认用 bash（Windows 上是 Git Bash），找不到可用的 bash
 transcript。审批卡片标明来源会话。文档页面用 `argent_tools::office` 提取
 文本预览本地的 office 文件。
 
-内存：CLI 路径不创建任何窗口。窗口路径是 iced 原生渲染，不启动 WebView。
+内存：CLI 路径不创建任何窗口。窗口路径使用系统 WebView（WebView2）。
 
 ## 权限、审计与预算
 
@@ -249,7 +249,7 @@ MCP 服务器可以直接连接。
 `~/.argent/automation-runs/<id>/<epoch>.log`，再把状态和日志路径记回
 `~/.argent/automations.json`。子进程用 `ARGENT_APPROVAL=never`，但策略门禁和
 审计仍然在子进程里生效。`argent automation daemon --once` 适合系统计划任务，
-不带 `--once` 时是前台循环；native 窗口的自动化页面列出、运行和启停任务。
+不带 `--once` 时是前台循环；桌面壳的自动化页面列出、运行和启停任务。
 
 ## 测试
 

@@ -1,8 +1,8 @@
 # argent
 
 用 Rust 实现的轻量 Agent Runtime：一个小体积二进制、原生 agent 循环。编程是
-第一个垂直场景；主入口是 **CLI 与全屏 TUI**，图形前端是原生 iced 窗口
-（`argent-native`），不使用 WebView、HTML 或 JS。
+第一个垂直场景；主入口是 **CLI 与全屏 TUI**，桌面版是 **Tauri 2 + SolidJS**
+（`argent-desktop`），终端路径不依赖浏览器引擎。
 
 `argent` 是干净实现的运行时：对标 **Pi 与 OMP** 的可观察接口与能力边界
 （provider 模板、插件清单、skills、commands、hooks、MCP），用 Rust 重新实现。
@@ -10,38 +10,26 @@
 
 ## 界面
 
-原生 iced 窗口，不使用 WebView、HTML 或 JS；同一份 `argent-ui-core` 同时驱动
-TUI 与 native：
-
-
+桌面版是 Tauri 2 + SolidJS 窗口，使用系统 WebView；终端 TUI 自绘 ANSI。
+两者共用 `argent-ui-core` 事件与 `argent-engine` 会话。
 
 ## 前端路线
 
-当前发布版仍保留两条原生路径：
+一个桌面 GUI + 一个终端 UI + 无头传输：
 
-- `argent tui`：自绘 ANSI 全屏终端界面
-- `argent-native`：iced + tiny-skia 桌面窗口
-
-下一阶段的主线是 **Tauri 2 + SolidJS**：
+- `argent` / `argent tui`：CLI 与全屏终端界面，无 WebView，可跑在 SSH 上
+- `argent --gui`：启动 `argent-desktop.exe`（Tauri 2 + SolidJS）
+- `--serve` / `--rpc` / `acp`：HTTP/SSE、app-server、ACP 三种无头传输
 
 | 端 | 方案 |
 |---|---|
 | Windows / macOS / Linux | Tauri 2 桌面壳 |
 | 浏览器 | 同一套 SolidJS 构建 |
-| iOS / Android | Tauri 2 移动壳，或远程客户端 |
-| Agent 运行时 | 继续使用 Rust 的 `engine` / `agent` / `tools` / `session` |
-| 终端 | 保留 headless CLI；全屏 TUI 在迁移期冻结 |
+| 终端 | CLI + 全屏 TUI |
+| Agent 运行时 | 共用 Rust 的 `engine` / `agent` / `tools` / `session` |
 
-这样做的原因是多端复用和迭代速度：同一套前端覆盖桌面、浏览器和移动端；
-系统 WebView 让外壳保持轻量，不需要打包 Chromium；SolidJS 的细粒度信号适合
-token 流式输出和频繁变化的工具状态。
-
-代价也要明确：Tauri 引入系统 WebView，运行时内存会高于现在的 iced native，
-并且不再满足“完全无 WebView”的定位。迁移期间 iced 仍是回退方案；达到功能
-对齐后再切换默认桌面入口。
-
-更完整的取舍和迁移阶段见 [docs/FRONTEND.md](docs/FRONTEND.md)。当前仓库中的
-`crates/tauri-app` 是迁移原型，尚未成为默认桌面二进制。
+Tauri 使用系统 WebView，不打包 Chromium；代价是桌面版依赖 WebView2（Win10+
+自带）。取舍与迁移记录见 [docs/FRONTEND.md](docs/FRONTEND.md)。
 
 ## 为什么更小
 
@@ -54,20 +42,20 @@ token 流式输出和频繁变化的工具状态。
 | 本地运行时 | Node.js（未计入体积） | 无本地二进制，走 HTTP | 单二进制，无运行时依赖 |
 | 本地占用（Windows） | 安装目录约 108.7 MB | 不适用（服务端部署） | `argent.exe` 5.36 MB；发布 zip 约 6.1 MB |
 | 无头模式 | 需 Node | 通过 API 调用 | 一个 `argent.exe` 即可 |
-| 交互界面 | 终端 TUI | 不适用 | CLI/TUI + iced native（+ Tauri 原型） |
+| 交互界面 | 终端 TUI | 不适用 | CLI/TUI + Tauri 桌面 |
 | 扩展方式 | Node 扩展 + MCP | 不适用（由 harness 侧管理） | Rust 清单 + MCP + Rhai，原生工具优先 |
 
-CLI/TUI 路径完全不启动浏览器引擎；原生 iced 前端（`argent-native`）同样
-不依赖 WebView。整个产品只有一个 Rust 运行时。
+CLI/TUI 路径不启动浏览器引擎；桌面版使用系统 WebView。整个产品只有一个
+Rust 运行时。
 
 argent 实测（0.3.1 release 构建，Windows x64）：
 
 | 进程 | 二进制 | 工作集 |
 |---|---|---|
 | `argent tui`（全屏） | 5.52 MB | 约 8.6 MB |
-| `argent-native`（iced + tiny-skia） | 6.98 MB | 约 35 MB（活动时；空窗约 30 MB） |
+| `argent-desktop`（Tauri 2 + WebView2） | 见发布包 | 约 32 MB（主进程） |
 
-发布 zip 约 6.1 MB，内置 CLI、native、README、docs 和 examples。  
+发布 zip 内置 CLI/TUI、桌面版、README、docs 和 examples。  
 `argent --version` 冷/热混合 7 次：中位数 35 ms，最小 33 ms，最大 146 ms（Windows x64）。
 
 ## argent 独有的七个能力
@@ -196,7 +184,7 @@ argent --serve --serve-port 7777 --serve-token mytoken
 
 脚本定义 `arg_init`（返回工具/命令声明）和 `arg_call`（执行工具）。宿主提供 `argent_log`、`argent_call_tool`、`argent_var`、`argent_now`；`argent_call_tool` 走同一套 ToolRegistry，权限、审批与审计不会绕过。CLI 与桌面 GUI 启动时加载插件，工具在模型看到前注册完成。详见 [docs/SCRIPT-PLUGINS.md](docs/SCRIPT-PLUGINS.md)。
 
-插件功能默认关闭（保持最小体积）。启用：`cargo build --release -p argent-cli -p argent-native --features script-plugins`，二进制增加约 1.5 MB。
+插件功能默认关闭（保持最小体积）。启用：`cargo build --release -p argent-cli --features script-plugins`，二进制增加约 1.5 MB。
 
 ### 7. 自动化任务
 
@@ -397,12 +385,13 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 ### 桌面窗口（可选）
 
 ```powershell
-cargo build --release -p argent-native
+cd crates/tauri-app/ui; bun install; bun run build; cd ..
+cargo build --release
 argent --gui
 ```
 
-GUI 二进制是 `argent-native.exe`（iced 原生窗口，无 WebView）；`argent --gui`
-会在 `argent.exe` 旁边找它。
+桌面二进制是 `argent-desktop.exe`（Tauri 2 + SolidJS，使用系统 WebView）；
+`argent --gui` 会在 `argent.exe` 旁边找它。
 
 ### 升级
 
@@ -494,7 +483,7 @@ function call）。
 ```
 argent [prompt]                 一次性运行（--locale en-US|zh-CN|auto）
 argent tui                      全屏终端 UI
-argent --gui                    打开桌面窗口（需要 argent-native.exe）
+argent --gui                    打开桌面窗口（需要 argent-desktop.exe）
 argent --rpc                    stdin/stdout 上的换行分隔 JSON
 argent acp                      Agent Client Protocol 服务端
 argent app-server               RPC 服务别名，等价 --rpc
@@ -557,7 +546,7 @@ argent --sessions               列出已有会话
 - 跨平台 CI：Windows 全量、Linux/macOS portable crates、单线程稳定性跑；
   并发与固定 sleep 的测试竞态已收口。
 - 文件检查点：write/edit 改文件前留快照，TUI/REPL/桌面的 `/rewind [n]`
-  按运行回滚（恢复旧内容、删除新建文件），native 窗口有“↶ 回滚”按钮；
+  按运行回滚（恢复旧内容、删除新建文件），桌面版有“↶ 回滚”按钮；
   子代理的写入记在父运行里。
 - MCP 客户端：stdio、streamable HTTP、legacy SSE。插件声明的 MCP server
   会合并进同一个运行时。
@@ -611,8 +600,8 @@ argent --sessions               列出已有会话
 - TUI 快捷输入：`@path` 附加文件/目录（最多 3 个，每个 40k 字符）；
   `!command` 直接执行 shell，输出作为工具行显示，不走模型、不花 token；
   `/init` 扫描仓库并生成 `AGENTS.md` 模板（已存在则不覆盖）。
-- 原生 iced 桌面窗口：侧栏项目/任务分组、会话切换、审批弹窗、模型/思考
-  选择、office 文档预览与状态栏；不使用 WebView，纯 Rust 绘制。
+- 桌面窗口：侧栏项目/任务分组、会话切换、审批弹窗、模型/思考
+  选择、office 文档预览与状态栏；Tauri 2 + SolidJS，使用系统 WebView。
 - 并行会话：每个后台会话有自己的 worker/agent，侧栏切换不会打断运行；
   后台事件按会话过滤，审批弹窗标明来源会话。
 - 双语 UI：`--locale en-US|zh-CN|auto` 或 `ARGENT_LOCALE` 控制 CLI 帮助、
@@ -697,7 +686,7 @@ crates/
   cli        `argent` 二进制
   ui-core    前端无关的 view model：transcript、指标、用户意图
   engine     窗口前端背后的 worker：会话、命令、事件、审批
-  native     iced 原生桌面窗口（tiny-skia，无 WebView）
+  tauri-app  Tauri 2 + SolidJS 桌面壳（独立 workspace）
   plugin     原生 C ABI 插件加载器（与 plugins 不同，树外工具）
   memory     跨会话记忆存储
   device     浏览器 / 桌面自动化

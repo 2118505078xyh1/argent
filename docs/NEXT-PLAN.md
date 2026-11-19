@@ -31,7 +31,7 @@ D 自主/自我改进 Agent。
 | Agent loop | `crates/agent`：流式、工具批、审批、去重、预算、压缩、steering、pause/resume |
 | 评测 | `crates/eval` + `evals/core.json`：脚本化模型 + 真实工具；**10 个场景**；字段含 tools/text_contains/deny_paths/rewind_restores 等 |
 | 多 Agent 基础 | `child.rs` 的 `DelegateBatch`/`ChildFactory`，`workflow` 的 `Workflow`/`Step`/journal/run，subagents 与 roles |
-| 传输层 | CLI、TUI、`argent-native`、Tauri 原型、`--rpc`、`--serve` SSE、`acp` |
+| 传输层 | CLI、TUI、Tauri 桌面壳、`--rpc`、`--serve` SSE、`acp` |
 | 安全 | Policy 硬门、审批桥、AuditLog、沙箱模式、路径校验、容器化 |
 | 质量 | 根 workspace 1192 tests 全绿；Tauri 一键验证全绿；性能基线 813ms 启动 / 29MB 工作集 |
 

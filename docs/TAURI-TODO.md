@@ -354,12 +354,11 @@ server，`ARGENT_BASE_URL` 指过去；新增 `scripts/tauri-smoke.py`，用 CDP
 
 ## P4 — 收尾 / 退役
 
-- [ ] **T4.1 对等矩阵（M）**：逐项列出 native 已有功能与 Tauri 状态，
+- [ ] **T4.1 对等矩阵（M）**：逐项列出旧前端已有功能与 Tauri 状态，
   作为 cutover 的唯一清单（放 `docs/PARITY.md` 或新章节）。
-- [ ] **T4.2 默认入口（M）**：`argent --gui` 指向 Tauri 构建产物，
-  iced 保留为 `--gui-classic` 回退。
-- [ ] **T4.3 退役 iced（L）**：删除 `crates/native` 与根 workspace 依赖，
-  同步 CI/文档/发布脚本。
+- [x] **T4.2 默认入口（M）**：`argent --gui` 启动 `argent-desktop.exe`（2026-11-19）。
+- [x] **T4.3 退役 iced（L）**：删除 `crates/native` 与根 workspace 依赖，
+  同步 CI/文档/发布脚本（2026-11-19）。
 - [ ] **T4.4 TUI 退役条件（S）**：仅当浏览器/HTTP 远程覆盖完整后执行；
   当前明确不删。
 - [ ] **T4.5 跨平台签名（L）**：macOS 公证、Linux 包、Windows 代码签名。

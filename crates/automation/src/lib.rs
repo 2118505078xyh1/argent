@@ -628,7 +628,7 @@ fn log_path(store_path: &Path, id: &str, now: i64) -> Result<PathBuf> {
 
 /// Find the `argent` binary.
 ///
-/// The GUI (`argent-native`) has no prompt mode; the CLI binary sits next to it.
+/// The desktop shell (`argent-desktop`) has no prompt mode; the CLI binary sits next to it.
 /// `ARGENT_BINARY` overrides both, which is what the tests use.
 pub fn argent_binary() -> PathBuf {
     if let Ok(path) = std::env::var("ARGENT_BINARY") {
