@@ -37,15 +37,27 @@ fn redact_line(line: &str) -> String {
 /// Find the next credential-shaped substring.
 fn find_secret(text: &str) -> Option<(usize, usize, &'static str)> {
     const PREFIXES: &[(&str, &str)] = &[
-        ("sk-", "api key"),
+        ("sk-proj-", "api key"),
         ("sk-ant-", "api key"),
+        ("sk-or-", "api key"),
+        ("sk-", "api key"),
         ("ghp_", "token"),
         ("gho_", "token"),
+        ("ghu_", "token"),
+        ("ghs_", "token"),
         ("github_pat_", "token"),
         ("AKIA", "aws key"),
+        ("ASIA", "aws key"),
         ("AIza", "google key"),
+        ("xoxa-", "slack token"),
         ("xoxb-", "slack token"),
         ("xoxp-", "slack token"),
+        ("xoxs-", "slack token"),
+        ("r8_", "token"),
+        ("hf_", "token"),
+        ("glpat-", "token"),
+        ("npm_", "token"),
+        ("pypi-", "token"),
         ("eyJ", "jwt"),
     ];
     for (prefix, kind) in PREFIXES {
@@ -227,6 +239,28 @@ mod tests {
         let out = redact_text(text);
         assert!(!out.contains("abcdef0123456789"));
         assert!(out.contains("[redacted:api key]"));
+    }
+
+    #[test]
+    fn common_provider_token_prefixes_are_removed() {
+        for token in [
+            "sk-proj-abcdef123456",
+            "sk-ant-abcdef123456",
+            "sk-or-abcdef123456",
+            "xoxa-abcdef123456",
+            "xoxs-abcdef123456",
+            "hf_abcdef1234567890",
+            "glpat-abcdef123456",
+            "npm_abcdef1234567890",
+            "pypi-abcdef123456",
+        ] {
+            let out = redact_text(&format!("credential {token} end"));
+            assert!(
+                !out.contains(&token[..token.len().min(10)]),
+                "leaked {token}"
+            );
+            assert!(out.contains("redacted"), "no placeholder for {token}");
+        }
     }
 
     #[test]
