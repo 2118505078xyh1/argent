@@ -176,6 +176,8 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
 21. **P3 续做 ✅（2026-11-19）**：后台任务面板（start/list/tail/kill）、
     工作流只读校验、deep link（`argent://open?path=…` 打开会话）、记忆搜索、
     按天用量统计。均为小步增量，每次 typecheck/clippy/冒烟通过。
+22. **隐私开关 ✅（2026-11-19）**：帮助面板内本地遥测与匿名崩溃上报同意
+    开关，读写 `~/.argent/settings.json` 的 `telemetry.enabled/consent`（重启生效）。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

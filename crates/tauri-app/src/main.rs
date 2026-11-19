@@ -103,6 +103,8 @@ fn main() {
             backend::git_diff,
             backend::usage_summary,
             backend::list_extensions,
+            backend::get_telemetry_preferences,
+            backend::set_telemetry_preferences,
             backend::search_memory,
             backend::list_memory,
             backend::add_memory,

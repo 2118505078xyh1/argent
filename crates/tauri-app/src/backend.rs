@@ -614,6 +614,44 @@ pub fn delete_session(state: State<'_, Backend>, sid: String, path: String) -> R
 }
 
 #[tauri::command]
+pub fn get_telemetry_preferences() -> Result<Value, String> {
+    let path = config_root().join("settings.json");
+    let value = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+        .unwrap_or_else(|| json!({}));
+    let telemetry = value.pointer("/telemetry");
+    Ok(json!({
+        "enabled": telemetry.and_then(|v| v.get("enabled")).and_then(Value::as_bool).unwrap_or(false),
+        "consent": telemetry.and_then(|v| v.get("consent")).and_then(Value::as_bool).unwrap_or(false),
+    }))
+}
+
+#[tauri::command]
+pub fn set_telemetry_preferences(enabled: bool, consent: bool) -> Result<(), String> {
+    let path = config_root().join("settings.json");
+    let mut value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+        .unwrap_or_else(|| json!({}));
+    let telemetry = value
+        .as_object_mut()
+        .ok_or_else(|| "settings.json is not an object".to_string())?
+        .entry("telemetry")
+        .or_insert_with(|| json!({}));
+    let telemetry = telemetry
+        .as_object_mut()
+        .ok_or_else(|| "telemetry is not an object".to_string())?;
+    telemetry.insert("enabled".into(), json!(enabled));
+    telemetry.insert("consent".into(), json!(consent));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn search_memory(query: String) -> Result<Value, String> {
     let store = memory_store()?;
     let entries = store

@@ -208,6 +208,7 @@ function App() {
     loadStatusSegments(),
   );
   const [channel, setChannel] = createSignal("stable");
+  const [telemetry, setTelemetry] = createSignal({ enabled: false, consent: false });
   const [promptTokens, setPromptTokens] = createSignal(0);
   const [cachedTokens, setCachedTokens] = createSignal(0);
   const [requests, setRequests] = createSignal(0);
@@ -518,6 +519,13 @@ function App() {
       const initialSid = asString(stateRecord?.sid, "1");
       if (initialSid) setActive(initialSid);
       setChannel(asString(stateRecord?.channel, "stable"));
+      try {
+        setTelemetry(
+          await invoke<{ enabled: boolean; consent: boolean }>("get_telemetry_preferences"),
+        );
+      } catch {
+        // Settings file may be absent; defaults are both off.
+      }
       const readyRecord = stateRecord ? asRecord(stateRecord.ready) : null;
       if (readyRecord) {
         const parsed = parseReady(readyRecord);
@@ -1124,6 +1132,16 @@ function App() {
     setInput(target.value);
     target.style.height = "auto";
     target.style.height = `${Math.min(target.scrollHeight, 180)}px`;
+  };
+
+  const setTelemetryPrefs = async (patch: Partial<{ enabled: boolean; consent: boolean }>) => {
+    const next = { ...telemetry(), ...patch };
+    setTelemetry(next);
+    try {
+      await invoke("set_telemetry_preferences", next);
+    } catch (err) {
+      setError(String(err));
+    }
   };
 
   const paletteActions = () => {
@@ -1881,6 +1899,28 @@ function App() {
                   </button>
                 </div>
               </Show>
+            </div>
+            <div class="privacy-settings">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={telemetry().enabled}
+                  onChange={(event) =>
+                    void setTelemetryPrefs({ enabled: event.currentTarget.checked })
+                  }
+                />
+                本地遥测（重启生效，默认关闭）
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={telemetry().consent}
+                  onChange={(event) =>
+                    void setTelemetryPrefs({ consent: event.currentTarget.checked })
+                  }
+                />
+                匿名崩溃上报同意（重启生效）
+              </label>
             </div>
             <div class="status-settings">
               <span>状态栏分段</span>
