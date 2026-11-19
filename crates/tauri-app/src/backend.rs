@@ -837,6 +837,134 @@ pub fn pty_list(state: State<'_, Backend>) -> Result<Value, String> {
     Ok(json!(rows))
 }
 
+fn workspace_path(root: &std::path::Path, relative: &str) -> Result<std::path::PathBuf, String> {
+    let candidate = root.join(relative);
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|_| "path does not exist".to_string())?;
+    let root_canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !canonical.starts_with(&root_canonical) {
+        return Err("path is outside the workspace".to_string());
+    }
+    Ok(canonical)
+}
+
+fn workspace_target(root: &std::path::Path, relative: &str) -> Result<std::path::PathBuf, String> {
+    if relative.is_empty() || relative.starts_with('/') || relative.contains("..") {
+        return Err("invalid relative path".to_string());
+    }
+    let target = root.join(relative);
+    let parent = target.parent().ok_or_else(|| "invalid path".to_string())?;
+    let parent_canonical = parent
+        .canonicalize()
+        .map_err(|_| "parent directory does not exist".to_string())?;
+    let root_canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !parent_canonical.starts_with(&root_canonical) {
+        return Err("path is outside the workspace".to_string());
+    }
+    Ok(target)
+}
+
+#[tauri::command]
+pub fn list_workspace_files() -> Result<Value, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut rows = Vec::new();
+    collect_workspace_rows(&cwd, &cwd, 0, &mut rows);
+    Ok(json!(rows))
+}
+
+fn collect_workspace_rows(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    depth: usize,
+    out: &mut Vec<Value>,
+) {
+    if depth > 4 || out.len() >= 500 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut children: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    children.sort();
+    for path in children {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if name.starts_with('.') || matches!(name.as_str(), "target" | "node_modules" | "dist") {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let is_dir = path.is_dir();
+        out.push(json!({ "path": relative, "name": name, "dir": is_dir }));
+        if is_dir {
+            collect_workspace_rows(root, &path, depth + 1, out);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn read_workspace_file(path: String) -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let full = workspace_path(&cwd, &path)?;
+    let bytes = std::fs::read(full).map_err(|error| error.to_string())?;
+    let body = String::from_utf8_lossy(&bytes).into_owned();
+    const LIMIT: usize = 200_000;
+    if body.chars().count() <= LIMIT {
+        return Ok(body);
+    }
+    let mut clipped: String = body.chars().take(LIMIT).collect();
+    clipped.push('…');
+    Ok(clipped)
+}
+
+#[tauri::command]
+pub fn write_workspace_file(path: String, content: String) -> Result<(), String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let full = workspace_target(&cwd, &path)?;
+    std::fs::write(full, content).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn upload_workspace_file(name: String, base64_data: String) -> Result<String, String> {
+    use base64::Engine;
+    let name = std::path::Path::new(&name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "invalid file name".to_string())?
+        .to_string();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&base64_data)
+        .map_err(|error| format!("invalid base64: {}", error))?;
+    if bytes.len() > 10 * 1024 * 1024 {
+        return Err("file is larger than 10 MB".to_string());
+    }
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let relative = format!("uploads/{}", name);
+    let full = workspace_target(&cwd, &relative)?;
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&full, bytes).map_err(|error| error.to_string())?;
+    Ok(relative)
+}
+
+#[tauri::command]
+pub fn delete_workspace_file(path: String) -> Result<(), String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let full = workspace_path(&cwd, &path)?;
+    if full.is_dir() {
+        return Err("directory deletion is not supported".to_string());
+    }
+    std::fs::remove_file(full).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub fn list_workflows() -> Result<Value, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
@@ -1463,6 +1591,15 @@ mod tests {
     fn answering_an_unknown_approval_is_an_error() {
         let bridge = ApprovalBridge::new();
         assert!(bridge.answer(404, true).is_err());
+    }
+
+    #[test]
+    fn workspace_target_rejects_traversal_and_absolute_paths() {
+        let dir = std::env::temp_dir().join(format!("argent-workspace-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(workspace_target(&dir, "../escape.txt").is_err());
+        assert!(workspace_target(&dir, "/etc/passwd").is_err());
+        assert!(workspace_target(&dir, "sub/../../escape.txt").is_err());
     }
 
     #[test]

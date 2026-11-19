@@ -14,8 +14,11 @@
   T1.7 用 `content-visibility: auto` 做浏览器级跳过渲染（非 JS 虚拟滚动）。
 - **P2 20/20 完成**：遥测/崩溃上报同意开关写入 settings（重启生效）、
   发布通道标识、完整静态检查与独立 CI。T2.11 的 E2E 在 CI 中为 `continue-on-error`。
-- **P3 17/24 完成**：新增 jobs/workflows 面板、deep link、记忆搜索、按天用量；
-  其余为大块集成（browser-use、CUA、workflow 执行器、移动端等），按优先级排后。
+- **P3 22/24 完成**：新增 jobs/workflows/terminal/plan 面板、deep link、记忆搜索、
+  按天用量、插件清单、文件工作区（含拖拽上传）；其余为大块集成（browser-use、
+  CUA、移动端等），按优先级排后。
+- **用户功能核对**：对话/任务管理（暂停/继续仍缺）、文件工作区（已补）、工具调用
+  面板（已有）、计划与结果（已补）、权限确认（已有）。
 - 一键验证：`powershell -File scripts/verify-tauri.ps1`（全绿）。
 - 质量回归：`cargo test --workspace` 1191/1191；性能基线见 `docs/PERF-BASELINE.md`；
   安全复核见 `docs/TAURI-SECURITY.md`。

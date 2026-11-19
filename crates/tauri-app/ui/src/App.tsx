@@ -18,6 +18,8 @@ import Git from "./Git";
 import Jobs from "./Jobs";
 import Workflows from "./Workflows";
 import Terminal from "./Terminal";
+import Workspace from "./Workspace";
+import Plan from "./Plan";
 import ToolCard from "./ToolCard";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -153,6 +155,7 @@ function App() {
   const [approvalQueue, setApprovalQueue] = createSignal<Approval[]>([]);
   const approval = () => approvalQueue()[0] ?? null;
   const [error, setError] = createSignal<string | null>(null);
+  const [errors, setErrors] = createSignal<string[]>([]);
 
   const showSegment = (key: StatusSegment) => statusSegments().includes(key);
 
@@ -203,6 +206,8 @@ function App() {
     | "jobs"
     | "workflows"
     | "terminal"
+    | "workspace"
+    | "plan"
   >("chat");
   const [help, setHelp] = createSignal(false);
   const [locale, setLocale] = createSignal<Locale>(detectLocale());
@@ -482,6 +487,7 @@ function App() {
       case "error":
         if (isActive) {
           setError(payload.message);
+          setErrors((prev) => [...prev.slice(-19), payload.message]);
           setBusy(false);
           setStatus("error");
         }
@@ -1272,6 +1278,18 @@ function App() {
           >
             终端
           </button>
+          <button
+            classList={{ active: screen() === "workspace" }}
+            onClick={() => setScreen("workspace")}
+          >
+            文件
+          </button>
+          <button
+            classList={{ active: screen() === "plan" }}
+            onClick={() => setScreen("plan")}
+          >
+            计划
+          </button>
         </div>
         <div class="side-head">
           <span>{t(locale(), "chat")}</span>
@@ -1814,6 +1832,12 @@ function App() {
         </Show>
         <Show when={screen() === "terminal"}>
           <Terminal />
+        </Show>
+        <Show when={screen() === "workspace"}>
+          <Workspace />
+        </Show>
+        <Show when={screen() === "plan"}>
+          <Plan items={items()} status={status()} errors={errors()} />
         </Show>
       </main>
 

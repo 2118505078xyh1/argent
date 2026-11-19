@@ -185,6 +185,11 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     JS 75.1KB / CSS 18.5KB、NSIS 3.49MB / MSI 5.15MB，全部在预算内；
     报告见 `docs/PERF-BASELINE.md`。新增 `docs/TAURI-SECURITY.md` 威胁模型与
     残留风险（未签名/无自动更新、PTY/jobs 为显式命令能力）。
+24. **五项功能核对补齐 ✅（2026-11-19）**：按用户清单核对——新增文件工作区页
+    （浏览/新建/编辑/保存/删除 + 拖拽上传到 `uploads/`，后端做工作区路径校验，
+    新增路径穿越契约测试）与计划/结果页（由事件流派生步骤、当前步骤、最终产物、
+    错误列表）。工具调用面板、权限确认此前已有；**仍缺"暂停/继续"**（engine 只有
+    Abort，无 Pause/Resume）。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）
