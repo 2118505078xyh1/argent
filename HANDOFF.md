@@ -178,6 +178,13 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     按天用量统计。均为小步增量，每次 typecheck/clippy/冒烟通过。
 22. **隐私开关 ✅（2026-11-19）**：帮助面板内本地遥测与匿名崩溃上报同意
     开关，读写 `~/.argent/settings.json` 的 `telemetry.enabled/consent`（重启生效）。
+23. **质量回归与基线 ✅（2026-11-19）**：根 workspace fmt/clippy 通过，
+    `cargo test --workspace` 1191 passed / 0 failed（依赖 Git Bash 的 hook 用例
+    在无 bash 主机自动跳过，CI 仍有覆盖）；Tauri 一键验证全绿。
+    新增 `scripts/perf-baseline.py`：启动到 CDP 813ms、主进程工作集 29.0MB、
+    JS 75.1KB / CSS 18.5KB、NSIS 3.49MB / MSI 5.15MB，全部在预算内；
+    报告见 `docs/PERF-BASELINE.md`。新增 `docs/TAURI-SECURITY.md` 威胁模型与
+    残留风险（未签名/无自动更新、PTY/jobs 为显式命令能力）。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

@@ -17,6 +17,8 @@
 - **P3 17/24 完成**：新增 jobs/workflows 面板、deep link、记忆搜索、按天用量；
   其余为大块集成（browser-use、CUA、workflow 执行器、移动端等），按优先级排后。
 - 一键验证：`powershell -File scripts/verify-tauri.ps1`（全绿）。
+- 质量回归：`cargo test --workspace` 1191/1191；性能基线见 `docs/PERF-BASELINE.md`；
+  安全复核见 `docs/TAURI-SECURITY.md`。
 
 验证命令（一键脚本已覆盖下列全部步骤）：
 

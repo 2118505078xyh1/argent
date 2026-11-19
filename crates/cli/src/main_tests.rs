@@ -173,6 +173,19 @@ fn a_typoed_override_is_recorded_like_a_file_key() {
 
 #[test]
 fn notification_hook_carries_its_message_into_the_environment() {
+    // This test shells out to `bash` + `printf`. Some Windows hosts only have a
+    // WSL placeholder `bash.exe`, which cannot run the hook; skip there while
+    // keeping the assertion on hosts with a real Git Bash (including CI).
+    let probe = std::process::Command::new("bash")
+        .args(["-c", "printf ok"])
+        .output();
+    match probe {
+        Ok(output) if output.status.success() && output.stdout == b"ok" => {}
+        _ => {
+            eprintln!("skipping: bash/printf is unavailable on this host");
+            return;
+        }
+    }
     let root =
         std::env::temp_dir().join(format!("argent-notification-hook-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

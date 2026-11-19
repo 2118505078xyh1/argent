@@ -147,7 +147,9 @@ impl Backend {
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
         let config = prepare_config(&cwd)?;
         let shared = Arc::new(Shared {
-            jobs: Mutex::new(argent_jobs::JobManager::new(argent_jobs::JobManager::default_log_dir())),
+            jobs: Mutex::new(argent_jobs::JobManager::new(
+                argent_jobs::JobManager::default_log_dir(),
+            )),
             ptys: Mutex::new(HashMap::new()),
             next_pty: AtomicU64::new(1),
             session_dir: config.session_dir.clone(),
@@ -651,8 +653,11 @@ pub fn set_telemetry_preferences(enabled: bool, consent: bool) -> Result<(), Str
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    std::fs::write(&path, serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?)
-        .map_err(|error| error.to_string())
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -755,7 +760,11 @@ pub fn pty_spawn(
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let session = argent_pty::PtySession::spawn(command.trim(), &cwd, cols.max(20), rows.max(6))
         .map_err(|error| error.to_string())?;
-    let id = state.shared.next_pty.fetch_add(1, Ordering::Relaxed).to_string();
+    let id = state
+        .shared
+        .next_pty
+        .fetch_add(1, Ordering::Relaxed)
+        .to_string();
     state
         .shared
         .ptys
@@ -767,21 +776,37 @@ pub fn pty_spawn(
 
 #[tauri::command]
 pub fn pty_write(state: State<'_, Backend>, id: String, text: String) -> Result<(), String> {
-    let mut ptys = state.shared.ptys.lock().map_err(|_| "pty lock poisoned".to_string())?;
-    let session = ptys.get_mut(&id).ok_or_else(|| format!("pty {} not found", id))?;
+    let mut ptys = state
+        .shared
+        .ptys
+        .lock()
+        .map_err(|_| "pty lock poisoned".to_string())?;
+    let session = ptys
+        .get_mut(&id)
+        .ok_or_else(|| format!("pty {} not found", id))?;
     session.write(&text).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub fn pty_read(state: State<'_, Backend>, id: String) -> Result<String, String> {
-    let mut ptys = state.shared.ptys.lock().map_err(|_| "pty lock poisoned".to_string())?;
-    let session = ptys.get_mut(&id).ok_or_else(|| format!("pty {} not found", id))?;
+    let mut ptys = state
+        .shared
+        .ptys
+        .lock()
+        .map_err(|_| "pty lock poisoned".to_string())?;
+    let session = ptys
+        .get_mut(&id)
+        .ok_or_else(|| format!("pty {} not found", id))?;
     Ok(session.read())
 }
 
 #[tauri::command]
 pub fn pty_kill(state: State<'_, Backend>, id: String) -> Result<(), String> {
-    let mut ptys = state.shared.ptys.lock().map_err(|_| "pty lock poisoned".to_string())?;
+    let mut ptys = state
+        .shared
+        .ptys
+        .lock()
+        .map_err(|_| "pty lock poisoned".to_string())?;
     match ptys.get_mut(&id) {
         Some(session) => {
             session.kill();
@@ -793,7 +818,11 @@ pub fn pty_kill(state: State<'_, Backend>, id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn pty_list(state: State<'_, Backend>) -> Result<Value, String> {
-    let mut ptys = state.shared.ptys.lock().map_err(|_| "pty lock poisoned".to_string())?;
+    let mut ptys = state
+        .shared
+        .ptys
+        .lock()
+        .map_err(|_| "pty lock poisoned".to_string())?;
     let rows = ptys
         .iter_mut()
         .map(|(id, session)| {
@@ -850,7 +879,11 @@ pub fn list_workflows() -> Result<Value, String> {
 
 #[tauri::command]
 pub fn list_jobs(state: State<'_, Backend>) -> Result<Value, String> {
-    let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
+    let mut manager = state
+        .shared
+        .jobs
+        .lock()
+        .map_err(|_| "jobs lock poisoned".to_string())?;
     let rows = manager.list();
     Ok(json!(rows
         .iter()
@@ -875,7 +908,11 @@ pub fn start_job(state: State<'_, Backend>, command: String) -> Result<String, S
         return Err("command is empty".to_string());
     }
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-    let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
+    let mut manager = state
+        .shared
+        .jobs
+        .lock()
+        .map_err(|_| "jobs lock poisoned".to_string())?;
     manager
         .start(command.trim(), &cwd)
         .map_err(|error| error.to_string())
@@ -883,7 +920,11 @@ pub fn start_job(state: State<'_, Backend>, command: String) -> Result<String, S
 
 #[tauri::command]
 pub fn job_tail(state: State<'_, Backend>, id: String, lines: usize) -> Result<String, String> {
-    let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
+    let mut manager = state
+        .shared
+        .jobs
+        .lock()
+        .map_err(|_| "jobs lock poisoned".to_string())?;
     manager
         .tail(&id, lines.min(500))
         .map_err(|error| error.to_string())
@@ -891,7 +932,11 @@ pub fn job_tail(state: State<'_, Backend>, id: String, lines: usize) -> Result<S
 
 #[tauri::command]
 pub fn kill_job(state: State<'_, Backend>, id: String) -> Result<(), String> {
-    let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
+    let mut manager = state
+        .shared
+        .jobs
+        .lock()
+        .map_err(|_| "jobs lock poisoned".to_string())?;
     manager.kill(&id).map_err(|error| error.to_string())
 }
 
