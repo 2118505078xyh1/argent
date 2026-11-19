@@ -44,11 +44,6 @@ impl TodoStore {
     }
 }
 
-fn store() -> &'static TodoStore {
-    static STORE: OnceLock<TodoStore> = OnceLock::new();
-    STORE.get_or_init(TodoStore::new)
-}
-
 /// Maintain the session task list.
 pub struct TodoTool;
 
@@ -98,11 +93,15 @@ impl Tool for TodoTool {
         schema
     }
 
-    fn execute(&self, _ctx: &ToolCtx, args: &Json) -> Result<ToolResult> {
+    fn execute(&self, ctx: &ToolCtx, args: &Json) -> Result<ToolResult> {
         let raw = match args.get("todos").and_then(Json::as_array) {
             Some(items) => items.to_vec(),
             None => {
-                let snapshot = store().snapshot();
+                let snapshot = ctx
+                    .tasks
+                    .lock()
+                    .map(|items| items.clone())
+                    .unwrap_or_default();
                 return Ok(ToolResult::ok(render_todos(&snapshot)));
             }
         };
@@ -123,7 +122,9 @@ impl Tool for TodoTool {
                 status,
             });
         }
-        store().set_items(items.clone());
+        if let Ok(mut guard) = ctx.tasks.lock() {
+            *guard = items.clone();
+        }
         Ok(ToolResult::ok(render_todos(&items)))
     }
 }
@@ -535,7 +536,21 @@ mod tests {
             )
             .unwrap();
         assert!(out.content.contains("[x] 1 a"));
-        assert_eq!(store().snapshot().len(), 1);
+        assert_eq!(ctx.tasks.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn todo_lists_are_isolated_per_session() {
+        let a = ToolCtx::new(std::env::temp_dir());
+        let b = ToolCtx::new(std::env::temp_dir());
+        let todo = TodoTool;
+        todo.execute(
+            &a,
+            &Json::parse(r#"{"todos":[{"content":"only-a"}]}"#).unwrap(),
+        )
+        .unwrap();
+        let empty = todo.execute(&b, &Json::obj()).unwrap();
+        assert!(empty.content.contains("task list is empty"));
     }
 
     #[test]

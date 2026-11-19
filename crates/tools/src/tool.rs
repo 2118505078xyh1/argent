@@ -112,6 +112,8 @@ pub struct ToolCtx {
     /// 这是策略层的手册边界，不是 OS 级 jail：它拦住文件工具越界写，
     /// 但 bash 子进程的文件系统效果不经过这里。
     pub write_roots: Vec<PathBuf>,
+    /// 当前会话的任务列表（显式规划状态），与其他会话隔离。
+    pub tasks: std::sync::Arc<std::sync::Mutex<Vec<crate::state_tools::TodoItem>>>,
 }
 
 impl ToolCtx {
@@ -130,6 +132,7 @@ impl ToolCtx {
             cancel: argent_core::interrupt::Cancellation::new(),
             checkpoints: None,
             write_roots: Vec::new(),
+            tasks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
