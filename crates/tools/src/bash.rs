@@ -238,7 +238,7 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Run a shell command and return its output. The working directory persists across calls in this session: `cd` keeps holding, and the explicit `cwd` argument only overrides it. Destructive commands require confirmation."
+        "Run a shell command in the persistent session cwd. Destructive commands require approval."
     }
 
     fn parameters(&self) -> Json {
