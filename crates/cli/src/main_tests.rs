@@ -66,6 +66,44 @@ fn json_lines_frames_are_all_strict_single_line_json() {
 }
 
 #[test]
+fn discovery_cwd_keeps_project_roots_only_when_trusted() {
+    let cwd = Path::new("D:/work/project");
+    assert_eq!(discovery_cwd(cwd, true), cwd);
+
+    let neutral = discovery_cwd(cwd, false);
+    assert_ne!(&neutral, cwd);
+    let roots = SkillRegistry::default_roots(&neutral);
+    assert!(
+        roots.iter().all(|root| !root.starts_with(cwd)),
+        "untrusted discovery must not include cwd-relative skill roots: {:?}",
+        roots
+    );
+}
+
+#[test]
+fn an_explicit_trust_decision_wins_over_config_implied_trust() {
+    let dir = std::env::temp_dir().join(format!("argent-cli-trust-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let store_path = dir.join(argent_security::TRUST_FILE);
+
+    let mut store = TrustStore::at(&store_path);
+    assert!(!effective_project_trust(&store, &dir, false));
+    assert!(effective_project_trust(&store, &dir, true));
+
+    store.set(&dir, true).unwrap();
+    assert!(effective_project_trust(&store, &dir, false));
+
+    store.set(&dir, false).unwrap();
+    store.set_session_override(&dir, true);
+    assert!(effective_project_trust(&store, &dir, false));
+    store.clear_session_override();
+    assert!(!effective_project_trust(&store, &dir, true));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn the_delegate_plugin_keeps_its_state_when_wired() {
     let registry = ToolRegistry::with_core();
     let handle = DelegateHandle::new(Arc::new(|_batch| Vec::new()));

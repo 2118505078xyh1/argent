@@ -17,6 +17,8 @@ pub struct TodoItem {
     pub id: usize,
     pub content: String,
     pub status: String,
+    /// Ids of tasks that must complete before this one can start.
+    pub depends_on: Vec<usize>,
 }
 
 /// Shared, process-wide task list.
@@ -75,6 +77,10 @@ impl Tool for TodoTool {
         let mut item_props = Json::obj();
         item_props.set("content", content);
         item_props.set("status", status);
+        let mut depends = Json::obj();
+        depends.set("type", Json::string("array"));
+        depends.set("description", Json::string("Ids of prerequisite tasks"));
+        item_props.set("dependsOn", depends);
         item.set("properties", item_props);
         item.set("required", Json::Arr(vec![Json::string("content")]));
 
@@ -116,10 +122,21 @@ impl Tool for TodoTool {
                 "completed" => "completed".to_string(),
                 _ => "pending".to_string(),
             };
+            let depends_on = entry
+                .get("dependsOn")
+                .and_then(Json::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_i64().map(|id| id as usize))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             items.push(TodoItem {
                 id: index + 1,
                 content,
                 status,
+                depends_on,
             });
         }
         if let Ok(mut guard) = ctx.tasks.lock() {
@@ -136,12 +153,35 @@ fn render_todos(items: &[TodoItem]) -> String {
     items
         .iter()
         .map(|item| {
+            let pending_deps: Vec<usize> = item
+                .depends_on
+                .iter()
+                .copied()
+                .filter(|id| {
+                    items
+                        .iter()
+                        .any(|other| other.id == *id && other.status != "completed")
+                })
+                .collect();
             let marker = match item.status.as_str() {
                 "completed" => "x",
                 "in_progress" => ">",
+                _ if !pending_deps.is_empty() => "!",
                 _ => " ",
             };
-            format!("[{}] {} {}", marker, item.id, item.content)
+            let blocked = if pending_deps.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " (blocked by {})",
+                    pending_deps
+                        .iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            };
+            format!("[{}] {} {}{}", marker, item.id, item.content, blocked)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -516,13 +556,22 @@ mod tests {
     #[test]
     fn todo_renders_status_markers() {
         let store = TodoStore::new();
-        store.set_items(vec![TodoItem {
-            id: 1,
-            content: "build".to_string(),
-            status: "in_progress".to_string(),
-        }]);
+        store.set_items(vec![
+            TodoItem {
+                id: 1,
+                content: "spec".to_string(),
+                status: "pending".to_string(),
+                depends_on: vec![],
+            },
+            TodoItem {
+                id: 2,
+                content: "build".to_string(),
+                status: "pending".to_string(),
+                depends_on: vec![1],
+            },
+        ]);
         let rendered = render_todos(&store.snapshot());
-        assert!(rendered.contains("[>] 1 build"));
+        assert!(rendered.contains("[!] 2 build (blocked by 1)"));
     }
 
     #[test]

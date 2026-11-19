@@ -92,6 +92,10 @@ pub struct Cli {
     pub tokens: bool,
     /// Skip all approval prompts.
     pub yolo: bool,
+    /// `--trust-project` / `--no-trust-project` override project trust for this
+    /// run. `Some(true)` grants (and persists) trust; `Some(false)` suppresses
+    /// project-local resources for one session only.
+    pub trust_project: Option<bool>,
     /// Enable the browser tool.
     pub enable_browser: bool,
     /// Enable the desktop control tool.
@@ -169,6 +173,7 @@ impl Default for Cli {
             no_auto_compact: false,
             theme: None,
             yolo: false,
+            trust_project: None,
             enable_browser: false,
             enable_desktop: false,
             enable_service: false,
@@ -294,6 +299,9 @@ OPTIONS:
         --desktop           Enable desktop control (Windows only)
         --service           Enable pseudoterminal services (Windows only)
         --yolo              Approve every tool call
+        --trust-project     Trust this cwd's hooks, skills and extensions (saves
+                            the decision to ~/.argent/trust.json)
+        --no-trust-project  Skip project-local resources for this run only
         --sandbox           Run tool children in the process sandbox (Job Object)
         --doctor            Report terminal capabilities and exit
         --workflow <FILE>   Run a dependency-aware subagent workflow
@@ -412,6 +420,8 @@ pub const HELP_ZH: &str = r#"argent — Rust 编写的 coding agent
         --desktop           启用桌面控制（Windows）
         --service           启用伪终端服务（Windows）
         --yolo              自动批准所有工具调用
+        --trust-project     信任当前目录的 hook、技能与扩展（写入 ~/.argent/trust.json）
+        --no-trust-project  本次运行不加载项目级资源
         --sandbox           在进程沙箱中运行工具子进程（Job Object）
         --doctor            报告终端与 provider 诊断
         --workflow <FILE>   运行子代理工作流
@@ -573,6 +583,14 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             }
             "--yolo" => {
                 cli.yolo = true;
+                index += 1;
+            }
+            "--trust-project" => {
+                cli.trust_project = Some(true);
+                index += 1;
+            }
+            "--no-trust-project" => {
+                cli.trust_project = Some(false);
                 index += 1;
             }
             "--sandbox" => {
@@ -825,6 +843,16 @@ mod tests {
         assert!(cli.no_color);
         assert_eq!(cli.max_turns, Some(5));
         assert_eq!(cli.cwd, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn project_trust_flags_are_parsed() {
+        let granted = parse(&args(&["--trust-project", "hi"])).expect("parse");
+        assert_eq!(granted.trust_project, Some(true));
+        let denied = parse(&args(&["--no-trust-project", "hi"])).expect("parse");
+        assert_eq!(denied.trust_project, Some(false));
+        let none = parse(&args(&["hi"])).expect("parse");
+        assert_eq!(none.trust_project, None);
     }
 
     #[test]

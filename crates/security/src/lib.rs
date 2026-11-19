@@ -19,8 +19,10 @@ use argent_config::Settings;
 use argent_core::json::Json;
 
 pub mod redact;
+pub mod trust;
 
 pub use redact::{redact_json, redact_text};
+pub use trust::{TrustStore, TRUST_FILE};
 
 /// One row in the declarative permission table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
