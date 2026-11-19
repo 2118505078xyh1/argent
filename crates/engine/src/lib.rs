@@ -487,6 +487,20 @@ pub fn prepare_config(cwd: &Path) -> Result<Config, String> {
     prepare_config_with_profile(cwd, None)
 }
 
+/// Neutral directory used for resource discovery when the cwd is untrusted.
+/// It is intentionally empty so no project-local config/code is loaded.
+fn untrusted_workspace() -> PathBuf {
+    let root = std::env::var_os("ARGENT_STORAGE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(std::env::temp_dir);
+    root.join(".argent-untrusted-workspace")
+}
+
 /// The same, with a profile chosen by the caller rather than by settings.
 ///
 /// The folder picker lets the operator pick a profile per task; that profile
@@ -495,10 +509,31 @@ pub fn prepare_config_with_profile(
     cwd: &Path,
     profile_override: Option<&str>,
 ) -> Result<Config, String> {
-    let mut config = Config::load(cwd).map_err(|e| e.to_string())?;
-    let settings = Settings::load(cwd).map_err(|e| e.to_string())?;
-    let profiles =
-        argent_profiles::ProfileRegistry::load(cwd, &settings).map_err(|e| e.to_string())?;
+    // GUI/remote hosts use this path instead of the CLI startup. Apply the
+    // same project-trust decision before reading any cwd-relative config,
+    // skills, hooks or MCP declarations.
+    let trust = argent_security::TrustStore::load();
+    let env_trust = std::env::var("ARGENT_PROJECT_TRUSTED").ok().map(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
+    let implied = cwd.join(".argent").join("settings.json").is_file();
+    let project_trusted = env_trust
+        .or_else(|| trust.is_trusted(cwd))
+        .unwrap_or(implied);
+    let resource_cwd = if project_trusted {
+        cwd.to_path_buf()
+    } else {
+        untrusted_workspace()
+    };
+
+    let mut config = Config::load(&resource_cwd).map_err(|e| e.to_string())?;
+    config.project_trusted = project_trusted;
+    let settings = Settings::load(&resource_cwd).map_err(|e| e.to_string())?;
+    let profiles = argent_profiles::ProfileRegistry::load(&resource_cwd, &settings)
+        .map_err(|e| e.to_string())?;
     let profile_name = profile_override
         .map(str::to_string)
         .or_else(|| {
