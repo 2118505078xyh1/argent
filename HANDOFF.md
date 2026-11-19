@@ -173,6 +173,9 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     标签时显式检查激活态；连续 3 次冒烟通过。
 20. **一键验证 ✅（2026-11-19）**：`scripts/verify-tauri.ps1` 串起版本一致性、
     前端 typecheck/vitest/build、Rust fmt/test/clippy/build 与 CDP 冒烟，实测全绿。
+21. **P3 续做 ✅（2026-11-19）**：后台任务面板（start/list/tail/kill）、
+    工作流只读校验、deep link（`argent://open?path=…` 打开会话）、记忆搜索、
+    按天用量统计。均为小步增量，每次 typecheck/clippy/冒烟通过。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

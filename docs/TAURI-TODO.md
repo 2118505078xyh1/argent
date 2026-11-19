@@ -12,11 +12,10 @@
   真 CDP 冒烟。
 - **P1 27/28 完成**：仅 T1.29（更新提示）未做；T1.3 为轻量 +/- 着色，
   T1.7 用 `content-visibility: auto` 做浏览器级跳过渲染（非 JS 虚拟滚动）。
-- **P2 17/20 完成**：未做 T2.17（遥测同意）、T2.18（发布通道）、
-  T2.19（崩溃上报）；T2.11 的 E2E 已进独立 CI 但为 `continue-on-error`。
-- **P3 11/24 完成**：已做只读扩展/MCP/记忆/用量/Git、搜索、导出、导入、
-  状态栏自定义、命令面板、日程预览；其余为大块集成（browser-use、CUA、
-  workflow、移动端等），按优先级排后。
+- **P2 18/20 完成**：未做 T2.17（遥测同意）、T2.19（崩溃上报）；
+  T2.18 已加发布通道标识；T2.11 的 E2E 已进独立 CI 但为 `continue-on-error`。
+- **P3 17/24 完成**：新增 jobs/workflows 面板、deep link、记忆搜索、按天用量；
+  其余为大块集成（browser-use、CUA、workflow 执行器、移动端等），按优先级排后。
 - 一键验证：`powershell -File scripts/verify-tauri.ps1`（全绿）。
 
 验证命令（一键脚本已覆盖下列全部步骤）：
