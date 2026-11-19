@@ -27,6 +27,10 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 
 ## Test
 
+Iterate with `cargo check -p <crate>` and targeted tests
+(`cargo test -p <crate> <name>`). Run workspace-wide fmt/clippy/test and the
+release build only before a release or when merging a large cross-crate change.
+
 Local 4B smoke tests use llama.cpp (no gateway, no network). `scripts/local-4b.ps1`
 starts `llama-server` if needed and points argent at `http://127.0.0.1:8080/v1`:
 
