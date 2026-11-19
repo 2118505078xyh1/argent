@@ -32,6 +32,9 @@ impl Agent {
                 sink.emit(AgentEvent::Aborted);
                 return Some(FinishReason::Aborted);
             }
+            // A pause takes effect before the next tool starts; the current
+            // tool (if any) is never cut in half.
+            self.wait_if_paused(sink);
             if self.has_steering() {
                 // Answer the calls that will not run before appending the
                 // correction, then end this batch so the next request sees it.
@@ -100,6 +103,9 @@ impl Agent {
                 sink.emit(AgentEvent::Aborted);
                 return Some(FinishReason::Aborted);
             }
+            // A pause takes effect before the next tool starts; the current
+            // tool (if any) is never cut in half.
+            self.wait_if_paused(sink);
             if self.has_steering() {
                 self.record_unrun_calls(&calls[done..], UNRUN_STEERED, true, sink);
                 self.inject_steering(sink);

@@ -908,6 +908,7 @@ fn start_worker(config: &Config, cwd: &Path) -> Worker {
         approvals,
         abort,
         steering,
+        paused: _,
     } = argent_engine::start_session(
         config.clone(),
         cwd.to_path_buf(),

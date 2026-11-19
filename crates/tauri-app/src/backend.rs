@@ -497,11 +497,38 @@ pub fn steer(state: State<'_, Backend>, sid: String, text: String) -> Result<(),
 }
 
 #[tauri::command]
-pub fn abort(state: State<'_, Backend>, sid: String) -> Result<(), String> {
-    handle_for(&state, &sid)?
+pub fn pause_session(state: State<'_, Backend>, sid: String) -> Result<(), String> {
+    let handle = handle_for(&state, &sid)?;
+    handle
         .engine
         .lock()
         .map_err(|_| "engine lock poisoned".to_string())?
+        .paused
+        .store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn resume_session(state: State<'_, Backend>, sid: String) -> Result<(), String> {
+    let handle = handle_for(&state, &sid)?;
+    handle
+        .engine
+        .lock()
+        .map_err(|_| "engine lock poisoned".to_string())?
+        .paused
+        .store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn abort(state: State<'_, Backend>, sid: String) -> Result<(), String> {
+    let handle = handle_for(&state, &sid)?;
+    let engine = handle
+        .engine
+        .lock()
+        .map_err(|_| "engine lock poisoned".to_string())?;
+    engine.paused.store(false, Ordering::Relaxed);
+    engine
         .commands
         .send(Command::Abort)
         .map_err(|_| "agent worker is gone".to_string())

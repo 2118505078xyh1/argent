@@ -144,6 +144,7 @@ function App() {
   const [tabBusy, setTabBusy] = createSignal<Record<string, boolean>>({});
   const [tabStatus, setTabStatus] = createSignal<Record<string, string>>({ "1": "starting" });
   const [tabPath, setTabPath] = createSignal<Record<string, string>>({});
+  const [pausedByTab, setPausedByTab] = createSignal<Record<string, boolean>>({});
   const [input, setInput] = createSignal("");
   const [lastPrompt, setLastPrompt] = createSignal("");
   const [dragging, setDragging] = createSignal(false);
@@ -187,6 +188,10 @@ function App() {
   const setStatus = (value: string) => setStatusFor(active(), value);
 
   const sessionPath = () => tabPath()[active()] ?? "";
+
+  const paused = () => pausedByTab()[active()] ?? false;
+  const setPausedFor = (sid: string, value: boolean) =>
+    setPausedByTab((prev) => ({ ...prev, [sid]: value }));
   const setSessionPathFor = (sid: string, value: string) =>
     setTabPath((prev) => ({ ...prev, [sid]: value }));
   const setSessionPath = (value: string) => setSessionPathFor(active(), value);
@@ -420,6 +425,7 @@ function App() {
         break;
       case "turn_done":
         flushStream();
+        setPausedFor(sid, false);
         setBusyFor(sid, false);
         setStatusFor(sid, payload.reason);
         if (isActive) {
@@ -701,6 +707,27 @@ function App() {
   const abort = async () => {
     try {
       await invoke("abort", { sid: active() });
+      setPausedFor(active(), false);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const pause = async () => {
+    try {
+      await invoke("pause_session", { sid: active() });
+      setPausedFor(active(), true);
+      setStatus("已暂停");
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const resume = async () => {
+    try {
+      await invoke("resume_session", { sid: active() });
+      setPausedFor(active(), false);
+      setStatus("运行中");
     } catch (err) {
       setError(String(err));
     }
@@ -1741,6 +1768,13 @@ function App() {
                   {t(locale(), "stop")}
                 </button>
                 <button
+                  class="ghost"
+                  disabled={!busy()}
+                  onClick={() => void (paused() ? resume() : pause())}
+                >
+                  {paused() ? "继续" : "暂停"}
+                </button>
+                <button
                   class="primary"
                   disabled={!input().trim()}
                   onClick={() => void send()}
@@ -1754,7 +1788,7 @@ function App() {
             <span class="dot" classList={{ live: busy() }} />
             <Show when={showSegment("status")}>
               <span role="status" aria-live="polite">
-                {status()}
+                {paused() ? "已暂停" : status()}
               </span>
             </Show>
             <Show when={showSegment("session")}>

@@ -76,6 +76,8 @@ fn main() {
             backend::activate_tab,
             backend::close_tab,
             backend::send_prompt,
+            backend::pause_session,
+            backend::resume_session,
             backend::steer,
             backend::abort,
             backend::new_session,

@@ -188,8 +188,12 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
 24. **五项功能核对补齐 ✅（2026-11-19）**：按用户清单核对——新增文件工作区页
     （浏览/新建/编辑/保存/删除 + 拖拽上传到 `uploads/`，后端做工作区路径校验，
     新增路径穿越契约测试）与计划/结果页（由事件流派生步骤、当前步骤、最终产物、
-    错误列表）。工具调用面板、权限确认此前已有；**仍缺"暂停/继续"**（engine 只有
-    Abort，无 Pause/Resume）。
+    错误列表）。工具调用面板、权限确认此前已有。
+25. **暂停/继续 ✅（2026-11-19）**：agent 增加共享 pause flag，在回合边界与
+    每个工具执行前阻塞等待恢复（不切断当前流式响应/工具）；engine 暴露
+    `Engine.paused`，Tauri 加 `pause_session/resume_session`，前端 composer
+    加暂停/继续按钮与状态栏"已暂停"，abort 会清除暂停。新增 engine 契约测试。
+    至此用户清单 5/5 齐备。
 
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）

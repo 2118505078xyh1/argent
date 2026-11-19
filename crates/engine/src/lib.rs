@@ -100,6 +100,9 @@ pub struct Engine {
     pub abort: AbortHandle,
     /// Corrections pushed by the UI while a run is in progress.
     pub steering: Arc<Mutex<VecDeque<String>>>,
+    /// Pause flag; the UI toggles it directly without going through `commands`
+    /// (the worker is busy inside `agent.run` while a turn is active).
+    pub paused: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Start one worker for a session. `approval_ids` is shared across sessions so
@@ -119,6 +122,8 @@ pub fn start_session(
     let worker_abort = abort.clone();
     let steering = Arc::new(Mutex::new(VecDeque::new()));
     let worker_steering = Arc::clone(&steering);
+    let paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_paused = Arc::clone(&paused);
     let session_label = session
         .as_ref()
         .map(|path| path.to_string_lossy().into_owned())
@@ -156,6 +161,7 @@ pub fn start_session(
             }
         };
         agent.set_steering(worker_steering);
+        agent.set_paused_handle(worker_paused);
 
         // No transcript file until there is something to put in it: an empty
         // session on disk is a placeholder, and the sidebar should not list it.
@@ -468,6 +474,7 @@ pub fn start_session(
         approvals: approval_rx,
         abort,
         steering,
+        paused,
     }
 }
 
@@ -1360,6 +1367,25 @@ mod session_worker_tests {
 
         let _ = one.commands.send(Command::Shutdown);
         let _ = two.commands.send(Command::Shutdown);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pause_flag_is_shared_with_the_worker() {
+        let dir = std::env::temp_dir().join(format!("argent-engine-pause-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config {
+            session_dir: dir.clone(),
+            ..Config::default()
+        };
+        let engine = start_session(config, dir.clone(), None, Arc::new(AtomicU64::new(1)));
+        assert!(!engine.paused.load(std::sync::atomic::Ordering::Relaxed));
+        engine
+            .paused
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(engine.paused.load(std::sync::atomic::Ordering::Relaxed));
+        let _ = engine.commands.send(Command::Shutdown);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

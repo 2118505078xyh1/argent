@@ -257,6 +257,11 @@ pub struct Agent {
     /// an older epoch is allowed to run again.
     mutation_epoch: u64,
     abort: AbortHandle,
+    /// Operator pause flag. Checked at turn and tool boundaries; the current
+    /// streaming response/tool call is allowed to finish, but no new work
+    /// starts until the operator resumes.
+    paused: Arc<AtomicBool>,
+    pause_notified: AtomicBool,
     /// Corrections typed while a run is in progress. The UI thread pushes
     /// here directly; the loop drains it between turns so a tool batch does
     /// not have to finish before the operator can redirect the agent.
@@ -313,6 +318,8 @@ impl Agent {
             current_turn: 0,
             mutation_epoch: 0,
             abort: AbortHandle::new(),
+            paused: Arc::new(AtomicBool::new(false)),
+            pause_notified: AtomicBool::new(false),
             steering: Arc::new(Mutex::new(VecDeque::new())),
             followups: Arc::new(Mutex::new(VecDeque::new())),
             usage: Usage::default(),
@@ -343,6 +350,36 @@ impl Agent {
     /// The queue a frontend writes corrections into while a run is active.
     pub fn steering_handle(&self) -> Arc<Mutex<VecDeque<String>>> {
         Arc::clone(&self.steering)
+    }
+
+    /// Flag a frontend toggles to pause/resume between turns and tool calls.
+    pub fn paused_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.paused)
+    }
+
+    /// Adopt a pause flag created by the host process (one per session).
+    pub fn set_paused_handle(&mut self, handle: Arc<AtomicBool>) {
+        self.paused = handle;
+    }
+
+    /// Block at a safe boundary until resumed or aborted. Emits one notice on
+    /// each transition so the transcript explains the pause to the operator.
+    fn wait_if_paused(&self, sink: &mut dyn EventSink) {
+        if self.paused.load(Ordering::Relaxed) && !self.pause_notified.swap(true, Ordering::Relaxed)
+        {
+            sink.emit(AgentEvent::Notice(
+                "paused — 输入 /continue 或点继续".into(),
+            ));
+        }
+        while self.paused.load(Ordering::Relaxed) {
+            if self.abort.is_aborted() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if self.pause_notified.swap(false, Ordering::Relaxed) {
+            sink.emit(AgentEvent::Notice("resumed".into()));
+        }
     }
 
     /// The queue of follow-up prompts; a frontend pushes while a run is
@@ -988,6 +1025,8 @@ impl Agent {
                 });
                 return Ok(reason);
             }
+            // Pause at the turn boundary: no new request starts until resumed.
+            self.wait_if_paused(sink);
             // A correction typed during the previous tool batch belongs at the
             // head of this turn, before the next request is serialized.
             self.inject_steering(sink);
