@@ -1,13 +1,12 @@
 # argent
 
-用 Rust 重写的 coding agent：一个小体积二进制、原生 agent 循环。主入口是
-**CLI 与全屏 TUI**；图形前端是原生 iced 窗口（`argent-native`），不使用
-WebView、HTML 或 JS。
+用 Rust 实现的轻量 Agent Runtime：一个小体积二进制、原生 agent 循环。编程是
+第一个垂直场景；主入口是 **CLI 与全屏 TUI**，图形前端是原生 iced 窗口
+（`argent-native`），不使用 WebView、HTML 或 JS。
 
-`argent` 是 clean-room 实现：目标是实现 Codex CLI、Claude Code 与 pi 的功能，
-接口上对齐 **Codex CLI 与 Claude Code**（provider 模板、插件清单、skills、
-commands、hooks、MCP），并用 Rust 重新实现。项目中不包含它们的源码、压缩
-JS、图标或其他专有资产。
+`argent` 是干净实现的运行时：对标 **Pi 与 OMP** 的可观察接口与能力边界
+（provider 模板、插件清单、skills、commands、hooks、MCP），用 Rust 重新实现。
+项目中不包含其他实现的源码、压缩 JS、图标或专有资产。
 
 ## 界面
 
@@ -46,17 +45,22 @@ token 流式输出和频繁变化的工具状态。
 
 ## 为什么更小
 
-| 对比项 | ZCode | argent |
-|---|---|---|
-| 桌面外壳 | Electron + Chromium + 内置 Node | CLI/TUI 无外壳；图形端已实现 iced，不再以 WebView 为主 |
-| agent 核心 | 15 MB 的 JS bundle | 原生 Rust 二进制 |
-| 无头模式 | 需要 Node 运行时 | 一个 `argent.exe`，无运行时依赖 |
-| 插件 | Node 包 + MCP server | 清单 + MCP server；能用 Rust 原生工具就不用 Node |
+对标对象是 **Pi 与 OMP**。下表用公开可观察的本地 footprint 做对比；Pi 的安装
+目录不包含 Node 运行时本身，OMP 是服务端模型路由/调度 harness，没有本地二进制。
+
+| 维度 | Pi 1.5.2 | OMP | argent |
+|---|---|---|---|
+| 定位 | 编程助手 CLI | 模型路由/调度 harness（服务端） | 轻量 Agent Runtime，编程是首个垂直场景 |
+| 本地运行时 | Node.js（未计入体积） | 无本地二进制，走 HTTP | 单二进制，无运行时依赖 |
+| 本地占用（Windows） | 安装目录约 108.7 MB | 不适用（服务端部署） | `argent.exe` 5.36 MB；发布 zip 约 6.1 MB |
+| 无头模式 | 需 Node | 通过 API 调用 | 一个 `argent.exe` 即可 |
+| 交互界面 | 终端 TUI | 不适用 | CLI/TUI + iced native（+ Tauri 原型） |
+| 扩展方式 | Node 扩展 + MCP | 不适用（由 harness 侧管理） | Rust 清单 + MCP + Rhai，原生工具优先 |
 
 CLI/TUI 路径完全不启动浏览器引擎；原生 iced 前端（`argent-native`）同样
 不依赖 WebView。整个产品只有一个 Rust 运行时。
 
-实测（0.3.1 release 构建，Windows x64）：
+argent 实测（0.3.1 release 构建，Windows x64）：
 
 | 进程 | 二进制 | 工作集 |
 |---|---|---|
@@ -68,7 +72,7 @@ CLI/TUI 路径完全不启动浏览器引擎；原生 iced 前端（`argent-nati
 
 ## argent 独有的七个能力
 
-这七个能力是 argent 区别于 mpi / minzcode 的地方：
+这七个能力是 argent 的核心差异点：
 
 ### 1. 命名 profiles
 
@@ -299,7 +303,7 @@ RPC 的 extension UI 子协议：需要操作者批准工具调用时，服务�
 argent sessions list                       # 会话列表
 argent sessions search "那段校验逻辑"       # 按内容搜会话
 argent sessions export --html out.html     # 导出单文件 HTML
-argent sessions import <cc-or-codex.jsonl> # 导入 Claude Code / Codex 会话
+argent sessions import <session.jsonl>      # 导入兼容格式的会话记录
 argent themes                              # 可用主题（dark/light/用户主题）
 argent keybindings                         # 当前键位绑定
 argent completion bash                     # 补全脚本（bash/zsh/fish/powershell）
@@ -368,7 +372,7 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 }
 ```
 
-- 主题：内置 `dark`/`light` 为 Claude Code 风格（近黑或奶油底、陶土橙强调色）；
+- 主题：内置 `dark`/`light` 两套配色（近黑或奶油底、陶土橙强调色）；
   `themes/<name>.json` 可覆盖语义色（accent/dim/error/user_bg/code_bg…），`--theme light` 切换
 - 键位：`keybindings.json` 重绑 quit/abort/redraw/expand/history 六个动作
 - 状态栏：`statusline` 决定分段与顺序
@@ -379,7 +383,7 @@ argent "写个函数" --model gpt-5 --fallback-model claude-sonnet-4
 - 模型范围：`enabledModels` 限制模型选择器与循环范围（支持 `*` 通配，匹配可含 `provider/` 前缀）；为空表示全部
 - 备用模型：`fallbackModel`（或 CLI 参数 `--fallback-model`）在主模型连续瞬时失败（429/5xx/超时，空流重试耗尽）时自动换用该模型重跑本轮；400/密钥错误不切换。对所有运行路径生效，默认关闭
 - 子代理模型：`secondaryModel`（或 CLI 参数 `--secondary-model`）让 delegate 子代理（检索/归纳类任务）默认跑更便宜的模型，省主模型 token；角色或单次请求显式指定的模型优先，未设置时子代理跟随主模型
-- MCP 服务器：`mcpServers` 配置外部工具，形状与 Claude Code / Codex CLI 相同，直接复制过来就能用。每个服务器启动一个 stdio 进程，其工具以 `mcp__<server>__<tool>` 注册进注册表，`tool_search` 按需提升；某台服务器起不来只打一行提示，不影响运行
+- MCP 服务器：`mcpServers` 配置外部工具，采用常见 MCP 配置形状，可直接复用现有配置。每个服务器启动一个 stdio 进程，其工具以 `mcp__<server>__<tool>` 注册进注册表，`tool_search` 按需提升；某台服务器起不来只打一行提示，不影响运行
   ```json
   {
     "mcpServers": {
@@ -493,7 +497,7 @@ argent tui                      全屏终端 UI
 argent --gui                    打开桌面窗口（需要 argent-native.exe）
 argent --rpc                    stdin/stdout 上的换行分隔 JSON
 argent acp                      Agent Client Protocol 服务端
-argent app-server               ZCode 兼容别名，等价 --rpc
+argent app-server               RPC 服务别名，等价 --rpc
 argent login [provider]         保存 API key（或走 OAuth）
 argent logout [provider]        删除凭据
 argent plugins list|install|update|uninstall|enable|disable|validate
@@ -534,8 +538,8 @@ argent --sessions               列出已有会话
   行号越出已读范围都会拒绝，避免把旧行号写进已变化的文件。
 - 批量编辑：`edit` 的 `edits` 接受多文件/多范围 JSON，先统一校验锚点、
   重叠和路径，再按稳定顺序写盘；任一锚点失效时整批不落盘。
-- `apply_patch` 插件：按需加载的 Codex/OpenCode 风格 `*** Begin Patch`
-  入口，支持 Update/Add/Delete/Move 文件段，先校验全部 hunk 再写盘。
+- `apply_patch` 插件：按需加载的标准 `*** Begin Patch` 补丁入口，支持
+  Update/Add/Delete/Move 文件段，先校验全部 hunk 再写盘。
 - 编辑后诊断：write/edit/apply_patch 成功后，如果 `codeintel` 已启动对应
   LSP server，结果会附带该文件 diagnostics；未用过 codeintel 时不拉起新进程。
 - 结构化块替换：`codeintel` 的 `ast_search` / `ast_replace` 用
@@ -557,9 +561,8 @@ argent --sessions               列出已有会话
   子代理的写入记在父运行里。
 - MCP 客户端：stdio、streamable HTTP、legacy SSE。插件声明的 MCP server
   会合并进同一个运行时。
-- ZCode/Claude/Codex 插件清单（`.zcode-plugin`、`.claude-plugin`、
-  `.codex-plugin`）：发现、本地安装、启用/禁用、skills、agents、commands、
-  MCP servers。
+- 多来源插件清单：发现、本地安装、启用/禁用、skills、agents、commands、
+  MCP servers；清单格式由插件系统定义，不绑定特定外部产品。
 - 插件 marketplace：`marketplace.json` 目录、本地路径和 Git 源、
   `plugins install name@marketplace`、可用插件列表与更新。
 - Prompt 模板：`.argent/prompts/*.md`、`.agents/prompts/*.md` 和
@@ -705,7 +708,7 @@ crates/
 ```
 
 依赖图和各 crate 职责见
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；与 ZCode / Pi 的逐项对等核对见
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；与 Pi / OMP 的逐项对标记录见
 [docs/PARITY.md](docs/PARITY.md)。
 
 ## 评测
