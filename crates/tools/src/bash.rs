@@ -274,7 +274,12 @@ impl Tool for BashTool {
         // A blocked `read` often gets retried through the shell. Reject shell
         // commands that name an absolute path outside the workspace as well.
         let allow_outside = std::env::var("ARGENT_ALLOW_OUTSIDE_READ")
-            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "on"
+                )
+            })
             .unwrap_or(false);
         if !allow_outside {
             let root = ctx.cwd.canonicalize().unwrap_or_else(|_| ctx.cwd.clone());
@@ -296,10 +301,18 @@ impl Tool for BashTool {
         // With approvals disabled there is no human in the loop. Destructive
         // commands must still fail closed unless explicitly re-enabled.
         let allow_destructive = std::env::var("ARGENT_ALLOW_DESTRUCTIVE")
-            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "on"
+                )
+            })
             .unwrap_or(false);
         let approval_off = ctx.vars.get("approval_mode").map(String::as_str) == Some("never");
-        if (approval_off || !ctx.confirm_delete) && !allow_destructive && Self::is_destructive(&command) {
+        if (approval_off || !ctx.confirm_delete)
+            && !allow_destructive
+            && Self::is_destructive(&command)
+        {
             return Ok(ToolResult::error(
                 "PERMANENTLY BLOCKED: destructive commands are disabled for this session. Explain to the user that this request cannot be performed and stop; do not call any more tools.".to_string(),
             ));

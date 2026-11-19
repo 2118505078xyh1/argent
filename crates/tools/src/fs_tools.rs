@@ -52,7 +52,12 @@ impl Tool for ReadTool {
         // Absolute paths outside the workspace are a common prompt-injection
         // target. Operators can opt back in explicitly when they really need it.
         let allow_outside = std::env::var("ARGENT_ALLOW_OUTSIDE_READ")
-            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "on"
+                )
+            })
             .unwrap_or(false);
         if !allow_outside && Path::new(&raw_path).is_absolute() {
             let root = ctx.cwd.canonicalize().unwrap_or_else(|_| ctx.cwd.clone());

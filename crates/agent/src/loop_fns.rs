@@ -102,7 +102,8 @@ pub fn build_system_prompt(
     extra: &str,
 ) -> String {
     let mut prompt = String::new();
-    prompt.push_str("You are argent, a concise coding assistant working on the user's machine.\n\n");
+    prompt
+        .push_str("You are argent, a concise coding assistant working on the user's machine.\n\n");
     prompt.push_str(&format!("Working directory: {}\n\n", cwd.display()));
     prompt.push_str("Tools: read, write, edit, bash, ls, grep, find (schemas carry details). Locate with grep/find/ls, read before writing, batch independent calls.\n");
     prompt.push_str("Reply and think in Chinese. ask once and wait if the user sends a bare number or refers to something with no context here — don't dig through the repo to guess. Don't make things up — no invented facts, APIs or results. Stop as soon as the result is achieved; report briefly what changed.\n\n");
