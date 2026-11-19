@@ -15,6 +15,7 @@ pub mod history;
 pub mod icon;
 pub mod metrics;
 pub mod palette;
+pub mod runtime_event;
 pub mod session;
 pub mod transcript;
 pub mod turn;
@@ -28,6 +29,7 @@ pub use history::{check_rewind, HistoryViolation, RewindEvents};
 pub use icon::{rgba as icon_rgba, write_ico};
 pub use metrics::{format_duration, format_tokens, progress_bar, Metrics};
 pub use palette::{Palette, Rgb, Role};
+pub use runtime_event::{failed, RuntimeEvent, TextKind};
 pub use session::{
     check_session_switch, new_session, opened_session, SessionEvents, SessionViolation,
 };
