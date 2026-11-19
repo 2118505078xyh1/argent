@@ -200,6 +200,16 @@ fn register_host_functions(
                     rhai::Position::NONE,
                 ))
             })?;
+            // A script plugin must not become a bypass around the host's
+            // approval and workspace boundaries. The full agent policy gate
+            // lives in `agent`, which this crate cannot depend on, so enforce
+            // the ToolCtx-level parts here and fail closed.
+            if let Some(reason) = script_gate(&ctx, &tool_name, &arguments) {
+                return Err(Box::new(rhai::EvalAltResult::ErrorRuntime(
+                    format!("{tool_name} blocked by policy: {reason}").into(),
+                    rhai::Position::NONE,
+                )));
+            }
             let result = tool.execute(&ctx, &arguments).map_err(|e| {
                 Box::new(rhai::EvalAltResult::ErrorRuntime(
                     format!("tool {tool_name} failed: {e}").into(),
@@ -212,6 +222,21 @@ fn register_host_functions(
             Ok(out)
         },
     );
+}
+
+/// ToolCtx-level safety gate for calls originating in script plugins.
+fn script_gate(ctx: &argent_tools::ToolCtx, name: &str, args: &Json) -> Option<String> {
+    if name == "bash" {
+        let command = args.str_or("command", "");
+        let approval_off = ctx.vars.get("approval_mode").map(String::as_str) == Some("never");
+        if approval_off && argent_tools::BashTool::is_destructive(&command) {
+            return Some("destructive command blocked: approval is disabled".to_string());
+        }
+        return None;
+    }
+    args.get("path")
+        .and_then(Json::as_str)
+        .and_then(|path| ctx.check_write(std::path::Path::new(path)).err())
 }
 
 fn parse_declarations(value: &Json) -> ArgentResult<Declarations> {
@@ -255,4 +280,23 @@ fn parse_declarations(value: &Json) -> ArgentResult<Declarations> {
             .collect();
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    #[test]
+    fn script_calls_cannot_run_destructive_commands_without_approval() {
+        let mut ctx = argent_tools::ToolCtx::new(std::env::temp_dir());
+        ctx.vars
+            .insert("approval_mode".to_string(), "never".to_string());
+        let mut args = Json::obj();
+        args.set("command", Json::string("rm -rf target"));
+        assert!(script_gate(&ctx, "bash", &args).is_some());
+
+        ctx.vars
+            .insert("approval_mode".to_string(), "ask".to_string());
+        assert!(script_gate(&ctx, "bash", &args).is_none());
+    }
 }
