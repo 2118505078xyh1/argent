@@ -252,3 +252,24 @@ argent 目前缺的正是这一层外壳：
 7. **不为"参数一致"引入 Pi 式 `user_bash` 任意改写钩子**
    （`Pi: core/tools/bash.js:150-158,186`）：若增加扩展拦截点，必须保持
    "拦截后仍回到 argent 的 gate_decision" 的不变量。
+
+---
+
+## 6. P3 实施状态（2026-11-19）
+
+已落地：
+
+- **P3-1 项目信任**：`crates/security/src/trust.rs` 的 `TrustStore` 持久化
+  cwd/父目录决策；CLI `--trust-project` / `--no-trust-project` 与
+  `ARGENT_PROJECT_TRUSTED`；CLI 和 engine/Tauri 均在读取任何 cwd 相对配置
+  之前决定信任，未信任时使用中性 discovery 根。角色与斜杠命令发现也已纳入。
+- **P3-2 脚本插件旁路**：`crates/script-plugin/src/loader.rs` 的
+  `argent_call_tool` 增加 ToolCtx 级 gate，阻止审批关闭时执行破坏性命令、
+  阻止越过 write_roots 的路径调用。
+- **审批关闭时的硬拒绝**：`bash` 在 `approval=never` 下拒绝危险命令，
+  且错误信息不再提示环境变量绕过方式。
+
+进行中：MCP 每服务器权限隔离（P3-3），由独立子代理处理。
+
+未开始：secret 脱敏范围复核（P3-4）、OS 级隔离（P3-5）、
+崩溃恢复与审计轮转（P3-6）。
