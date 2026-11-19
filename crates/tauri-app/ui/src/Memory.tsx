@@ -16,6 +16,7 @@ export default function Memory() {
   const [key, setKey] = createSignal("");
   const [value, setValue] = createSignal("");
   const [error, setError] = createSignal("");
+  const [query, setQuery] = createSignal("");
 
   const refresh = async () => {
     try {
@@ -39,6 +40,18 @@ export default function Memory() {
     }
   };
 
+  const search = async () => {
+    if (!query().trim()) {
+      await refresh();
+      return;
+    }
+    try {
+      setRows(await invoke<MemoryRow[]>("search_memory", { query: query() }));
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
   const forget = async (row: MemoryRow) => {
     if (!window.confirm(`删除记忆「${row.key}」？`)) return;
     try {
@@ -56,9 +69,20 @@ export default function Memory() {
           <h2>长期记忆</h2>
           <p>跨会话保存的事实；模型会在需要时载入。</p>
         </div>
-        <button class="ghost" onClick={() => void refresh()}>
-          刷新
-        </button>
+        <div class="doc-actions">
+          <input
+            class="side-search"
+            placeholder="搜索记忆…"
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+          />
+          <button class="ghost" onClick={() => void search()}>
+            搜索
+          </button>
+          <button class="ghost" onClick={() => void refresh()}>
+            刷新
+          </button>
+        </div>
       </header>
 
       <div class="auto-form">

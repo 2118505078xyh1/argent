@@ -614,9 +614,41 @@ pub fn delete_session(state: State<'_, Backend>, sid: String, path: String) -> R
 }
 
 #[tauri::command]
+pub fn search_memory(query: String) -> Result<Value, String> {
+    let store = memory_store()?;
+    let entries = store
+        .search(query.trim())
+        .map_err(|error| error.to_string())?;
+    Ok(json!(entries
+        .iter()
+        .map(|entry| json!({
+            "scope": entry.scope.as_str(),
+            "key": entry.key,
+            "value": entry.value,
+        }))
+        .collect::<Vec<_>>()))
+}
+
+#[tauri::command]
 pub fn usage_summary() -> Result<Value, String> {
     let records = argent_session::usage::read();
     let summary = argent_session::usage::summary(&records, 0);
+    let mut daily: std::collections::BTreeMap<String, (u64, u64, f64)> =
+        std::collections::BTreeMap::new();
+    for record in &records {
+        let day = argent_automation::format_iso(record.epoch as i64)
+            .get(..10)
+            .unwrap_or("unknown")
+            .to_string();
+        let entry = daily.entry(day).or_insert((0, 0, 0.0));
+        entry.0 += 1;
+        entry.1 += record.prompt_tokens;
+        entry.2 += record.cost.unwrap_or(0.0);
+    }
+    let daily_rows = daily
+        .into_iter()
+        .map(|(day, (turns, tokens, cost))| json!({ "day": day, "turns": turns, "tokens": tokens, "cost": cost }))
+        .collect::<Vec<_>>();
     Ok(json!({
         "turns": summary.turns,
         "requests": summary.requests,
@@ -633,6 +665,7 @@ pub fn usage_summary() -> Result<Value, String> {
             "promptTokens": usage.prompt_tokens,
             "cost": usage.cost,
         })).collect::<Vec<_>>(),
+        "daily": daily_rows,
     }))
 }
 

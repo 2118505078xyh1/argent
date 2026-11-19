@@ -15,6 +15,7 @@ type Summary = {
   cacheHitPercent: number;
   cost: number;
   models: ModelUsage[];
+  daily: Array<{ day: string; turns: number; tokens: number; cost: number }>;
 };
 
 export default function Usage() {
@@ -58,6 +59,22 @@ export default function Usage() {
             <div class="usage-card">
               <span>{card.label}</span>
               <strong>{card.value}</strong>
+            </div>
+          )}
+        </For>
+      </div>
+      <h3 class="usage-title">按天</h3>
+      <div class="usage-grid">
+        <For
+          each={summary()?.daily ?? []}
+          fallback={<div class="side-empty">还没有按天记录。</div>}
+        >
+          {(day) => (
+            <div class="usage-card">
+              <span>{day.day}</span>
+              <strong>
+                {day.turns} 回合 · {formatTokens(day.tokens)} · ${day.cost.toFixed(4)}
+              </strong>
             </div>
           )}
         </For>
