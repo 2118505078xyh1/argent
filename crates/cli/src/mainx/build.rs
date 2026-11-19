@@ -72,6 +72,13 @@ pub(crate) fn build_ctx(config: &Config, cwd: &Path) -> ToolCtx {
     ctx.timeout_secs = config.tool_timeout_secs;
     ctx.confirm_delete = config.confirm_delete;
     ctx.auto_approve_bash = config.auto_approve_bash;
+    ctx.vars.insert(
+        "approval_mode".to_string(),
+        match config.approval_mode {
+            argent_core::config::ApprovalMode::Never => "never".to_string(),
+            _ => "ask".to_string(),
+        },
+    );
     // workspace-write：write/edit 只能落在 cwd 与 --add-dir 里。read-only 由
     // 工具注册表直接摘掉写工具，这里不必再设根。danger-full-access 保持空。
     //

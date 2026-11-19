@@ -274,7 +274,11 @@ def main():
     if not PI_PS1.is_file():
         raise SystemExit(f"missing {PI_PS1}")
     data = json.loads(SCENARIOS.read_text(encoding="utf-8"))
-    scenarios = [s for s in data["scenarios"] if args.filter in s["id"]]
+    filters = [item.strip() for item in args.filter.split(",") if item.strip()]
+    scenarios = [
+        s for s in data["scenarios"]
+        if not filters or any(item in s["id"] for item in filters)
+    ]
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     results = []

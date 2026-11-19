@@ -907,6 +907,13 @@ fn build_agent(
     tool_ctx.timeout_secs = config.tool_timeout_secs;
     tool_ctx.confirm_delete = config.confirm_delete;
     tool_ctx.auto_approve_bash = config.auto_approve_bash;
+    tool_ctx.vars.insert(
+        "approval_mode".to_string(),
+        match config.approval_mode {
+            ApprovalMode::Never => "never".to_string(),
+            _ => "ask".to_string(),
+        },
+    );
     tool_ctx.checkpoints = Some(checkpoints.clone());
     let lsp_root = cwd.clone();
     tool_ctx.post_edit = Some(argent_tools::PostEditHook::new(move |path| {

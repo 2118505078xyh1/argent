@@ -271,6 +271,39 @@ impl Tool for BashTool {
 
     fn execute(&self, ctx: &ToolCtx, args: &Json) -> Result<ToolResult> {
         let command = arg_str(args, "command")?;
+        // A blocked `read` often gets retried through the shell. Reject shell
+        // commands that name an absolute path outside the workspace as well.
+        let allow_outside = std::env::var("ARGENT_ALLOW_OUTSIDE_READ")
+            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
+            .unwrap_or(false);
+        if !allow_outside {
+            let root = ctx.cwd.canonicalize().unwrap_or_else(|_| ctx.cwd.clone());
+            for token in command.split(|ch: char| ch.is_whitespace() || ch == '\'' || ch == '"') {
+                let path = std::path::Path::new(token);
+                if !path.is_absolute() {
+                    continue;
+                }
+                if let Ok(canonical) = path.canonicalize() {
+                    if !canonical.starts_with(&root) {
+                        return Ok(ToolResult::error(format!(
+                            "command blocked: {} is outside the workspace",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+        }
+        // With approvals disabled there is no human in the loop. Destructive
+        // commands must still fail closed unless explicitly re-enabled.
+        let allow_destructive = std::env::var("ARGENT_ALLOW_DESTRUCTIVE")
+            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
+            .unwrap_or(false);
+        let approval_off = ctx.vars.get("approval_mode").map(String::as_str) == Some("never");
+        if (approval_off || !ctx.confirm_delete) && !allow_destructive && Self::is_destructive(&command) {
+            return Ok(ToolResult::error(
+                "PERMANENTLY BLOCKED: destructive commands are disabled for this session. Explain to the user that this request cannot be performed and stop; do not call any more tools.".to_string(),
+            ));
+        }
         let timeout_secs = arg_usize_opt(args, "timeout")
             .unwrap_or(ctx.timeout_secs as usize)
             .clamp(1, 600);

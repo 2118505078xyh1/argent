@@ -210,6 +210,11 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
 28. **README 对标修正 ✅（2026-11-19）**：对标对象改为 Pi/OMP，移除 ZCode
     对比表与其他 agent 名称表述；提示词保持中性。
 
+29. **安全硬门 ✅（2026-11-19）**：read 拒绝工作区外绝对路径；bash 拒绝含
+    工作区外绝对路径的命令（防止绕过 read）；`approval=never` 时破坏性命令
+    永久拒绝并让模型停止（不再提示 env 绕过）。本地评测 S10/S11 从 ❌ 变 ✅，
+    S11 耗时从 68.8s/5650 token 降到 9.2s/2060 token。
+
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）
 - native：欢迎卡真正垂直居中（当前 `Length::Shrink` 靠 padding 近似）

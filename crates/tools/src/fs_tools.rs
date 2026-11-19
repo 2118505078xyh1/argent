@@ -49,6 +49,22 @@ impl Tool for ReadTool {
     fn execute(&self, ctx: &ToolCtx, args: &Json) -> Result<ToolResult> {
         let raw_path = arg_str(args, "path")?;
         let target = resolve(&ctx.cwd, Path::new(&expand_home(Path::new(&raw_path))));
+        // Absolute paths outside the workspace are a common prompt-injection
+        // target. Operators can opt back in explicitly when they really need it.
+        let allow_outside = std::env::var("ARGENT_ALLOW_OUTSIDE_READ")
+            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on"))
+            .unwrap_or(false);
+        if !allow_outside && Path::new(&raw_path).is_absolute() {
+            let root = ctx.cwd.canonicalize().unwrap_or_else(|_| ctx.cwd.clone());
+            if let Ok(canonical) = target.canonicalize() {
+                if !canonical.starts_with(&root) {
+                    return Ok(ToolResult::error(format!(
+                        "read blocked: {} is outside the workspace",
+                        target.display()
+                    )));
+                }
+            }
+        }
         if !target.exists() {
             return Ok(ToolResult::error(format!(
                 "file not found: {}",

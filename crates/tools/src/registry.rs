@@ -419,6 +419,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn core_registry_has_exactly_pi_default_tools() {
+        let registry = ToolRegistry::with_core();
+        let mut names = registry.names();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "bash".to_string(),
+                "edit".to_string(),
+                "read".to_string(),
+                "write".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn default_plugins_only_explore() {
+        assert_eq!(crate::plugin::DEFAULT_PLUGINS, &["explore"]);
+    }
+
+    #[test]
     fn builtins_register_with_expected_names() {
         let registry = ToolRegistry::with_builtins();
         let names = registry.names();
