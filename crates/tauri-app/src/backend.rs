@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use argent_automation::{Action, AutomationStore, Schedule};
 use argent_engine::{prepare_config, start_session, Engine, UiEvent};
-use argent_ui_core::Command;
+use argent_ui_core::{Command, RuntimeEvent};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
@@ -130,6 +130,14 @@ fn spawn_session(app: AppHandle, shared: Arc<Shared>, sid: String, handle: Arc<S
             }
         }
         for event in events {
+            if let Some(canonical) = canonical_event(&event) {
+                let event_json: Value = serde_json::from_str(&canonical.to_json().dump())
+                    .unwrap_or(Value::Null);
+                let _ = app.emit(
+                    "argent://runtime",
+                    json!({ "sid": sid, "event": event_json }),
+                );
+            }
             let mut payload = map_event(event);
             if payload["kind"] == "ready" {
                 if let Ok(mut ready) = shared.ready.lock() {
@@ -205,6 +213,24 @@ fn handle_for(state: &State<'_, Backend>, sid: &str) -> Result<Arc<SessionHandle
         .get(&id)
         .cloned()
         .ok_or_else(|| format!("session {} not found", id))
+}
+
+/// Map an engine event to the transport-neutral protocol. Both the legacy
+/// `argent://event` payload and this canonical form are emitted, so frontends
+/// can migrate independently.
+fn canonical_event(event: &UiEvent) -> Option<RuntimeEvent> {
+    match event {
+        UiEvent::Ready { cwd, .. } => Some(RuntimeEvent::SessionCreated { cwd: cwd.clone() }),
+        UiEvent::Agent(agent_event) => Some(RuntimeEvent::from(agent_event.clone())),
+        UiEvent::TurnDone { reason, .. } => Some(RuntimeEvent::AgentCompleted {
+            reason: reason.describe(),
+        }),
+        UiEvent::Error(message) => Some(RuntimeEvent::AgentFailed {
+            message: message.clone(),
+            recoverable: false,
+        }),
+        _ => None,
+    }
 }
 
 fn map_event(event: UiEvent) -> Value {
