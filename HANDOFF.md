@@ -202,6 +202,14 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     之后，且不得绕过安全策略。**用户已确认：B + D 双线，突破优先级 ①②③ 全要**；
     计划已加入 D 并行研究线与性能/成本横向 gate。
 
+27. **本地 4B 对比评测 ✅（2026-11-19）**：Pi 1.5.2 vs argent，12 个中性场景，
+    执行器 `scripts/eval-local.py`（串行、独立 scratch、llama.cpp 服务端日志取
+    token、**结束自动关闭 llama-server**）。最新一轮两边 9/12；argent 耗时从
+    15.9s 降到 8.6s、token 从 2462 降到 2099（环回 OpenAI 请求带
+    `cache_prompt=true` + 精简系统提示）。报告见 `docs/EVAL-LOCAL-REPORT.md`。
+28. **README 对标修正 ✅（2026-11-19）**：对标对象改为 Pi/OMP，移除 ZCode
+    对比表与其他 agent 名称表述；提示词保持中性。
+
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）
 - native：欢迎卡真正垂直居中（当前 `Length::Shrink` 靠 padding 近似）

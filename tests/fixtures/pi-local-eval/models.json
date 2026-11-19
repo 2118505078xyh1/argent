@@ -1,0 +1,20 @@
+{
+  "providers": {
+    "local4b": {
+      "api": "openai-completions",
+      "apiKey": "local",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "models": [
+        {
+          "id": "spark-4b",
+          "name": "Spark 4B",
+          "contextWindow": 16384,
+          "maxTokens": 2048,
+          "input": ["text"],
+          "reasoning": false,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}

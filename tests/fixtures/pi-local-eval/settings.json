@@ -1,0 +1,10 @@
+{
+  "defaultProvider": "local4b",
+  "defaultModel": "spark-4b",
+  "packages": [],
+  "shellPath": "D:\\Git\\bin\\bash.exe",
+  "quietStartup": "header",
+  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
+  "compaction": { "enabled": false },
+  "hideThinkingBlock": true
+}

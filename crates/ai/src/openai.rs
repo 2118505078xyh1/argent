@@ -67,6 +67,8 @@ pub struct OpenAiConfig {
     pub cache_key: Option<String>,
     /// `prompt_cache_retention`；`ARGENT_CACHE_RETENTION=off` 时不发送。
     pub cache_retention: Option<String>,
+    /// llama.cpp 兼容端点支持 `cache_prompt`；环回地址默认开启。
+    pub cache_prompt: bool,
     /// 键来自环境变量时，每次请求重新读取：切会话能立刻换 cache key。
     cache_key_dynamic: bool,
 }
@@ -91,6 +93,13 @@ impl OpenAiConfig {
                 "" | "0" | "off" | "false" | "none"
             )
         };
+        let base_url = base_url.into();
+        let is_loopback = base_url.contains("127.0.0.1")
+            || base_url.contains("localhost")
+            || base_url.contains("[::1]");
+        let cache_prompt = std::env::var("ARGENT_CACHE_PROMPT")
+            .map(|value| !disabled(&value))
+            .unwrap_or(is_loopback);
         let cache_key_dynamic = std::env::var_os("ARGENT_CACHE_KEY").is_some();
         let cache_key = std::env::var("ARGENT_CACHE_KEY")
             .ok()
@@ -102,7 +111,7 @@ impl OpenAiConfig {
             .filter(|value| !disabled(value))
             .or_else(|| cache_key.as_ref().map(|_| "24h".to_string()));
         OpenAiConfig {
-            base_url: base_url.into(),
+            base_url,
             api_key: None,
             timeout: Duration::from_secs(300),
             transport,
@@ -111,6 +120,7 @@ impl OpenAiConfig {
             models: Vec::new(),
             cache_key,
             cache_retention,
+            cache_prompt,
             cache_key_dynamic,
         }
     }
@@ -624,6 +634,11 @@ impl Provider for OpenAiProvider {
     ) -> Result<Box<dyn Iterator<Item = Result<StreamEvent>> + Send>> {
         let mut body =
             OpenAiProvider::build_body_for(request, self.config.stream_usage, &self.config.models);
+        if self.config.cache_prompt {
+            // llama.cpp reuses the exact prompt prefix when this is set;
+            // other OpenAI-compatible gateways simply ignore the field.
+            body.set("cache_prompt", Json::Bool(true));
+        }
         let cache_key = self.config.current_cache_key();
         if let Some(key) = &cache_key {
             // vLLM / routing gateways use this to shard the prefix cache by

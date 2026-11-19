@@ -88,6 +88,16 @@
 
 ---
 
+## 执行状态（11:29 更新）
+
+- E0 ✅：llama.cpp 4B / Pi 隔离配置 / 双方冒烟通过。
+- E1 ✅：12 个中性场景（`evals/local/scenarios.json`）。
+- E2 ✅：`scripts/eval-local.py` 串行执行双方，llama.cpp token 从服务端日志汇总，
+  **评测结束自动关闭 llama-server**（`--keep-server` 可保留）。
+- E3 ✅：报告 `docs/EVAL-LOCAL-REPORT.md` 含通过率、耗时、token。
+- 优化：本地环回 OpenAI 请求默认带 `cache_prompt=true`（`crates/ai/src/openai.rs`），
+  argent token/耗时明显下降；系统提示词减少重复验证指令以降低轮次。
+
 ## 执行顺序（今天到 12:00）
 
 1. 10:40–10:55：E0（Pi 隔离配置 + 双方冒烟）
