@@ -73,6 +73,7 @@ struct SessionHandle {
 }
 
 struct Shared {
+    jobs: Mutex<argent_jobs::JobManager>,
     session_dir: std::path::PathBuf,
     sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
     active: Mutex<String>,
@@ -144,6 +145,7 @@ impl Backend {
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
         let config = prepare_config(&cwd)?;
         let shared = Arc::new(Shared {
+            jobs: Mutex::new(argent_jobs::JobManager::new(argent_jobs::JobManager::default_log_dir())),
             session_dir: config.session_dir.clone(),
             sessions: Mutex::new(HashMap::new()),
             active: Mutex::new("1".to_string()),
@@ -660,6 +662,53 @@ fn list_markdown_names(dir: &std::path::Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+#[tauri::command]
+pub fn list_jobs(state: State<'_, Backend>) -> Result<Value, String> {
+    let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
+    let rows = manager.list();
+    Ok(json!(rows
+        .iter()
+        .map(|job| json!({
+            "id": job.id,
+            "command": job.command,
+            "status": match job.status {
+                argent_jobs::JobStatus::Running => "running",
+                argent_jobs::JobStatus::Succeeded => "succeeded",
+                argent_jobs::JobStatus::Failed => "failed",
+                argent_jobs::JobStatus::Killed => "killed",
+            },
+            "exitCode": job.exit_code,
+            "elapsed": job.elapsed.as_secs(),
+        }))
+        .collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub fn start_job(state: State<'_, Backend>, command: String) -> Result<String, String> {
+    if command.trim().is_empty() {
+        return Err("command is empty".to_string());
+    }
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
+    manager
+        .start(command.trim(), &cwd)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn job_tail(state: State<'_, Backend>, id: String, lines: usize) -> Result<String, String> {
+    let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
+    manager
+        .tail(&id, lines.min(500))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn kill_job(state: State<'_, Backend>, id: String) -> Result<(), String> {
+    let mut manager = state.shared.jobs.lock().map_err(|_| "jobs lock poisoned".to_string())?;
+    manager.kill(&id).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

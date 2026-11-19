@@ -15,6 +15,7 @@ import Memory from "./Memory";
 import Extensions from "./Extensions";
 import Usage from "./Usage";
 import Git from "./Git";
+import Jobs from "./Jobs";
 import ToolCard from "./ToolCard";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -190,7 +191,7 @@ function App() {
     storageGet("argent.theme") === "light" ? "light" : "dark",
   );
   const [screen, setScreen] = createSignal<
-    "chat" | "automations" | "documents" | "memory" | "extensions" | "usage" | "git"
+    "chat" | "automations" | "documents" | "memory" | "extensions" | "usage" | "git" | "jobs"
   >("chat");
   const [help, setHelp] = createSignal(false);
   const [locale, setLocale] = createSignal<Locale>(detectLocale());
@@ -1206,6 +1207,12 @@ function App() {
           >
             {t(locale(), "git")}
           </button>
+          <button
+            classList={{ active: screen() === "jobs" }}
+            onClick={() => setScreen("jobs")}
+          >
+            任务
+          </button>
         </div>
         <div class="side-head">
           <span>{t(locale(), "chat")}</span>
@@ -1739,6 +1746,9 @@ function App() {
         </Show>
         <Show when={screen() === "git"}>
           <Git onAddToChat={addDocumentToChat} />
+        </Show>
+        <Show when={screen() === "jobs"}>
+          <Jobs />
         </Show>
       </main>
 
