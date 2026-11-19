@@ -893,7 +893,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
     for role in builtin_roles() {
         roles.register(role);
     }
-    let mut role_dirs = role_directories(&cli.cwd);
+    let mut role_dirs = role_directories(&discovery);
     role_dirs.extend(plugin_manager.agent_dirs());
     for dir in role_dirs {
         match roles.load_dir(&dir) {
@@ -1342,7 +1342,7 @@ pub fn run(raw: &[String]) -> Result<i32> {
             }
         }
         None => {
-            let mut roots = Paths::new(&cli.cwd).command_dirs();
+            let mut roots = Paths::new(&discovery).command_dirs();
             roots.extend(plugin_manager.command_dirs());
             let commands = argent_commands::discover(&roots);
             match approval_rx {
