@@ -35,7 +35,21 @@ pub struct McpToolAdapter {
 }
 
 impl McpToolAdapter {
+    /// Register with only the server's own `readOnlyHint`.
     pub fn new(tool: &McpTool, client: Arc<Mutex<McpClient>>) -> McpToolAdapter {
+        Self::with_policy(tool, client, false)
+    }
+
+    /// Register with an additional server-level read-only override.
+    ///
+    /// An operator can declare `readOnly` on the server even when the server
+    /// itself does not annotate its tools; the adapter must then stop asking
+    /// for approval on every call.
+    pub fn with_policy(
+        tool: &McpTool,
+        client: Arc<Mutex<McpClient>>,
+        server_read_only: bool,
+    ) -> McpToolAdapter {
         McpToolAdapter {
             name: tool.name.clone(),
             qualified: tool.qualified_name(),
@@ -45,7 +59,7 @@ impl McpToolAdapter {
                 tool.description.clone()
             },
             input_schema: tool.input_schema.clone(),
-            read_only: tool.read_only,
+            read_only: tool.read_only || server_read_only,
             client,
         }
     }
@@ -102,10 +116,66 @@ pub struct ServerConfig {
     /// OAuth 配置；`None` 表示服务器没有 `oauth` 块。
     pub oauth: Option<OAuthConfig>,
     pub kind: TransportKind,
+    /// Legacy switch. `disabled: true` turns the server off; `enabled: false`
+    /// does the same. Effective state is `enabled && !disabled`.
     pub disabled: bool,
+    /// Explicit switch, default `true`. Kept alongside `disabled` so existing
+    /// configs keep working; a conflict is resolved in the safe direction (off).
+    pub enabled: bool,
+    /// Operator declaration that every tool on this server is read-only,
+    /// regardless of the server's `readOnlyHint`. Default `false`.
+    pub read_only: bool,
+    /// Unqualified or `mcp__<server>__<tool>` names to admit, with an optional
+    /// trailing `*`. Empty means "every tool the server advertises".
+    pub allowed_tools: Vec<String>,
+    /// Same syntax as `allowed_tools`; rejected even when on the allow-list.
+    /// Empty means "nothing is denied".
+    pub denied_tools: Vec<String>,
 }
 
 impl ServerConfig {
+    /// Whether this server may be connected at all.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled && !self.disabled
+    }
+
+    /// Whether a server policy admits an advertised tool.
+    ///
+    /// Both the bare server-side name and the qualified `mcp__...` name are
+    /// accepted in the lists, so a policy can be narrow without depending on
+    /// the server's display name. A deny match wins over an allow match.
+    pub fn permits(&self, tool: &McpTool) -> bool {
+        if !self.is_enabled() {
+            return false;
+        }
+        let qualified = tool.qualified_name();
+        let denied = self
+            .denied_tools
+            .iter()
+            .any(|pattern| tool_name_matches(pattern, &tool.name, &qualified));
+        if denied {
+            return false;
+        }
+        self.allowed_tools.is_empty()
+            || self
+                .allowed_tools
+                .iter()
+                .any(|pattern| tool_name_matches(pattern, &tool.name, &qualified))
+    }
+
+    /// Carry an existing declaration's permissions onto a replacement with
+    /// the same name. Plugins re-declare MCP servers at runtime; transport
+    /// fields may change, but a replacement must never relax a policy the
+    /// operator already put in `mcp.json`. Plugin manifests do not declare
+    /// these fields yet, so the operator's policy wins verbatim.
+    pub fn inherit_permissions(&mut self, previous: &ServerConfig) {
+        self.enabled = self.enabled && previous.enabled;
+        self.disabled = self.disabled || previous.disabled;
+        self.read_only = self.read_only || previous.read_only;
+        self.allowed_tools = previous.allowed_tools.clone();
+        self.denied_tools = previous.denied_tools.clone();
+    }
+
     fn to_spec(&self, auth_store: Option<&Path>) -> ServerSpec {
         let mut spec = match self.kind {
             TransportKind::Stdio => ServerSpec::stdio(self.name.clone(), self.endpoint.clone()),
@@ -193,7 +263,7 @@ impl McpConfig {
                     .map(|path| McpAuthStore::at(path).status(&server.name, &server.endpoint))
                     .unwrap_or(AuthStatus::NotSignedIn)
             };
-            if server.disabled {
+            if !server.is_enabled() {
                 statuses.push(ServerStatus {
                     name: server.name.clone(),
                     endpoint: server.endpoint.clone(),
@@ -207,7 +277,14 @@ impl McpConfig {
             }
             let result = McpClient::connect(&server.to_spec(self.auth_store.as_deref()));
             let (tools, error) = match &result {
-                Ok(client) => (client.tools.len(), None),
+                Ok(client) => (
+                    client
+                        .tools
+                        .iter()
+                        .filter(|tool| server.permits(tool))
+                        .count(),
+                    None,
+                ),
                 Err(error) => (0, Some(error.to_string())),
             };
             statuses.push(ServerStatus {
@@ -262,6 +339,12 @@ impl McpConfig {
             let env = string_map(spec.get("env"));
             let headers = string_map(spec.get("headers"));
             let disabled = spec.bool_or("disabled", false);
+            // `enabled` is the explicit switch; `disabled` stays supported for
+            // existing configs. A conflict resolves to disabled.
+            let enabled = spec.bool_or("enabled", true);
+            let read_only = spec.bool_or("readOnly", false);
+            let allowed_tools = tool_patterns(spec.get("allowedTools"));
+            let denied_tools = tool_patterns(spec.get("deniedTools"));
             let endpoint = if kind == TransportKind::Stdio {
                 command
             } else {
@@ -288,12 +371,20 @@ impl McpConfig {
                 oauth,
                 kind,
                 disabled,
+                enabled,
+                read_only,
+                allowed_tools,
+                denied_tools,
             });
         }
         Ok(())
     }
 
-    /// Start every enabled server and collect their tools.
+    /// Start every enabled server and collect the tools its policy admits.
+    ///
+    /// Policy is enforced here, at registration, before the tool registry and
+    /// the `tool_search` catalog exist. A denied MCP tool is never registered,
+    /// so promotion cannot widen a server's policy later in the session.
     ///
     /// A server that fails to start is reported and skipped; one broken server
     /// must not take the session down with it.
@@ -302,7 +393,7 @@ impl McpConfig {
         let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
         for server in &self.servers {
-            if server.disabled {
+            if !server.is_enabled() {
                 continue;
             }
             let client = match McpClient::connect(&server.to_spec(self.auth_store.as_deref())) {
@@ -328,9 +419,14 @@ impl McpConfig {
                 }
                 Err(_) => Vec::new(),
             };
-            if advertised.is_empty() {
+            let admitted: Vec<&McpTool> = advertised
+                .iter()
+                .filter(|tool| server.permits(tool))
+                .collect();
+            let skipped = advertised.len() - admitted.len();
+            if admitted.is_empty() {
                 eprintln!(
-                    "MCP server '{}' connected over {} with no tools",
+                    "MCP server '{}' connected over {} with no permitted tools",
                     server.name,
                     server.kind.as_str()
                 );
@@ -339,11 +435,21 @@ impl McpConfig {
                     "MCP server '{}' connected over {} ({} tools)",
                     server.name,
                     server.kind.as_str(),
-                    advertised.len()
+                    admitted.len()
                 );
             }
-            for tool in &advertised {
-                tools.push(Box::new(McpToolAdapter::new(tool, Arc::clone(&shared))));
+            if skipped > 0 {
+                eprintln!(
+                    "MCP server '{}': {} tool(s) withheld by its server policy",
+                    server.name, skipped
+                );
+            }
+            for tool in admitted {
+                tools.push(Box::new(McpToolAdapter::with_policy(
+                    tool,
+                    Arc::clone(&shared),
+                    server.read_only,
+                )));
             }
             clients.push(shared);
         }
@@ -362,6 +468,28 @@ fn string_list(value: Option<&Json>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Read the tool-name patterns from a config array, dropping empty entries.
+fn tool_patterns(value: Option<&Json>) -> Vec<String> {
+    string_list(value)
+        .into_iter()
+        .map(|pattern| pattern.trim().to_string())
+        .filter(|pattern| !pattern.is_empty())
+        .collect()
+}
+
+/// Match a policy pattern against a tool's bare and qualified names.
+///
+/// A trailing `*` is a prefix wildcard (`"read_*"`, or `"*"` for everything);
+/// everything else must match exactly. Patterns are operator input, so a
+/// narrow exact name stays narrow.
+fn tool_name_matches(pattern: &str, bare: &str, qualified: &str) -> bool {
+    let matches = |name: &str| match pattern.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => name == pattern,
+    };
+    matches(bare) || matches(qualified)
 }
 
 /// Read a JSON object of string values.
@@ -625,5 +753,164 @@ mod tests {
             spec.auth_store.as_deref(),
             Some(Path::new("C:/store/mcp-auth.json"))
         );
+    }
+
+    // ---- per-server permission policy -------------------------------------
+
+    use crate::transport::Transport;
+
+    /// A transport that is never called: these tests only inspect metadata.
+    struct NoopTransport;
+
+    impl Transport for NoopTransport {
+        fn kind(&self) -> TransportKind {
+            TransportKind::Stdio
+        }
+        fn describe(&self) -> String {
+            "noop".to_string()
+        }
+        fn request(&mut self, _id: u64, _method: &str, _params: Option<Json>) -> Result<Json> {
+            Err(Error::internal("noop transport"))
+        }
+        fn notify(&mut self, _method: &str, _params: Option<Json>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn advertised(server: &str, name: &str, read_only: bool) -> McpTool {
+        McpTool {
+            name: name.to_string(),
+            description: String::new(),
+            input_schema: Json::obj(),
+            server: server.to_string(),
+            read_only,
+        }
+    }
+
+    fn adapter(tool: &McpTool, server_read_only: bool) -> McpToolAdapter {
+        let client = McpClient::for_test("srv", Box::new(NoopTransport), vec![tool.clone()]);
+        McpToolAdapter::with_policy(tool, Arc::new(Mutex::new(client)), server_read_only)
+    }
+
+    #[test]
+    fn missing_permission_fields_keep_the_previous_behavior() {
+        let mut config = McpConfig::default();
+        config
+            .merge(r#"{"srv":{"command":"node"}}"#, Path::new("t.json"))
+            .expect("merge");
+        let server = &config.servers[0];
+        assert!(server.is_enabled());
+        assert!(!server.disabled);
+        assert!(!server.read_only);
+        assert!(server.allowed_tools.is_empty());
+        assert!(server.denied_tools.is_empty());
+        assert!(server.permits(&advertised("srv", "anything", false)));
+    }
+
+    #[test]
+    fn permission_fields_are_parsed_from_config() {
+        let mut config = McpConfig::default();
+        config
+            .merge(
+                r#"{"srv":{"command":"node","enabled":true,"readOnly":true,
+                    "allowedTools":["read_*","mcp__srv__status"],"deniedTools":["read_secret"]}}"#,
+                Path::new("t.json"),
+            )
+            .expect("merge");
+        let server = &config.servers[0];
+        assert!(server.read_only);
+        assert_eq!(server.allowed_tools, vec!["read_*", "mcp__srv__status"]);
+        assert_eq!(server.denied_tools, vec!["read_secret"]);
+    }
+
+    #[test]
+    fn enabled_false_turns_a_server_off() {
+        let mut config = McpConfig::default();
+        config
+            .merge(
+                r#"{"srv":{"command":"node","enabled":false}}"#,
+                Path::new("t.json"),
+            )
+            .expect("merge");
+        assert!(!config.servers[0].is_enabled());
+        assert!(!config.servers[0].permits(&advertised("srv", "x", true)));
+    }
+
+    #[test]
+    fn conflicting_enable_and_disable_resolves_to_off() {
+        let mut config = McpConfig::default();
+        config
+            .merge(
+                r#"{"srv":{"command":"node","enabled":true,"disabled":true}}"#,
+                Path::new("t.json"),
+            )
+            .expect("merge");
+        assert!(!config.servers[0].is_enabled());
+    }
+
+    #[test]
+    fn denied_tools_win_over_an_allow_list() {
+        let mut config = McpConfig::default();
+        config
+            .merge(
+                r#"{"srv":{"command":"node","allowedTools":["read_*"],"deniedTools":["read_secret"]}}"#,
+                Path::new("t.json"),
+            )
+            .expect("merge");
+        let server = &config.servers[0];
+        assert!(server.permits(&advertised("srv", "read_file", false)));
+        assert!(!server.permits(&advertised("srv", "read_secret", false)));
+        assert!(!server.permits(&advertised("srv", "write_file", false)));
+    }
+
+    #[test]
+    fn allow_lists_accept_qualified_names_and_prefix_wildcards() {
+        let mut config = McpConfig::default();
+        config
+            .merge(
+                r#"{"srv":{"command":"node","allowedTools":["mcp__srv__status","get_*"]}}"#,
+                Path::new("t.json"),
+            )
+            .expect("merge");
+        let server = &config.servers[0];
+        assert!(server.permits(&advertised("srv", "status", true)));
+        assert!(server.permits(&advertised("srv", "get_log", true)));
+        assert!(!server.permits(&advertised("srv", "delete_all", true)));
+        // A pattern for a different server must not match this one.
+        assert!(!server.permits(&advertised("other", "status", true)));
+    }
+
+    #[test]
+    fn server_read_only_overrides_a_missing_read_only_hint() {
+        let tool = advertised("srv", "write_file", false);
+        assert!(adapter(&tool, false).is_mutating());
+        assert!(adapter(&tool, false).needs_approval(&Json::obj()));
+
+        let guarded = adapter(&tool, true);
+        assert!(!guarded.is_mutating());
+        assert!(!guarded.needs_approval(&Json::obj()));
+        assert_eq!(guarded.name(), "mcp__srv__write_file");
+    }
+
+    #[test]
+    fn inheriting_permissions_never_widens_a_replacement() {
+        let mut previous = McpConfig::default();
+        previous
+            .merge(
+                r#"{"srv":{"command":"old","disabled":true,"readOnly":true,
+                    "allowedTools":["status"],"deniedTools":["delete"]}}"#,
+                Path::new("t.json"),
+            )
+            .expect("merge");
+        let mut replacement = McpConfig::default();
+        replacement
+            .merge(r#"{"srv":{"command":"new"}}"#, Path::new("t.json"))
+            .expect("merge");
+        let server = &mut replacement.servers[0];
+        server.inherit_permissions(&previous.servers[0]);
+        assert!(!server.is_enabled());
+        assert!(server.read_only);
+        assert_eq!(server.allowed_tools, vec!["status"]);
+        assert_eq!(server.denied_tools, vec!["delete"]);
     }
 }

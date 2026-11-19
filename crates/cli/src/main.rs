@@ -422,13 +422,12 @@ pub fn run(raw: &[String]) -> Result<i32> {
         );
         let _ = telemetry.record("run_start", data);
     }
-    let mut mcp_config = McpConfig::load(&discovery)?;
-    argent_plugins::add_mcp_servers(
-        &mut mcp_config,
+    let mcp_config = load_mcp_config(
+        &discovery,
         &plugin_manager,
         &cli.cwd,
         settings.paths().storage(),
-    );
+    )?;
     let (mcp_clients, mcp_tools) = mcp_config.connect_all();
     // Third-party tools are registered but not listed: their number is
     // unbounded, and every schema costs prompt space on every request.
@@ -522,7 +521,9 @@ pub fn run(raw: &[String]) -> Result<i32> {
     }
 
     // tool_search is the loader itself, so it is the one extra tool that is
-    // always live.
+    // always live. Its catalog is built from the registry *after* MCP server
+    // policies have been applied at registration time, so promotion can only
+    // reveal tools a server already allowed; it cannot widen that policy.
     let promotions: argent_tools::Promotions =
         Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let catalog = Arc::new(
@@ -2763,6 +2764,23 @@ fn discovery_cwd(cwd: &Path, project_trusted: bool) -> PathBuf {
             .storage()
             .join(".argent-untrusted-workspace")
     }
+}
+
+/// Load MCP configuration from the discovery root only.
+///
+/// For an untrusted project `discovery` is a neutral directory, so a
+/// `.argent/mcp.json` checked into the project cannot inject a server into the
+/// session. Plugin declarations join the same configuration; `${...}` paths in
+/// a plugin still expand against the real execution cwd.
+fn load_mcp_config(
+    discovery: &Path,
+    plugin_manager: &PluginManager,
+    cwd: &Path,
+    storage: &Path,
+) -> Result<McpConfig> {
+    let mut config = McpConfig::load(discovery)?;
+    argent_plugins::add_mcp_servers(&mut config, plugin_manager, cwd, storage);
+    Ok(config)
 }
 
 #[cfg(test)]

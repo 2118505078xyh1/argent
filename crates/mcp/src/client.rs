@@ -264,6 +264,25 @@ impl McpClient {
         Ok(client)
     }
 
+    /// Build a client without a handshake, for tests that only inspect the
+    /// metadata and permission behavior of registered tools.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        name: &str,
+        transport: Box<dyn Transport>,
+        tools: Vec<McpTool>,
+    ) -> McpClient {
+        McpClient {
+            name: name.to_string(),
+            transport,
+            next_id: 0,
+            info: ServerInfo::default(),
+            tools,
+            resources: Vec::new(),
+            prompts: Vec::new(),
+        }
+    }
+
     /// The transport in use.
     pub fn transport_kind(&self) -> TransportKind {
         self.transport.kind()

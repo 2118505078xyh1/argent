@@ -137,10 +137,21 @@ pub fn add_mcp_servers(mcp: &mut McpConfig, plugins: &PluginManager, cwd: &Path,
                 oauth: None,
                 kind,
                 disabled: false,
+                // 插件清单目前不声明权限；沿用 mcp.json 中同名服务器的策略
+                // （同名替换时 add_mcp_servers 会再继承一次）。
+                enabled: true,
+                read_only: false,
+                allowed_tools: Vec::new(),
+                denied_tools: Vec::new(),
             });
         }
     }
-    for server in additions {
+    for mut server in additions {
+        // A plugin re-declares a server with the same name must not silently
+        // drop the operator's enable/read-only/tool restrictions from mcp.json.
+        if let Some(previous) = mcp.servers.iter().find(|s| s.name == server.name) {
+            server.inherit_permissions(previous);
+        }
         mcp.servers.retain(|existing| existing.name != server.name);
         mcp.servers.push(server);
     }
@@ -334,6 +345,32 @@ mod tests {
             server.args
         );
         assert_eq!(server.env.get("TOKEN").map(String::as_str), Some("abc"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_plugin_re_declaration_keeps_the_operators_mcp_permissions() {
+        let (root, manager) = workspace("permissions");
+        let mut mcp = McpConfig::default();
+        mcp.merge(
+            r#"{"plugin_demo_docs":{"command":"from-mcp-json","disabled":true,
+                "readOnly":true,"allowedTools":["status"],"deniedTools":["delete"]}}"#,
+            Path::new("mcp.json"),
+        )
+        .unwrap();
+        add_mcp_servers(&mut mcp, &manager, &root, Path::new("C:/store"));
+
+        let server = mcp
+            .servers
+            .iter()
+            .find(|server| server.name == "plugin_demo_docs")
+            .expect("plugin server");
+        // The command comes from the plugin, the policy from mcp.json.
+        assert!(server.endpoint.contains("bin/docs"));
+        assert!(!server.is_enabled());
+        assert!(server.read_only);
+        assert_eq!(server.allowed_tools, vec!["status"]);
+        assert_eq!(server.denied_tools, vec!["delete"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 

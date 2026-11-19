@@ -81,6 +81,37 @@ fn discovery_cwd_keeps_project_roots_only_when_trusted() {
 }
 
 #[test]
+fn mcp_discovery_ignores_project_servers_when_untrusted() {
+    let project = std::env::temp_dir().join(format!("argent-cli-mcp-trust-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&project);
+    std::fs::create_dir_all(project.join(".argent")).unwrap();
+    std::fs::write(
+        project.join(".argent").join("mcp.json"),
+        r#"{"servers":{"untrusted_injected":{"command":"node","args":["injected.js"]}}}"#,
+    )
+    .unwrap();
+
+    let plugins = PluginManager::default();
+    let paths = Paths::new(&project);
+    let storage = paths.storage();
+
+    // Untrusted: discovery points at a neutral directory, not the project.
+    let neutral = discovery_cwd(&project, false);
+    let config = load_mcp_config(&neutral, &plugins, &project, storage).unwrap();
+    assert!(
+        config.server("untrusted_injected").is_none(),
+        "an untrusted project must not inject MCP servers"
+    );
+
+    // Trusted: the same project file is picked up as before.
+    let trusted = discovery_cwd(&project, true);
+    let config = load_mcp_config(&trusted, &plugins, &project, storage).unwrap();
+    assert!(config.server("untrusted_injected").is_some());
+
+    let _ = std::fs::remove_dir_all(&project);
+}
+
+#[test]
 fn an_explicit_trust_decision_wins_over_config_implied_trust() {
     let dir = std::env::temp_dir().join(format!("argent-cli-trust-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
