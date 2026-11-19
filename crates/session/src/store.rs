@@ -1196,6 +1196,23 @@ mod tests {
     }
 
     #[test]
+    fn appends_are_on_disk_before_close() {
+        let dir = std::env::temp_dir().join(format!("argent-session-flush-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("s.jsonl");
+        let mut store = SessionStore::open(path.clone()).expect("open");
+        store
+            .append(&Entry::Message(Message::user("crash-safe")))
+            .expect("append");
+        // No close()/sync(): a crash at this point must still leave the line.
+        let body = std::fs::read_to_string(&path).expect("read before close");
+        assert!(body.contains("crash-safe"), "append was not flushed");
+        drop(store);
+        let entries = SessionStore::read_all(&path).expect("replay after drop");
+        assert!(matches!(&entries[0], Entry::Message(message) if message.text() == "crash-safe"));
+    }
+
+    #[test]
     fn round_trips_events_and_headers() {
         let dir = std::env::temp_dir().join(format!("argent-session-extra-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
