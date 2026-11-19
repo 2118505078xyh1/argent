@@ -195,6 +195,12 @@ cd .. && cargo run    # 独立 workspace，产物在 crates/tauri-app/target/
     加暂停/继续按钮与状态栏"已暂停"，abort 会清除暂停。新增 engine 契约测试。
     至此用户清单 5/5 齐备。
 
+26. **下一阶段计划 ✅（2026-11-19）**：基于外部架构评估制定
+    `docs/NEXT-PLAN.md`：建议方向 B（通用 Agent Runtime，Coding 为首个垂直场景），
+    突破优先级为任务完成能力；四周排期 P0 评测体系 → P1 多 Agent + Worktree →
+    P2 统一事件协议 → P3 安全/稳定性 + 0.4.0。Self-improving 闭环放在 P0–P3
+    之后，且不得绕过安全策略。战略方向待用户最终确认。
+
 ### 视觉第二轮（可选）
 - TUI：主题切换预览、symbol preset（unicode/ascii）
 - native：欢迎卡真正垂直居中（当前 `Length::Shrink` 靠 padding 近似）
