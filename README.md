@@ -13,7 +13,7 @@
 原生 iced 窗口，不使用 WebView、HTML 或 JS；同一份 `argent-ui-core` 同时驱动
 TUI 与 native：
 
-<img src="docs/assets/native.png" alt="Argent native iced interface" width="760">
+
 
 ## 前端路线
 
