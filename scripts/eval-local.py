@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "evals" / "local" / "scenarios.json"
 LOG_DIR = ROOT / "evals" / "local" / "logs"
 REPORT = ROOT / "docs" / "EVAL-LOCAL-REPORT.md"
+RESULTS = ROOT / "evals" / "local" / "results.json"
 LLAMA_LOG = Path(
     os.environ.get("LOCAL_4B_ERR_LOG", r"D:\code\local_text\models\spark-eval.err.log")
 )
@@ -41,6 +42,10 @@ def parse_args():
     parser.add_argument("--filter", default="", help="only run ids containing this string")
     parser.add_argument(
         "--keep-server", action="store_true", help="do not stop llama-server when done"
+    )
+    parser.add_argument(
+        "--only", choices=("both", "argent", "pi"), default="both",
+        help="run only one implementation and reuse the other from results.json",
     )
     return parser.parse_args()
 
@@ -263,8 +268,15 @@ def main():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     results = []
+    if args.only != "both":
+        prior = json.loads(RESULTS.read_text(encoding="utf-8")) if RESULTS.is_file() else []
+        other = "pi" if args.only == "argent" else "argent"
+        results = [row for row in prior if row["impl"] == other and row["id"] in {s["id"] for s in scenarios}]
     for scenario in scenarios:
-        for implementation, runner in (("argent", run_argent), ("pi", run_pi)):
+        runners = (("argent", run_argent), ("pi", run_pi))
+        if args.only != "both":
+            runners = tuple(item for item in runners if item[0] == args.only)
+        for implementation, runner in runners:
             for trial in range(1, args.trials + 1):
                 scratch = Path(os.environ["TEMP"]) / f"eval-local-{scenario['id']}-{implementation}-{trial}"
                 shutil.rmtree(scratch, ignore_errors=True)
@@ -320,6 +332,7 @@ def main():
         lines.append(f"| {scenario['id']} | {scenario['category']} | {mark(row_a)} | {mark(row_p)} | {note} |")
     lines += ["", "失败详情见 `evals/local/logs/`。提示词均为中性任务描述，不提及任何其他实现。"]
 
+    RESULTS.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     REPORT.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines[:12]))
     print(f"report: {REPORT}")
