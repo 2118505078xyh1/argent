@@ -214,11 +214,23 @@ pub fn run(raw: &[String]) -> Result<i32> {
         return doctor();
     }
 
+    // Decide project trust before loading ANY cwd-relative configuration.
+    // Otherwise an untrusted `.argent/settings.json` could already influence
+    // the provider, model or profile before the gate runs.
+    let (_trust_store, project_trusted, discovery) = initialize_project_trust(&cli);
+    if !project_trusted {
+        eprintln!(
+            "note: project-local resources are disabled for {} (untrusted project); \
+             trust it with `argent --trust-project` or ARGENT_PROJECT_TRUSTED=1",
+            cli.cwd.display()
+        );
+    }
+
     // Profiles are a named layer between settings and CLI flags. Resolve the
     // provider/model through the profile before authentication is loaded, so a
     // profile can point at a different provider without touching settings.
-    let settings = Settings::load(&cli.cwd)?;
-    let profiles = argent_profiles::ProfileRegistry::load(&cli.cwd, &settings)?;
+    let settings = Settings::load(&discovery)?;
+    let profiles = argent_profiles::ProfileRegistry::load(&discovery, &settings)?;
     if cli.list_profiles {
         return list_profiles(&profiles);
     }
@@ -246,7 +258,8 @@ pub fn run(raw: &[String]) -> Result<i32> {
         None => None,
     };
 
-    let mut config = Config::load(&cli.cwd)?;
+    let mut config = Config::load(&discovery)?;
+    config.project_trusted = project_trusted;
     // `-c key=value` 属于配置层：在 flag 与环境变量之前生效。
     apply_config_overrides(&mut config, &cli.config_overrides)?;
     // 拼错的设置键会被静默忽略——启动时就告诉操作者，别等问题查半天。
@@ -366,48 +379,6 @@ pub fn run(raw: &[String]) -> Result<i32> {
     let mut base_registry =
         ToolRegistry::with_core_mode(argent_tools::edit_mode_for_model(&config.model));
     base_registry.add_builtin_plugins();
-
-    // P3 project trust. Project-local resources (hooks, skills, extensions) can
-    // run arbitrary code, so they are loaded only when the cwd is trusted.
-    // Precedence: CLI flag > ARGENT_PROJECT_TRUSTED > an explicit decision in
-    // the trust store > config.project_trusted (a project config file exists).
-    // Deliberately non-interactive in every mode, including the TUI: the
-    // existing TerminalApprover is a per-tool-call gate and prompting for trust
-    // at startup would hang a piped run (and fight the TUI for the terminal).
-    // An operator grants trust explicitly with --trust-project instead.
-    // See `discovery_cwd` for how global resources are kept.
-    let mut trust_store = TrustStore::load();
-    match cli.trust_project {
-        // Granting trust is an explicit, durable operator decision.
-        Some(true) => {
-            if let Err(error) = trust_store.set(&cli.cwd, true) {
-                eprintln!("warning: could not save project trust: {error}");
-            }
-            trust_store.set_session_override(&cli.cwd, true);
-        }
-        // Denying is deliberately session-only: it must not brick a later run.
-        Some(false) => trust_store.set_session_override(&cli.cwd, false),
-        None => {
-            if let Ok(value) = std::env::var("ARGENT_PROJECT_TRUSTED") {
-                match value.trim().to_ascii_lowercase().as_str() {
-                    "1" | "true" | "yes" | "on" => trust_store.set_session_override(&cli.cwd, true),
-                    "0" | "false" | "no" | "off" => {
-                        trust_store.set_session_override(&cli.cwd, false)
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    let project_trusted = effective_project_trust(&trust_store, &cli.cwd, config.project_trusted);
-    if !project_trusted {
-        eprintln!(
-            "note: project-local resources are disabled for {} (untrusted project); \
-             trust it with `argent --trust-project` or ARGENT_PROJECT_TRUSTED=1",
-            cli.cwd.display()
-        );
-    }
-    let discovery = discovery_cwd(&cli.cwd, project_trusted);
 
     let mut plugin_manager = PluginManager::for_workspace(&discovery);
     plugin_manager.apply_state(&settings);
@@ -2747,6 +2718,34 @@ pub fn probe_chat(config: &Config, prompt: &str) -> Result<String> {
 /// so `ARGENT_PROJECT_TRUSTED=0` can suppress a project that has a config file.
 fn effective_project_trust(store: &TrustStore, cwd: &Path, config_trusted: bool) -> bool {
     store.is_trusted(cwd).unwrap_or(config_trusted)
+}
+
+/// Decide trust before any cwd-relative config is read and return the
+/// discovery root that resource loaders should use.
+fn initialize_project_trust(cli: &Cli) -> (TrustStore, bool, PathBuf) {
+    let mut store = TrustStore::load();
+    match cli.trust_project {
+        Some(true) => {
+            if let Err(error) = store.set(&cli.cwd, true) {
+                eprintln!("warning: could not save project trust: {error}");
+            }
+            store.set_session_override(&cli.cwd, true);
+        }
+        Some(false) => store.set_session_override(&cli.cwd, false),
+        None => {
+            if let Ok(value) = std::env::var("ARGENT_PROJECT_TRUSTED") {
+                match value.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" | "on" => store.set_session_override(&cli.cwd, true),
+                    "0" | "false" | "no" | "off" => store.set_session_override(&cli.cwd, false),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let implied = cli.cwd.join(".argent").join("settings.json").is_file();
+    let trusted = effective_project_trust(&store, &cli.cwd, implied);
+    let discovery = discovery_cwd(&cli.cwd, trusted);
+    (store, trusted, discovery)
 }
 
 /// Resource-discovery root for this run.
