@@ -5,8 +5,9 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $tauri = Join-Path $root "crates\tauri-app"
 $ui = Join-Path $tauri "ui"
-$bun = if ($env:BUN) { $env:BUN } else { "bun" }
-$python = if ($env:PYTHON) { $env:PYTHON } else { "python" }
+$bun = if ($env:BUN) { $env:BUN } else { "C:\Users\xyh\.bun\bin\bun.exe" }
+$python = if ($env:PYTHON) { $env:PYTHON } else { "C:\Users\xyh\AppData\Local\Programs\Python\Python313\python.exe" }
+if (-not (Test-Path $python)) { $python = "python" }
 
 function Step([string]$name, [scriptblock]$body) {
     Write-Host "`n== $name ==" -ForegroundColor Cyan
