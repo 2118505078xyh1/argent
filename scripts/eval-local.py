@@ -19,6 +19,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+import psutil
+
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "evals" / "local" / "scenarios.json"
 LOG_DIR = ROOT / "evals" / "local" / "logs"
@@ -84,10 +86,18 @@ def ensure_server():
     raise SystemExit("llama.cpp server did not become ready in 90s")
 
 
+def llama_rss_mb() -> float:
+    for process in psutil.process_iter(["name", "memory_info"]):
+        try:
+            if process.info["name"] == "llama-server.exe":
+                return process.info["memory_info"].rss / 1024 / 1024
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return 0.0
+
+
 def stop_server():
     """Stop the eval llama-server so the user never has to do it manually."""
-    import psutil
-
     for process in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
             if process.info["name"] != "llama-server.exe":
@@ -280,8 +290,11 @@ def main():
             for trial in range(1, args.trials + 1):
                 scratch = Path(os.environ["TEMP"]) / f"eval-local-{scenario['id']}-{implementation}-{trial}"
                 shutil.rmtree(scratch, ignore_errors=True)
-                scratch.mkdir(parents=True)
+                scratch.mkdir(parents=True, exist_ok=True)
                 materialize(scenario, scratch)
+                if llama_rss_mb() > 8000:
+                    stop_server()
+                    ensure_server()
                 log_offset = llama_log_offset()
                 output, seconds, timed_out, fallback_tokens = runner(
                     scratch, scenario["prompt"], 120

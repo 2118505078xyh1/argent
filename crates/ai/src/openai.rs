@@ -101,15 +101,29 @@ impl OpenAiConfig {
             .map(|value| !disabled(&value))
             .unwrap_or(is_loopback);
         let cache_key_dynamic = std::env::var_os("ARGENT_CACHE_KEY").is_some();
-        let cache_key = std::env::var("ARGENT_CACHE_KEY")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !disabled(value));
-        let cache_retention = std::env::var("ARGENT_CACHE_RETENTION")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !disabled(value))
-            .or_else(|| cache_key.as_ref().map(|_| "24h".to_string()));
+        // A local llama.cpp server does its own prefix caching; a session key
+        // would only partition that cache and 24h retention makes its KV grow
+        // without bound. Keep both off unless the operator asks for them.
+        let local_no_hints = is_loopback
+            && std::env::var_os("ARGENT_CACHE_KEY").is_none()
+            && std::env::var_os("ARGENT_CACHE_RETENTION").is_none();
+        let cache_key = if local_no_hints {
+            None
+        } else {
+            std::env::var("ARGENT_CACHE_KEY")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !disabled(value))
+        };
+        let cache_retention = if local_no_hints {
+            None
+        } else {
+            std::env::var("ARGENT_CACHE_RETENTION")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !disabled(value))
+                .or_else(|| cache_key.as_ref().map(|_| "24h".to_string()))
+        };
         OpenAiConfig {
             base_url,
             api_key: None,
