@@ -894,6 +894,44 @@ pub fn git_diff(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn list_plugins() -> Result<Value, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut dirs = vec![
+        config_root().join("plugins"),
+        config_root().join("plugins").join("cache"),
+        cwd.join(".argent").join("plugins"),
+    ];
+    let mut names = Vec::new();
+    for dir in dirs.drain(..) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_plugin = path.is_dir()
+                || path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .map(|ext| matches!(ext, "json" | "toml"))
+                    .unwrap_or(false);
+            if !is_plugin {
+                continue;
+            }
+            let name = path
+                .file_stem()
+                .or_else(|| path.file_name())
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if !name.is_empty() && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names.sort();
+    Ok(json!(names))
+}
+
+#[tauri::command]
 pub fn list_extensions() -> Result<Value, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let global = config_root();

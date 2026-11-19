@@ -6,6 +6,7 @@ type ExtensionList = {
   commands: string[];
   hooks: string[];
   mcpServers: string[];
+  plugins: string[];
 };
 
 export default function Extensions() {
@@ -14,14 +15,18 @@ export default function Extensions() {
     commands: [],
     hooks: [],
     mcpServers: [],
+    plugins: [],
   });
   const [error, setError] = createSignal("");
 
   onMount(async () => {
     try {
-      const extensions = await invoke<Omit<ExtensionList, "mcpServers">>("list_extensions");
+      const extensions = await invoke<Omit<ExtensionList, "mcpServers" | "plugins">>(
+        "list_extensions",
+      );
       const servers = await invoke<string[]>("list_mcp_servers");
-      setData({ ...extensions, mcpServers: servers });
+      const plugins = await invoke<string[]>("list_plugins");
+      setData({ ...extensions, mcpServers: servers, plugins });
     } catch (err) {
       setError(String(err));
     }
@@ -32,6 +37,7 @@ export default function Extensions() {
     { title: "自定义命令", items: () => data().commands, empty: "暂无自定义命令" },
     { title: "Hooks", items: () => data().hooks, empty: "暂无 hooks" },
     { title: "MCP 服务", items: () => data().mcpServers, empty: "暂无 MCP 服务" },
+    { title: "已安装插件", items: () => data().plugins, empty: "暂无插件" },
   ];
 
   return (
