@@ -206,6 +206,24 @@ agent loop 在 `execute_tool` 的最前面、以及并行批次里都调用这�
 （`argent_security::redact`）识别 `sk-…`、`ghp_…`、`AKIA…`、JWT、
 `Bearer …` 和 `api_key=…` 形态的值，替换成 `[redacted:*]`。
 
+**项目信任（`argent_security::TrustStore`）** 与 hook SHA-256 grant 是两层独立
+的门：信任记录按 cwd / 父目录存于 `~/.argent/trust.json`，
+`--trust-project` 持久化授予，`--no-trust-project` 只作用于当前运行。
+CLI 与 engine/Tauri 均在读取 cwd 相对配置之前完成信任判定；未信任时，
+hooks、skills、插件、MCP 配置、prompt 模板、角色与自定义命令都从中性
+discovery 根加载，而会话文件、hook 执行 cwd 与审批路径仍使用真实 cwd。
+hook 文档的 SHA-256 grant 不因项目信任而跳过。
+
+**沙箱边界**：`--sandbox-mode read-only|workspace-write|danger-full-access`
+是策略层，不是 OS 级 jail；它约束工具层的写路径，但 shell 子进程的文件系统
+效果不经过它。需要强隔离时使用 `docker/Dockerfile` 把工作区挂进容器，并把
+出站网络收敛到 `ARGENT_BASE_URL` 指向的代理。
+
+**审计轮转**：审计与会话 JSONL 都是 append + flush；默认
+`FlushPolicy::EveryAppend` 保证进程异常退出后最后一条决定仍可重放
+（`crates/session/src/store.rs` 有对应测试）。审计文件按天分片，旧文件由运维
+侧轮转/归档，argent 不删除它们。
+
 ## 评测
 
 `crates/eval` 用脚本化 provider 驱动真实工具注册表。模型是假的，工具、
