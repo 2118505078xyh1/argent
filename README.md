@@ -1,8 +1,10 @@
 # argent
 
-个人使用的 Agent Runtime：原生 agent 循环，编程是第一个垂直场景。当前实现是
-Rust；下一阶段后端计划迁移到 Go，桌面端使用 **Tauri 2 + SolidJS**
-（`argent-desktop`），终端入口是 CLI 与全屏 TUI。
+> **开发已转到 Go 版：[`argent-go`](https://github.com/2118505078xyh1/argent-go)。**
+> 本仓库是 Rust 实现（0.4.0），保留作为参考实现，不再加新功能。
+
+个人使用的 Agent Runtime：原生 agent 循环，编程是第一个垂直场景。Rust 实现，
+桌面端使用 **Tauri 2 + SolidJS**（`argent-desktop`），终端入口是 CLI 与全屏 TUI。
 
 `argent` 是干净实现的运行时：对标 **Pi 与 OMP** 的可观察接口与能力边界
 （provider 模板、插件清单、skills、commands、hooks、MCP）。
@@ -35,12 +37,12 @@ Tauri 使用系统 WebView，不打包 Chromium；代价是桌面版依赖 WebVi
 
 个人项目，目标是可维护的 agent harness，不做体积对标。
 
-- 当前后端：Rust（workspace 见 `Cargo.toml`）
-- 下一阶段后端：Go（功能追平前，Rust 版仍是唯一可用实现）
+- 本仓库后端：Rust（workspace 见 `Cargo.toml`），0.4.0 起只修安全问题
+- 新开发后端：Go（`argent-go` 仓库），功能追平后本仓库归档
 - 桌面端：Tauri 2 + SolidJS，使用系统 WebView
 - 终端：CLI + 全屏 TUI，不启动浏览器引擎
 
-不追求"最小二进制"或"零运行时依赖"：Go 版体积会更大，换的是迭代速度。
+不追求"最小二进制"或"零运行时依赖"：Go 版体积更大（约 10 MB），换的是迭代速度。
 
 ## argent 独有的七个能力
 
